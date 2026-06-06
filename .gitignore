@@ -1,0 +1,35 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub/
+build/
+
+# Flutter generated
+**/generated_plugin_registrant.dart
+
+# IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Android / IntelliJ
+*.iml
+local.properties
+captures/
+
+# iOS / macOS Flutter
+**/Pods/
+**/.symlinks/
+**/Flutter/ephemeral/
+**/Flutter/Generated.xcconfig
+**/Flutter/flutter_export_environment.sh
+
+# Logs
+*.log
+
+# Coverage
+coverage/
