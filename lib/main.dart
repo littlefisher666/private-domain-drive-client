@@ -5,6 +5,6 @@ import 'app/bootstrap/app_bootstrap.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await AppBootstrap.initialize();
-  runApp(const PrivateDomainDriveApp());
+  final controller = await AppBootstrap.initialize();
+  runApp(PrivateDomainDriveApp(controller: controller));
 }

@@ -1,99 +1,108 @@
 import 'package:flutter/material.dart';
 
+import '../../../app/router/route_names.dart';
+import '../../../shared/state/app_scope.dart';
+
 class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key});
+  const SettingsPage({super.key, this.embedded = false, this.desktopChrome = false});
+
+  final bool embedded;
+  final bool desktopChrome;
 
   @override
   Widget build(BuildContext context) {
+    final controller = AppScope.of(context);
+    final session = controller.session;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final desktop = desktopChrome || MediaQuery.sizeOf(context).width >= 960;
+    final displayName = session?.displayName ?? '';
+    final initial = displayName.isNotEmpty ? displayName.substring(0, 1).toUpperCase() : 'U';
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('设置'),
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: <Widget>[
-          Card(
-            child: ListTile(
-              leading: const CircleAvatar(child: Icon(Icons.person_outline)),
-              title: const Text('当前用户'),
-              subtitle: const Text('owner@demo.local · 管理员'),
-              trailing: FilledButton.tonal(
-                onPressed: () {},
-                child: const Text('刷新会话'),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Card(
-            child: Column(
-              children: const <Widget>[
-                ListTile(
-                  leading: Icon(Icons.cloud_outlined),
-                  title: Text('服务端地址'),
-                  subtitle: Text('https://api.private-domain-drive.local'),
-                ),
-                Divider(height: 1),
-                ListTile(
-                  leading: Icon(Icons.folder_shared_outlined),
-                  title: Text('根目录前缀'),
-                  subtitle: Text('shared/'),
-                ),
-                Divider(height: 1),
-                ListTile(
-                  leading: Icon(Icons.security_outlined),
-                  title: Text('当前能力'),
-                  subtitle: Text('浏览 / 上传 / 下载 / 删除'),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          Card(
-            child: Column(
+      body: SafeArea(
+        child: ListView(
+          padding: EdgeInsets.fromLTRB(desktop ? 24 : 16, 16, desktop ? 24 : 16, 24),
+          children: <Widget>[
+            Row(
               children: <Widget>[
-                SwitchListTile(
-                  value: true,
-                  onChanged: (_) {},
-                  title: const Text('启动时恢复会话'),
-                ),
-                const Divider(height: 1),
-                SwitchListTile(
-                  value: true,
-                  onChanged: (_) {},
-                  title: const Text('上传下载显示通知'),
-                ),
-                const Divider(height: 1),
-                SwitchListTile(
-                  value: false,
-                  onChanged: (_) {},
-                  title: const Text('显示调试信息'),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          Card(
-            child: Column(
-              children: <Widget>[
-                ListTile(
-                  leading: const Icon(Icons.cleaning_services_outlined),
-                  title: const Text('清理缓存'),
-                  subtitle: const Text('静态演示中仅展示入口'),
-                  trailing: OutlinedButton(
-                    onPressed: () {},
-                    child: const Text('清理'),
+                if (!embedded)
+                  IconButton.filledTonal(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.arrow_back),
+                  ),
+                if (!embedded) const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text('我的', style: theme.textTheme.headlineSmall),
+                      Text(
+                        '账户与应用信息',
+                        style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+                      ),
+                    ],
                   ),
                 ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.info_outline),
-                  title: const Text('应用版本'),
-                  subtitle: const Text('0.1.0+1'),
-                ),
               ],
             ),
-          ),
-        ],
+            const SizedBox(height: 16),
+            Card(
+              child: ListTile(
+                leading: CircleAvatar(
+                  radius: 26,
+                  backgroundColor:
+                      (desktop ? const Color(0xFF007AFF) : scheme.primary).withValues(alpha: 0.15),
+                  child: Text(
+                    initial,
+                    style: TextStyle(
+                      color: desktop ? const Color(0xFF007AFF) : scheme.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                title: Text(session?.displayName ?? '未登录'),
+                subtitle: Text(
+                  session == null
+                      ? '请先登录'
+                      : "成员 · ${session.capabilities.summary}",
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: Column(
+                children: <Widget>[
+                  ListTile(
+                    leading: const Icon(Icons.folder_shared_outlined),
+                    title: const Text('共享空间'),
+                    subtitle: Text(session?.rootPrefix ?? 'shared/'),
+                  ),
+                  const Divider(height: 1),
+                  const ListTile(
+                    leading: Icon(Icons.info_outline),
+                    title: Text('应用版本'),
+                    subtitle: Text('0.1.0+1'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.tonal(
+              onPressed: () async {
+                await controller.logout();
+                if (!context.mounted) {
+                  return;
+                }
+                Navigator.of(context).pushNamedAndRemoveUntil(
+                  RouteNames.login,
+                  (route) => false,
+                );
+              },
+              child: const Text('退出登录'),
+            ),
+          ],
+        ),
       ),
     );
   }

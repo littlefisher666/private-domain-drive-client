@@ -6,7 +6,5 @@ class LoadDirectoryUseCase {
 
   final FileRepository _repository;
 
-  Future<List<FileItem>> execute(String path) {
-    return _repository.list(path);
-  }
+  Future<List<FileItem>> execute(String path) => _repository.list(path);
 }
