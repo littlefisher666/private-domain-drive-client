@@ -3,7 +3,7 @@ class FileSizeFormatter {
 
   static String format(int bytes) {
     if (bytes < 1024) {
-      return '${bytes} B';
+      return '$bytes B';
     }
 
     final kb = bytes / 1024;

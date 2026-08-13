@@ -5,7 +5,9 @@
 // 'flutter create' template.
 
 // The application's name. By default this is also the title of the Flutter window.
-PRODUCT_NAME = private_domain_drive_client
+PRODUCT_NAME = 私域网盘
+
+// PRODUCT_NAME controls the .app bundle name shown in Dock / Finder.
 
 // The application's bundle identifier
 PRODUCT_BUNDLE_IDENTIFIER = com.example.privateDomainDriveClient
