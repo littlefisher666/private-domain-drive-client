@@ -126,6 +126,7 @@ jobs:
           flutter build apk --release \
             --build-name "${{ needs.prepare.outputs.version_name }}" \
             --build-number "${{ needs.prepare.outputs.build_number }}" \
+            --dart-define=FC_BASE_URL="${{ vars.FC_BASE_URL }}" \
             --dart-define=FC_ACCESS_KEY_ID="${{ secrets.FC_ACCESS_KEY_ID }}" \
             --dart-define=FC_ACCESS_KEY_SECRET="${{ secrets.FC_ACCESS_KEY_SECRET }}"
 
@@ -167,6 +168,7 @@ jobs:
           flutter build macos --release \
             --build-name "${{ needs.prepare.outputs.version_name }}" \
             --build-number "${{ needs.prepare.outputs.build_number }}" \
+            --dart-define=FC_BASE_URL="${{ vars.FC_BASE_URL }}" \
             --dart-define=FC_ACCESS_KEY_ID="${{ secrets.FC_ACCESS_KEY_ID }}" \
             --dart-define=FC_ACCESS_KEY_SECRET="${{ secrets.FC_ACCESS_KEY_SECRET }}"
 
