@@ -96,11 +96,7 @@ class _DesktopShell extends StatelessWidget {
             showUpload: index == 0 && controller.capabilities.upload,
             onUpload: () {
               onSelect(0);
-              final stamp = DateTime.now().millisecondsSinceEpoch % 100000;
-              controller.mockUpload(
-                fileName: "upload-$stamp.bin",
-                size: 640 * 1024,
-              );
+              pickAndUploadFile(context);
             },
           ),
           Expanded(
@@ -144,12 +140,12 @@ class _DesktopShell extends StatelessWidget {
                             Expanded(
                               child: ListView(
                                 padding: EdgeInsets.zero,
-                                children: controller.sidebarDirectories.map((path) {
+                                children:
+                                    controller.sidebarDirectories.map((path) {
                                   final selected =
-                                      controller.currentPath == path && index == 0;
-                                  final label = path == 'shared/'
-                                      ? 'shared/'
-                                      : path.replaceFirst('shared/', '');
+                                      controller.currentPath == path &&
+                                          index == 0;
+                                  final label = controller.displayPath(path);
                                   return _SideNavItem(
                                     selected: selected,
                                     icon: Icons.circle,
@@ -177,7 +173,8 @@ class _DesktopShell extends StatelessWidget {
                                 child: Padding(
                                   padding: const EdgeInsets.all(12),
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: <Widget>[
                                       Text(
                                         session?.displayName ?? '未登录',
@@ -186,8 +183,8 @@ class _DesktopShell extends StatelessWidget {
                                       const SizedBox(height: 4),
                                       Text(
                                         '共享空间成员',
-                                        style: theme.textTheme.bodySmall
-                                            ?.copyWith(
+                                        style:
+                                            theme.textTheme.bodySmall?.copyWith(
                                           color:
                                               CupertinoDesktopTokens.secondary,
                                           fontSize: 12,
@@ -325,26 +322,13 @@ class _BrandHeader extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  '私域网盘',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: CupertinoDesktopTokens.ink,
-                  ),
-                ),
-                SizedBox(height: 2),
-                Text(
-                  '私域共享空间',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: CupertinoDesktopTokens.secondary,
-                  ),
-                ),
-              ],
+            child: Text(
+              '私域网盘',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: CupertinoDesktopTokens.ink,
+              ),
             ),
           ),
         ],

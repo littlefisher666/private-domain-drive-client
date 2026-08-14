@@ -212,6 +212,7 @@ class ClientConstraints {
 
 enum SessionAuthMode {
   remote,
+  /// 仅供测试注入 MemorySessionRepository，生产入口不会使用。
   localMock,
 }
 
@@ -227,7 +228,7 @@ class UserSession {
     this.credentials,
     this.stsBroker,
     this.constraints = const ClientConstraints.defaults(),
-    this.authMode = SessionAuthMode.localMock,
+    this.authMode = SessionAuthMode.remote,
   });
 
   final String userId;
@@ -289,7 +290,7 @@ class UserSession {
 
   factory UserSession.fromJson(Map<String, dynamic> json) {
     final authModeName =
-        (json['authMode'] ?? SessionAuthMode.localMock.name).toString();
+        (json['authMode'] ?? SessionAuthMode.remote.name).toString();
     return UserSession(
       userId: (json['userId'] ?? '').toString(),
       account: (json['account'] ?? json['displayName'] ?? '').toString(),
@@ -317,7 +318,7 @@ class UserSession {
           : const ClientConstraints.defaults(),
       authMode: SessionAuthMode.values.firstWhere(
         (item) => item.name == authModeName,
-        orElse: () => SessionAuthMode.localMock,
+        orElse: () => SessionAuthMode.remote,
       ),
     );
   }

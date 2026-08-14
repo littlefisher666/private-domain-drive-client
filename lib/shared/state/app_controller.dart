@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 
 import '../../core/errors/app_error.dart';
@@ -7,6 +6,7 @@ import '../../features/auth/domain/user_session.dart';
 import '../../features/auth/infrastructure/session_repository.dart';
 import '../../features/transfer/domain/transfer_task.dart';
 import '../../features/workspace/domain/file_item.dart';
+import '../../features/workspace/infrastructure/oss_client.dart';
 
 class ShareImportItem {
   const ShareImportItem({
@@ -34,12 +34,15 @@ class LoginResult {
   final UserSession? session;
 }
 
-/// In-memory mock app state. Mirrors docs/ui prototype behavior without backend.
+/// 应用状态控制器。会话与权限来自已部署的 FC，不在生产路径伪造身份。
 class AppController extends ChangeNotifier {
-  AppController({SessionRepository? sessionRepository})
-      : _sessionRepository = sessionRepository ?? MemorySessionRepository();
+  AppController(
+      {required SessionRepository sessionRepository, OssClient? ossClient})
+      : _sessionRepository = sessionRepository,
+        _ossClient = ossClient ?? OssClient();
 
   final SessionRepository _sessionRepository;
+  final OssClient _ossClient;
 
   static const rootPrefix = 'shared/';
 
@@ -49,16 +52,15 @@ class AppController extends ChangeNotifier {
 
   /// Transfer task list/progress updates only; does not rebuild workspace.
   final ValueNotifier<List<TransferTask>> tasksListenable =
-      ValueNotifier<List<TransferTask>>(_defaultTasks());
+      ValueNotifier<List<TransferTask>>(<TransferTask>[]);
 
   UserSession? _session;
   String _currentPath = rootPrefix;
   BrowseMode _browseMode = BrowseMode.list;
-  late Map<String, List<FileItem>> _tree = _defaultTree();
+  final Set<String> _remoteDirectories = <String>{};
   List<ShareImportItem> _pendingShareItems = const <ShareImportItem>[];
   String _shareTargetPath = 'shared/photos/';
   bool _bootstrapped = false;
-  int _taskSeq = 100;
   int _treeRevision = 0;
 
   final Map<String, Timer> _progressTimers = <String, Timer>{};
@@ -66,6 +68,24 @@ class AppController extends ChangeNotifier {
   UserSession? get session => _session;
   bool get isLoggedIn => _session != null;
   String get currentPath => _currentPath;
+
+  /// 将 OSS 内部对象键转换为用户可见的相对路径。
+  String displayPath(String path) {
+    final normalized = path.trim();
+    final root = _session?.rootPrefix.isNotEmpty == true
+        ? _normalizeDir(_session!.rootPrefix)
+        : rootPrefix;
+    if (normalized.isEmpty || normalized == root) {
+      return '全部文件';
+    }
+    final relative = normalized.startsWith(root)
+        ? normalized.substring(root.length)
+        : normalized;
+    return relative.replaceFirst(RegExp(r'/$'), '').isEmpty
+        ? '全部文件'
+        : relative.replaceFirst(RegExp(r'/$'), '');
+  }
+
   BrowseMode get browseMode => _browseMode;
   List<TransferTask> get tasks => tasksListenable.value;
   List<ShareImportItem> get pendingShareItems =>
@@ -82,7 +102,8 @@ class AppController extends ChangeNotifier {
       final restored = await _sessionRepository.restore();
       if (restored != null) {
         _session = restored;
-        _currentPath = restored.rootPrefix.isEmpty ? rootPrefix : restored.rootPrefix;
+        _currentPath =
+            restored.rootPrefix.isEmpty ? rootPrefix : restored.rootPrefix;
         _resumeRunningTasks();
       }
     } catch (_) {
@@ -102,7 +123,8 @@ class AppController extends ChangeNotifier {
         password: password,
       );
       _session = session;
-      _currentPath = session.rootPrefix.isEmpty ? rootPrefix : session.rootPrefix;
+      _currentPath =
+          session.rootPrefix.isEmpty ? rootPrefix : session.rootPrefix;
       selectedItemListenable.value = null;
       _resumeRunningTasks();
       notifyListeners();
@@ -117,6 +139,7 @@ class AppController extends ChangeNotifier {
   Future<void> logout() async {
     await _sessionRepository.logout();
     _session = null;
+    _remoteDirectories.clear();
     selectedItemListenable.value = null;
     _pendingShareItems = const <ShareImportItem>[];
     for (final timer in _progressTimers.values) {
@@ -141,16 +164,31 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  UserSession _requireSession() {
+    final session = _session;
+    if (session == null || !session.isRemote || session.credentials == null) {
+      throw AppError('请先登录服务端账号', code: 'REMOTE_SESSION_REQUIRED');
+    }
+    return session;
+  }
+
   Future<List<FileItem>> listDirectory([String? path]) async {
-    await Future<void>.delayed(const Duration(milliseconds: 180));
-    final target = path ?? _currentPath;
-    final items = List<FileItem>.from(_tree[target] ?? const <FileItem>[]);
-    items.sort((a, b) {
-      if (a.isDirectory != b.isDirectory) {
-        return a.isDirectory ? -1 : 1;
+    final session = _session;
+    if (session == null || !session.isRemote || session.credentials == null) {
+      throw AppError('请先登录服务端账号', code: 'REMOTE_SESSION_REQUIRED');
+    }
+    await ensureFreshCredentials();
+    final items = await _ossClient.list(path ?? _currentPath, _session!);
+    if ((path ?? _currentPath) == _currentPath) {
+      final beforeCount = _remoteDirectories.length;
+      _remoteDirectories
+        ..add(_currentPath)
+        ..addAll(
+            items.where((item) => item.isDirectory).map((item) => item.path));
+      if (_remoteDirectories.length != beforeCount) {
+        notifyListeners();
       }
-      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-    });
+    }
     return items;
   }
 
@@ -201,20 +239,8 @@ class AppController extends ChangeNotifier {
     }
     final dir = _normalizeDir(_currentPath);
     final path = '$dir$folderName/';
-    final items = List<FileItem>.from(_tree[dir] ?? const <FileItem>[]);
-    if (items.any((item) => item.name == folderName)) {
-      throw StateError('同名项已存在');
-    }
-    items.add(
-      FileItem(
-        path: path,
-        name: folderName,
-        isDirectory: true,
-        updatedAt: DateTime.now(),
-      ),
-    );
-    _tree[dir] = items;
-    _tree.putIfAbsent(path, () => <FileItem>[]);
+    await ensureFreshCredentials();
+    await _ossClient.createFolder(path, _requireSession());
     _treeRevision++;
     notifyListeners();
   }
@@ -229,106 +255,70 @@ class AppController extends ChangeNotifier {
       throw StateError('名称不能为空');
     }
 
-    final parent = item.isDirectory ? parentPath(item.path) : parentPath(item.path);
+    final parent =
+        item.isDirectory ? parentPath(item.path) : parentPath(item.path);
     final dir = _normalizeDir(parent == item.path ? rootPrefix : parent);
-    final items = List<FileItem>.from(_tree[dir] ?? const <FileItem>[]);
-    final index = items.indexWhere((e) => e.path == item.path);
-    if (index < 0) {
-      throw StateError('未找到目标项');
-    }
-    if (items.any((e) => e.name == trimmed && e.path != item.path)) {
-      throw StateError('同名项已存在');
-    }
-
     final newPath = item.isDirectory ? '$dir$trimmed/' : '$dir$trimmed';
-    final updated = item.copyWith(name: trimmed, path: newPath, updatedAt: DateTime.now());
-    items[index] = updated;
-    _tree[dir] = items;
-
-    if (item.isDirectory) {
-      final oldPrefix = item.path;
-      final moved = <String, List<FileItem>>{};
-      for (final entry in _tree.entries) {
-        if (entry.key == oldPrefix || entry.key.startsWith(oldPrefix)) {
-          final suffix = entry.key.substring(oldPrefix.length);
-          final nextKey = '$newPath$suffix';
-          moved[nextKey] = entry.value
-              .map(
-                (child) => child.copyWith(
-                  path: child.path.replaceFirst(oldPrefix, newPath),
-                ),
-              )
-              .toList();
-        }
-      }
-      _tree.removeWhere((key, _) => key == oldPrefix || key.startsWith(oldPrefix));
-      _tree.addAll(moved);
-    }
-
-    if (selectedItemListenable.value?.path == item.path) {
-      selectedItemListenable.value = updated;
-    }
+    await ensureFreshCredentials();
+    final session = _requireSession();
+    await _ossClient.copy(item.path, newPath, session);
+    await _ossClient.delete(item.path, session);
     _treeRevision++;
     notifyListeners();
   }
 
   Future<void> deleteItem(FileItem item) async {
     _ensureDeleteCapability();
-    final dir = item.isDirectory ? parentPath(item.path) : parentPath(item.path);
-    final parent = _normalizeDir(dir);
-    final items = List<FileItem>.from(_tree[parent] ?? const <FileItem>[]);
-    items.removeWhere((e) => e.path == item.path);
-    _tree[parent] = items;
+    await ensureFreshCredentials();
+    final session = _requireSession();
+    if (item.isDirectory) {
+      await _deleteDirectoryRecursively(item.path, session);
+      final deletedPath = _normalizeDir(item.path);
+      _remoteDirectories.removeWhere(
+        (path) => path == deletedPath || path.startsWith(deletedPath),
+      );
+      if (_currentPath.startsWith(deletedPath)) {
+        _currentPath = parentPath(deletedPath);
+      }
+    } else {
+      await _ossClient.delete(item.path, session);
+    }
     _treeRevision++;
 
-    if (item.isDirectory) {
-      _tree.removeWhere((key, _) => key == item.path || key.startsWith(item.path));
-    }
     if (selectedItemListenable.value?.path == item.path) {
       selectedItemListenable.value = null;
     }
     notifyListeners();
   }
 
-  Future<void> mockUpload({
-    required String fileName,
-    int size = 1024 * 512,
-    String? targetPath,
-  }) async {
-    _ensureUploadCapability();
-    final dir = _normalizeDir(targetPath ?? _currentPath);
-    _tree.putIfAbsent(dir, () => <FileItem>[]);
-
-    final path = '$dir$fileName';
-    final items = List<FileItem>.from(_tree[dir]!);
-    items.removeWhere((e) => e.path == path);
-    items.add(
-      FileItem(
-        path: path,
-        name: fileName,
-        isDirectory: false,
-        size: size,
-        updatedAt: DateTime.now(),
-      ),
-    );
-    _tree[dir] = items;
-    _treeRevision++;
-
-    final task = TransferTask(
-      id: 'task-${++_taskSeq}',
-      name: fileName,
-      type: TransferTaskType.upload,
-      status: TransferTaskStatus.running,
-      progress: 0.08,
-      message: '正在上传到 $dir',
-      target: dir,
-    );
-    _setTasks(<TransferTask>[task, ...tasksListenable.value]);
-    notifyListeners();
-    _simulateProgress(task.id, successMessage: '上传完成');
+  Future<void> _deleteDirectoryRecursively(
+    String path,
+    UserSession session,
+  ) async {
+    final children = await _ossClient.list(path, session);
+    for (final child in children) {
+      if (child.isDirectory) {
+        await _deleteDirectoryRecursively(child.path, session);
+      } else {
+        await _ossClient.delete(child.path, session);
+      }
+    }
+    await _ossClient.delete(path, session);
   }
 
-  Future<void> mockDownload(FileItem item) async {
+  Future<void> uploadBytes(
+      {required String fileName,
+      required List<int> bytes,
+      String? targetPath}) async {
+    _ensureUploadCapability();
+    await ensureFreshCredentials();
+    final dir = _normalizeDir(targetPath ?? _currentPath);
+    await _ossClient.upload('$dir$fileName', bytes, _requireSession());
+    _treeRevision++;
+    notifyListeners();
+  }
+
+  Future<List<int>> downloadBytes(FileItem item) async {
     if (!capabilities.download) {
       throw StateError('当前身份没有下载权限');
     }
@@ -336,17 +326,8 @@ class AppController extends ChangeNotifier {
       throw StateError('一期不支持文件夹下载');
     }
 
-    final task = TransferTask(
-      id: 'task-${++_taskSeq}',
-      name: item.name,
-      type: TransferTaskType.download,
-      status: TransferTaskStatus.running,
-      progress: 0.12,
-      message: '保存到本地下载目录',
-      target: '本地下载目录',
-    );
-    _setTasks(<TransferTask>[task, ...tasksListenable.value]);
-    _simulateProgress(task.id, successMessage: '已保存到下载目录');
+    await ensureFreshCredentials();
+    return _ossClient.download(item.path, _requireSession());
   }
 
   void retryTask(String taskId) {
@@ -367,7 +348,8 @@ class AppController extends ChangeNotifier {
     );
     current[index] = next;
     _setTasks(current);
-    _simulateProgress(taskId, successMessage: task.type == TransferTaskType.upload ? '上传完成' : '下载完成');
+    _simulateProgress(taskId,
+        successMessage: task.type == TransferTaskType.upload ? '上传完成' : '下载完成');
   }
 
   void cancelTask(String taskId) {
@@ -410,8 +392,9 @@ class AppController extends ChangeNotifier {
   }
 
   void removeShareItem(String id) {
-    _pendingShareItems =
-        _pendingShareItems.where((item) => item.id != id).toList(growable: false);
+    _pendingShareItems = _pendingShareItems
+        .where((item) => item.id != id)
+        .toList(growable: false);
     notifyListeners();
   }
 
@@ -425,41 +408,24 @@ class AppController extends ChangeNotifier {
     if (_pendingShareItems.isEmpty) {
       throw StateError('没有待上传内容');
     }
-    final items = List<ShareImportItem>.from(_pendingShareItems);
     _pendingShareItems = const <ShareImportItem>[];
     notifyListeners();
 
-    for (final item in items) {
-      await mockUpload(
-        fileName: item.name,
-        size: item.size,
-        targetPath: _shareTargetPath,
-      );
-    }
-  }
-
-  String mockPreviewText(String fileName) {
-    return "文件：$fileName\n\n当前为文本预览内容。";
+    throw StateError('分享导入缺少原始文件内容，无法直接上传 OSS');
   }
 
   List<String> get sidebarDirectories {
-    // 侧栏仅展示 shared/ 及其一级子目录。
-    final dirs = _tree.keys.where((path) {
-      if (path == rootPrefix) {
-        return true;
-      }
-      if (!path.startsWith(rootPrefix)) {
-        return false;
-      }
-      final rest = path.substring(rootPrefix.length);
-      if (rest.isEmpty) {
-        return false;
-      }
-      final slash = rest.indexOf('/');
-      return slash == rest.length - 1;
-    }).toList()
-      ..sort((a, b) => a.compareTo(b));
-    return dirs;
+    if (_session?.isRemote == true) {
+      final root = _normalizeDir(_session?.rootPrefix ?? rootPrefix);
+      final dirs = _remoteDirectories.where((path) {
+        if (!path.startsWith(root)) return false;
+        final rest = path.substring(root.length);
+        return rest.isNotEmpty && rest.indexOf('/') == rest.length - 1;
+      }).toList()
+        ..sort();
+      return List<String>.unmodifiable(dirs);
+    }
+    return const <String>[];
   }
 
   void _resumeRunningTasks() {
@@ -467,7 +433,8 @@ class AppController extends ChangeNotifier {
       if (task.status == TransferTaskStatus.running) {
         _simulateProgress(
           task.id,
-          successMessage: task.type == TransferTaskType.upload ? '上传完成' : '下载完成',
+          successMessage:
+              task.type == TransferTaskType.upload ? '上传完成' : '下载完成',
         );
       }
     }
@@ -478,7 +445,8 @@ class AppController extends ChangeNotifier {
       return;
     }
     _progressTimers.remove(taskId)?.cancel();
-    _progressTimers[taskId] = Timer.periodic(const Duration(milliseconds: 350), (timer) {
+    _progressTimers[taskId] =
+        Timer.periodic(const Duration(milliseconds: 350), (timer) {
       final current = List<TransferTask>.from(tasksListenable.value);
       final index = current.indexWhere((task) => task.id == taskId);
       if (index < 0) {
@@ -533,159 +501,6 @@ class AppController extends ChangeNotifier {
       return rootPrefix;
     }
     return path.endsWith('/') ? path : '$path/';
-  }
-
-  static Map<String, List<FileItem>> _defaultTree() {
-    DateTime d(int month, int day, [int hour = 10, int minute = 0]) =>
-        DateTime(2026, month, day, hour, minute);
-
-    return <String, List<FileItem>>{
-      'shared/': <FileItem>[
-        FileItem(path: 'shared/common/', name: 'common', isDirectory: true, updatedAt: d(6, 1)),
-        FileItem(path: 'shared/photos/', name: 'photos', isDirectory: true, updatedAt: d(6, 2, 9, 30)),
-        FileItem(path: 'shared/docs/', name: 'docs', isDirectory: true, updatedAt: d(6, 3, 14, 20)),
-        FileItem(path: 'shared/uploads/', name: 'uploads', isDirectory: true, updatedAt: d(6, 5, 9)),
-        FileItem(
-          path: 'shared/家庭合影.jpg',
-          name: '家庭合影.jpg',
-          isDirectory: false,
-          size: 2516582,
-          updatedAt: d(6, 5, 9, 12),
-        ),
-        FileItem(
-          path: 'shared/家庭档案说明.pdf',
-          name: '家庭档案说明.pdf',
-          isDirectory: false,
-          size: 880640,
-          updatedAt: d(6, 4, 18),
-        ),
-        FileItem(
-          path: 'shared/readme.txt',
-          name: 'readme.txt',
-          isDirectory: false,
-          size: 4096,
-          updatedAt: d(6, 2, 8, 45),
-        ),
-      ],
-      'shared/common/': <FileItem>[
-        FileItem(
-          path: 'shared/common/family-rules.pdf',
-          name: 'family-rules.pdf',
-          isDirectory: false,
-          size: 248320,
-          updatedAt: d(5, 28, 19, 10),
-        ),
-        FileItem(
-          path: 'shared/common/receipts/',
-          name: 'receipts',
-          isDirectory: true,
-          updatedAt: d(6, 1, 11),
-        ),
-        FileItem(
-          path: 'shared/common/access-guide.txt',
-          name: 'access-guide.txt',
-          isDirectory: false,
-          size: 4096,
-          updatedAt: d(6, 1, 18, 20),
-        ),
-      ],
-      'shared/common/receipts/': <FileItem>[
-        FileItem(
-          path: 'shared/common/receipts/2026-05.pdf',
-          name: '2026-05.pdf',
-          isDirectory: false,
-          size: 156000,
-          updatedAt: d(5, 31, 20, 15),
-        ),
-        FileItem(
-          path: 'shared/common/receipts/2026-06.pdf',
-          name: '2026-06.pdf',
-          isDirectory: false,
-          size: 168400,
-          updatedAt: d(6, 3, 20, 15),
-        ),
-      ],
-      'shared/photos/': <FileItem>[
-        FileItem(
-          path: 'shared/photos/2026-trip.jpg',
-          name: '2026-trip.jpg',
-          isDirectory: false,
-          size: 3145728,
-          updatedAt: d(6, 5, 17, 12),
-        ),
-        FileItem(
-          path: 'shared/photos/beach.png',
-          name: 'beach.png',
-          isDirectory: false,
-          size: 1843200,
-          updatedAt: d(6, 5, 16),
-        ),
-        FileItem(
-          path: 'shared/photos/dinner.jpg',
-          name: 'dinner.jpg',
-          isDirectory: false,
-          size: 2237440,
-          updatedAt: d(6, 4, 20),
-        ),
-        FileItem(
-          path: 'shared/photos/notes.txt',
-          name: 'notes.txt',
-          isDirectory: false,
-          size: 2048,
-          updatedAt: d(6, 4, 15),
-        ),
-        FileItem(
-          path: 'shared/photos/album-guide.pdf',
-          name: 'album-guide.pdf',
-          isDirectory: false,
-          size: 120400,
-          updatedAt: d(6, 3, 11),
-        ),
-        FileItem(
-          path: 'shared/photos/portraits/',
-          name: 'portraits',
-          isDirectory: true,
-          updatedAt: d(6, 5, 17),
-        ),
-      ],
-      'shared/photos/portraits/': <FileItem>[
-        FileItem(
-          path: 'shared/photos/portraits/alice.png',
-          name: 'alice.png',
-          isDirectory: false,
-          size: 1245728,
-          updatedAt: d(6, 5, 17, 6),
-        ),
-        FileItem(
-          path: 'shared/photos/portraits/bob.jpg',
-          name: 'bob.jpg',
-          isDirectory: false,
-          size: 1457280,
-          updatedAt: d(6, 5, 17, 8),
-        ),
-      ],
-      'shared/docs/': <FileItem>[
-        FileItem(
-          path: 'shared/docs/project-plan.md',
-          name: 'project-plan.md',
-          isDirectory: false,
-          size: 8192,
-          updatedAt: d(6, 3, 21, 5),
-        ),
-        FileItem(
-          path: 'shared/docs/server-config.json',
-          name: 'server-config.json',
-          isDirectory: false,
-          size: 3072,
-          updatedAt: d(6, 2, 16, 40),
-        ),
-      ],
-      'shared/uploads/': <FileItem>[],
-    };
-  }
-
-  static List<TransferTask> _defaultTasks() {
-    return <TransferTask>[];
   }
 
   @override

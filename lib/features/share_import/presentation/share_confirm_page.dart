@@ -23,7 +23,7 @@ class ShareConfirmPage extends StatelessWidget {
               ...dirs.map(
                 (path) => ListTile(
                   leading: const Icon(Icons.folder_outlined),
-                  title: Text(path),
+                  title: Text(controller.displayPath(path)),
                   onTap: () => Navigator.pop(context, path),
                 ),
               ),

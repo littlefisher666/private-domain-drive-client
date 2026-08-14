@@ -4,7 +4,8 @@ import '../../../app/router/route_names.dart';
 import '../../../shared/state/app_scope.dart';
 
 class SettingsPage extends StatelessWidget {
-  const SettingsPage({super.key, this.embedded = false, this.desktopChrome = false});
+  const SettingsPage(
+      {super.key, this.embedded = false, this.desktopChrome = false});
 
   final bool embedded;
   final bool desktopChrome;
@@ -17,12 +18,15 @@ class SettingsPage extends StatelessWidget {
     final scheme = theme.colorScheme;
     final desktop = desktopChrome || MediaQuery.sizeOf(context).width >= 960;
     final displayName = session?.displayName ?? '';
-    final initial = displayName.isNotEmpty ? displayName.substring(0, 1).toUpperCase() : 'U';
+    final initial = displayName.isNotEmpty
+        ? displayName.substring(0, 1).toUpperCase()
+        : 'U';
 
     return Scaffold(
       body: SafeArea(
         child: ListView(
-          padding: EdgeInsets.fromLTRB(desktop ? 24 : 16, 16, desktop ? 24 : 16, 24),
+          padding:
+              EdgeInsets.fromLTRB(desktop ? 24 : 16, 16, desktop ? 24 : 16, 24),
           children: <Widget>[
             Row(
               children: <Widget>[
@@ -39,7 +43,8 @@ class SettingsPage extends StatelessWidget {
                       Text('我的', style: theme.textTheme.headlineSmall),
                       Text(
                         '账户与应用信息',
-                        style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(color: scheme.onSurfaceVariant),
                       ),
                     ],
                   ),
@@ -52,7 +57,8 @@ class SettingsPage extends StatelessWidget {
                 leading: CircleAvatar(
                   radius: 26,
                   backgroundColor:
-                      (desktop ? const Color(0xFF007AFF) : scheme.primary).withValues(alpha: 0.15),
+                      (desktop ? const Color(0xFF007AFF) : scheme.primary)
+                          .withValues(alpha: 0.15),
                   child: Text(
                     initial,
                     style: TextStyle(
@@ -70,16 +76,16 @@ class SettingsPage extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 12),
-            Card(
+            const Card(
               child: Column(
                 children: <Widget>[
                   ListTile(
-                    leading: const Icon(Icons.folder_shared_outlined),
-                    title: const Text('共享空间'),
-                    subtitle: Text(session?.rootPrefix ?? 'shared/'),
+                    leading: Icon(Icons.folder_shared_outlined),
+                    title: Text('共享空间'),
+                    subtitle: Text('文件与目录'),
                   ),
-                  const Divider(height: 1),
-                  const ListTile(
+                  Divider(height: 1),
+                  ListTile(
                     leading: Icon(Icons.info_outline),
                     title: Text('应用版本'),
                     subtitle: Text('0.1.0+1'),

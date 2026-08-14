@@ -34,8 +34,10 @@ class PersistentSessionRepository implements SessionRepository {
       return null;
     }
 
+    // 旧版本可能保存过本地演示会话，生产环境不得恢复该身份。
     if (!cached.isRemote) {
-      return cached;
+      await _store.clear();
+      return null;
     }
 
     final credentials = cached.credentials;
@@ -69,29 +71,10 @@ class PersistentSessionRepository implements SessionRepository {
       );
       await _store.write(session);
       return session;
-    } on AppError catch (error) {
-      if (error.code == 'UNAUTHORIZED') {
-        rethrow;
-      }
-      if (!AppConstants.allowLocalMockFallback) {
-        rethrow;
-      }
-      final local = _localDemoSession(account: trimmed, password: password);
-      if (local == null) {
-        throw AppError('账号或口令错误', code: 'UNAUTHORIZED');
-      }
-      await _store.write(local);
-      return local;
+    } on AppError {
+      rethrow;
     } catch (error) {
-      if (!AppConstants.allowLocalMockFallback) {
-        throw AppError(error.toString(), code: 'LOGIN_FAILED');
-      }
-      final local = _localDemoSession(account: trimmed, password: password);
-      if (local == null) {
-        throw AppError('账号或口令错误', code: 'UNAUTHORIZED');
-      }
-      await _store.write(local);
-      return local;
+      throw AppError(error.toString(), code: 'LOGIN_FAILED');
     }
   }
 
@@ -124,28 +107,6 @@ class PersistentSessionRepository implements SessionRepository {
     }
   }
 
-  UserSession? _localDemoSession({
-    required String account,
-    required String password,
-  }) {
-    const users = <String, ({String password, String displayName})>{
-      'admin': (password: '123456', displayName: 'admin'),
-      'member': (password: '123456', displayName: 'member'),
-    };
-    final user = users[account];
-    if (user == null || user.password != password) {
-      return null;
-    }
-    return UserSession(
-      userId: user.displayName,
-      account: user.displayName,
-      displayName: user.displayName,
-      role: 'member',
-      capabilities: const Capabilities.standard(),
-      rootPrefix: 'shared/',
-      authMode: SessionAuthMode.localMock,
-    );
-  }
 }
 
 /// Test-only in-memory repository.
