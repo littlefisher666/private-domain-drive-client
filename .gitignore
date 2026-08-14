@@ -31,5 +31,8 @@ captures/
 # Logs
 *.log
 
+# Local build-time credentials and environment configuration
+env/local.json
+
 # Coverage
 coverage/

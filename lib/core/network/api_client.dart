@@ -5,16 +5,25 @@ import 'package:http/http.dart' as http;
 import '../constants/app_constants.dart';
 import '../errors/app_error.dart';
 import '../../features/auth/domain/user_session.dart';
+import 'aliyun_request_signer.dart';
 
 class ApiClient {
   ApiClient({
     http.Client? httpClient,
     String? baseUrl,
   })  : _http = httpClient ?? http.Client(),
-        _baseUrl = (baseUrl ?? AppConstants.fcBaseUrl).replaceAll(RegExp(r'/$'), '');
+        _baseUrl = (baseUrl ?? AppConstants.fcBaseUrl).replaceAll(RegExp(r'/$'), ''),
+        _signer = const AliyunRequestSigner(
+          accessKeyId: AppConstants.fcAccessKeyId,
+          accessKeySecret: AppConstants.fcAccessKeySecret,
+          region: AppConstants.fcRegion,
+          service: AppConstants.fcService,
+          securityToken: AppConstants.fcSecurityToken,
+        );
 
   final http.Client _http;
   final String _baseUrl;
+  final AliyunRequestSigner _signer;
 
   Future<UserSession> bootstrapSession({
     required String account,
@@ -67,16 +76,31 @@ class ApiClient {
     final uri = Uri.parse('$_baseUrl$path');
     http.Response response;
     try {
+      final encodedBody = jsonEncode(body);
+      final headers = <String, String>{'accept': 'application/json'};
+      if (AppConstants.fcSignRequests) {
+        if (!_signer.enabled) {
+          throw AppError(
+            '缺少 FC 请求签名凭证，请通过 FC_ACCESS_KEY_ID / FC_ACCESS_KEY_SECRET 注入',
+            code: 'SIGNING_CONFIG_MISSING',
+          );
+        }
+        headers.addAll(_signer.sign(
+          method: 'POST',
+          uri: uri,
+          body: encodedBody,
+        ));
+      }
+      headers['content-type'] = 'application/json; charset=utf-8';
       response = await _http
           .post(
             uri,
-            headers: const <String, String>{
-              'content-type': 'application/json; charset=utf-8',
-              'accept': 'application/json',
-            },
-            body: jsonEncode(body),
+            headers: headers,
+            body: encodedBody,
           )
           .timeout(const Duration(seconds: 20));
+    } on AppError {
+      rethrow;
     } catch (error) {
       throw AppError('无法连接服务: $error', code: 'NETWORK_ERROR');
     }
