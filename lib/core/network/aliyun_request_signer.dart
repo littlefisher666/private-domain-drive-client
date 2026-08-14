@@ -47,11 +47,13 @@ class AliyunRequestSigner {
     final signature = _hex(_mac(utf8.encode(accessKeySecret), stringToSign));
     return <String, String>{
       'x-acs-date': date,
-      'Authorization': 'ACS3-HMAC-SHA256 Credential=$accessKeyId,SignedHeaders=${canonicalHeaders.join(';')},Signature=$signature',
+      'Authorization':
+          'ACS3-HMAC-SHA256 Credential=$accessKeyId,SignedHeaders=${canonicalHeaders.join(';')},Signature=$signature',
     };
   }
 
-  String _canonicalUri(Uri uri) => (uri.path.isEmpty ? '/' : uri.path).replaceAll('$', '%24');
+  String _canonicalUri(Uri uri) =>
+      (uri.path.isEmpty ? '/' : uri.path).replaceAll(r'$', '%24');
 
   String _canonicalQuery(Uri uri) {
     final entries = uri.queryParameters.entries.toList()
@@ -59,16 +61,28 @@ class AliyunRequestSigner {
         final key = a.key.compareTo(b.key);
         return key != 0 ? key : a.value.compareTo(b.value);
       });
-    return entries.map((e) => '${_encode(e.key)}=${_encode(e.value)}').join('&');
+    return entries
+        .map((e) => '${_encode(e.key)}=${_encode(e.value)}')
+        .join('&');
   }
 
-  String _normalize(String value) => value.trim().replaceAll(RegExp(r'\s+'), ' ');
+  String _normalize(String value) =>
+      value.trim().replaceAll(RegExp(r'\s+'), ' ');
+
+  String _sha(String value) => sha256.convert(utf8.encode(value)).toString();
+
+  List<int> _mac(List<int> key, String value) =>
+      Hmac(sha256, key).convert(utf8.encode(value)).bytes;
+
+  String _hex(List<int> bytes) =>
+      bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
 
   String _encode(String value) => Uri.encodeComponent(value)
       .replaceAll('+', '%20')
       .replaceAll('*', '%2A')
       .replaceAll('%7E', '~');
 
-  String _date(DateTime v) => '${v.year.toString().padLeft(4, '0')}${v.month.toString().padLeft(2, '0')}${v.day.toString().padLeft(2, '0')}';
+  String _date(DateTime v) =>
+      '${v.year.toString().padLeft(4, '0')}${v.month.toString().padLeft(2, '0')}${v.day.toString().padLeft(2, '0')}';
   String _timestamp(DateTime v) => v.toIso8601String().split('.').first + 'Z';
 }
