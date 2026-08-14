@@ -13,7 +13,6 @@ class AppConstants {
 
   static const fcAccessKeyId = String.fromEnvironment('FC_ACCESS_KEY_ID');
   static const fcAccessKeySecret = String.fromEnvironment('FC_ACCESS_KEY_SECRET');
-  static const fcSecurityToken = String.fromEnvironment('FC_SECURITY_TOKEN');
   static const fcRegion = String.fromEnvironment('FC_REGION', defaultValue: 'cn-hangzhou');
   static const fcService = String.fromEnvironment('FC_SERVICE', defaultValue: 'fc');
   static const fcSignRequests = bool.fromEnvironment('FC_SIGN_REQUESTS', defaultValue: true);

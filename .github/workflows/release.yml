@@ -122,7 +122,12 @@ jobs:
         run: flutter test
 
       - name: Build release APK
-        run: flutter build apk --release --build-name "${{ needs.prepare.outputs.version_name }}" --build-number "${{ needs.prepare.outputs.build_number }}"
+        run: |
+          flutter build apk --release \
+            --build-name "${{ needs.prepare.outputs.version_name }}" \
+            --build-number "${{ needs.prepare.outputs.build_number }}" \
+            --dart-define=FC_ACCESS_KEY_ID="${{ secrets.FC_ACCESS_KEY_ID }}" \
+            --dart-define=FC_ACCESS_KEY_SECRET="${{ secrets.FC_ACCESS_KEY_SECRET }}"
 
       - name: Prepare APK artifact
         run: cp build/app/outputs/flutter-apk/app-release.apk "private-domain-drive-android-${{ needs.prepare.outputs.tag_name }}.apk"
@@ -158,7 +163,12 @@ jobs:
         run: flutter test
 
       - name: Build unsigned macOS app
-        run: flutter build macos --release --build-name "${{ needs.prepare.outputs.version_name }}" --build-number "${{ needs.prepare.outputs.build_number }}"
+        run: |
+          flutter build macos --release \
+            --build-name "${{ needs.prepare.outputs.version_name }}" \
+            --build-number "${{ needs.prepare.outputs.build_number }}" \
+            --dart-define=FC_ACCESS_KEY_ID="${{ secrets.FC_ACCESS_KEY_ID }}" \
+            --dart-define=FC_ACCESS_KEY_SECRET="${{ secrets.FC_ACCESS_KEY_SECRET }}"
 
       - name: Package macOS app
         run: |
