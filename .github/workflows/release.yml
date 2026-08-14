@@ -175,8 +175,13 @@ jobs:
       - name: Package macOS app
         run: |
           cd build/macos/Build/Products/Release
+          app_path="$(find . -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [[ -z "$app_path" ]]; then
+            echo "未找到 macOS 应用包（*.app）"
+            exit 1
+          fi
           ditto -c -k --sequesterRsrc --keepParent \
-            private_domain_drive_client.app \
+            "$app_path" \
             "$GITHUB_WORKSPACE/private-domain-drive-macos-${{ needs.prepare.outputs.tag_name }}.zip"
 
       - name: Upload macOS artifact
