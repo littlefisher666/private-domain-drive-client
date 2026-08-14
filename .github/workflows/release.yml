@@ -1,0 +1,199 @@
+name: Flutter Scheduled Release
+
+on:
+  # GitHub Actions 的 cron 使用 UTC；每天北京时间 02:00 对应前一天 18:00 UTC。
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "可选发布版本，例如 1.1.2 或 v1.1.2；留空则自动递增补丁版本"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: flutter-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Check for changes
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      version_name: ${{ steps.version.outputs.version_name }}
+      build_number: ${{ steps.version.outputs.build_number }}
+      tag_name: ${{ steps.version.outputs.tag_name }}
+
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whether code changed since the latest release tag
+        id: check
+        shell: bash
+        run: |
+          latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)"
+
+          if [[ -z "$latest_tag" ]]; then
+            echo "No previous release tag found; building the first release."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$latest_tag" HEAD -- . ':!.github/workflows/release.yml'; then
+            echo "No code changes since $latest_tag; skipping the build."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changes found since $latest_tag; starting the build."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate version
+        if: steps.check.outputs.should_build == 'true'
+        id: version
+        shell: bash
+        run: |
+          latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)"
+
+          # 手动触发可以指定版本；定时触发或手动留空时，自动递增 PATCH。
+          requested_version="${{ inputs.version }}"
+          requested_version="${requested_version#v}"
+          if [[ -n "$requested_version" ]]; then
+            if [[ ! "$requested_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "版本号格式错误：${{ inputs.version }}，应为 1.1.2 或 v1.1.2"
+              exit 1
+            fi
+            version_name="$requested_version"
+          elif [[ -z "$latest_tag" ]]; then
+            version_name="1.0.1"
+          elif [[ "$latest_tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+            version_name="${major}.${minor}.$((patch + 1))"
+          else
+            echo "Latest release tag has an invalid format: $latest_tag"
+            exit 1
+          fi
+
+          build_number="${GITHUB_RUN_NUMBER}"
+          tag_name="v${version_name}"
+
+          if git rev-parse "$tag_name" >/dev/null 2>&1; then
+            echo "版本 tag 已存在：$tag_name，请输入其他版本号。"
+            exit 1
+          fi
+
+          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$tag_name" >> "$GITHUB_OUTPUT"
+          echo "Release version: $tag_name (build $build_number)"
+
+  android:
+    name: Build Android APK
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.44.1"
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Build release APK
+        run: flutter build apk --release --build-name "${{ needs.prepare.outputs.version_name }}" --build-number "${{ needs.prepare.outputs.build_number }}"
+
+      - name: Prepare APK artifact
+        run: cp build/app/outputs/flutter-apk/app-release.apk "private-domain-drive-android-${{ needs.prepare.outputs.tag_name }}.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: private-domain-drive-android-*.apk
+          if-no-files-found: error
+
+  macos:
+    name: Build macOS app
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.44.1"
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Build unsigned macOS app
+        run: flutter build macos --release --build-name "${{ needs.prepare.outputs.version_name }}" --build-number "${{ needs.prepare.outputs.build_number }}"
+
+      - name: Package macOS app
+        run: |
+          cd build/macos/Build/Products/Release
+          ditto -c -k --sequesterRsrc --keepParent \
+            private_domain_drive_client.app \
+            "$GITHUB_WORKSPACE/private-domain-drive-macos-${{ needs.prepare.outputs.tag_name }}.zip"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-app
+          path: private-domain-drive-macos-*.zip
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release and tag
+    needs: [prepare, android, macos]
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create tag and release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ needs.prepare.outputs.tag_name }}
+          generate_release_notes: true
+          files: |
+            dist/private-domain-drive-android-*.apk
+            dist/private-domain-drive-macos-*.zip
