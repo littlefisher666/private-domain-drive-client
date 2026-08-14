@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../../app/router/route_names.dart';
@@ -17,6 +20,47 @@ class WorkspacePage extends StatefulWidget {
 
   @override
   State<WorkspacePage> createState() => _WorkspacePageState();
+}
+
+/// 打开系统文件选择器并将选中文件上传到当前目录。
+///
+/// 该入口同时供桌面标题栏和目录页按钮使用，确保两个按钮行为一致。
+Future<void> pickAndUploadFile(
+  BuildContext context, {
+  bool fromAlbum = false,
+}) async {
+  final controller = AppScope.read(context);
+  if (!controller.capabilities.upload) {
+    AppFeedback.showSnack(context, '当前身份没有上传权限');
+    return;
+  }
+
+  try {
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: false,
+      type: fromAlbum ? FileType.image : FileType.any,
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+
+    final picked = result.files.single;
+    final bytes = picked.bytes ??
+        (picked.path == null ? null : await File(picked.path!).readAsBytes());
+    if (bytes == null) {
+      throw StateError('无法读取所选文件');
+    }
+    await controller.uploadBytes(fileName: picked.name, bytes: bytes);
+    if (context.mounted) {
+      AppFeedback.showSnack(context, '已上传 ${picked.name}');
+    }
+  } catch (error) {
+    if (context.mounted) {
+      AppFeedback.showSnack(
+        context,
+        error.toString().replaceFirst('Bad state: ', ''),
+      );
+    }
+  }
 }
 
 class _WorkspacePageState extends State<WorkspacePage> {
@@ -96,6 +140,13 @@ class _WorkspacePageState extends State<WorkspacePage> {
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 const Text('目录加载失败'),
+                const SizedBox(height: 8),
+                Text(
+                  '详细信息已写入调试日志',
+                  style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontSize: 13),
+                ),
                 const SizedBox(height: 12),
                 FilledButton(onPressed: _reload, child: const Text('重试')),
               ],
@@ -112,7 +163,9 @@ class _WorkspacePageState extends State<WorkspacePage> {
           return _EmptyState(
             canUpload: canUpload,
             onAction: canUpload
-                ? (desktop ? () => _mockUpload(fromAlbum: false) : _showUploadSheet)
+                ? (desktop
+                    ? () => _pickUpload(fromAlbum: false)
+                    : _showUploadSheet)
                 : null,
           );
         }
@@ -293,9 +346,14 @@ class _WorkspacePageState extends State<WorkspacePage> {
   Future<void> _download(FileItem item) async {
     final controller = AppScope.of(context);
     try {
-      await controller.mockDownload(item);
+      final bytes = await controller.downloadBytes(item);
+      final path = await FilePicker.platform.saveFile(fileName: item.name);
+      if (path == null) {
+        return;
+      }
+      await File(path).writeAsBytes(bytes, flush: true);
       if (mounted) {
-        AppFeedback.showSnack(context, '已开始下载 ${item.name}');
+        AppFeedback.showSnack(context, '已保存 ${item.name}');
       }
     } catch (error) {
       if (mounted) {
@@ -307,29 +365,9 @@ class _WorkspacePageState extends State<WorkspacePage> {
     }
   }
 
-  Future<void> _mockUpload({required bool fromAlbum}) async {
-    final controller = AppScope.of(context);
-    if (!controller.capabilities.upload) {
-      AppFeedback.showSnack(context, '当前身份没有上传权限');
-      return;
-    }
-    final stamp = DateTime.now().millisecondsSinceEpoch % 100000;
-    final name = fromAlbum ? 'album-$stamp.jpg' : 'upload-$stamp.bin';
-    final size = fromAlbum ? 2 * 1024 * 1024 : 640 * 1024;
-    try {
-      await controller.mockUpload(fileName: name, size: size);
-      await _reload();
-      if (mounted) {
-        AppFeedback.showSnack(context, '已开始上传 $name');
-      }
-    } catch (error) {
-      if (mounted) {
-        AppFeedback.showSnack(
-          context,
-          error.toString().replaceFirst('Bad state: ', ''),
-        );
-      }
-    }
+  Future<void> _pickUpload({required bool fromAlbum}) async {
+    await pickAndUploadFile(context, fromAlbum: fromAlbum);
+    if (mounted) await _reload();
   }
 
   Future<void> _showUploadSheet() async {
@@ -352,7 +390,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 title: const Text('上传文件'),
                 onTap: () {
                   Navigator.pop(context);
-                  _mockUpload(fromAlbum: false);
+                  _pickUpload(fromAlbum: false);
                 },
               ),
               ListTile(
@@ -360,7 +398,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 title: const Text('从相册上传'),
                 onTap: () {
                   Navigator.pop(context);
-                  _mockUpload(fromAlbum: true);
+                  _pickUpload(fromAlbum: true);
                 },
               ),
               ListTile(
@@ -390,8 +428,9 @@ class _WorkspacePageState extends State<WorkspacePage> {
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
               ListTile(
-                title: Text(item.name, style: Theme.of(context).textTheme.titleMedium),
-                subtitle: Text(item.path),
+                title: Text(item.name,
+                    style: Theme.of(context).textTheme.titleMedium),
+                subtitle: Text(controller.displayPath(item.path)),
               ),
               ListTile(
                 leading: const Icon(Icons.open_in_new),
@@ -419,7 +458,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
                     _download(item);
                   },
                 ),
-              if (controller.capabilities.upload || controller.capabilities.delete)
+              if (controller.capabilities.upload ||
+                  controller.capabilities.delete)
                 ListTile(
                   leading: const Icon(Icons.edit_outlined),
                   title: const Text('重命名'),
@@ -436,7 +476,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
                   ),
                   title: Text(
                     '删除',
-                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    style:
+                        TextStyle(color: Theme.of(context).colorScheme.error),
                   ),
                   onTap: () {
                     Navigator.pop(context);
@@ -491,8 +532,9 @@ class _WorkspacePageState extends State<WorkspacePage> {
     final canDownload = controller.capabilities.download;
 
     return Scaffold(
-      backgroundColor:
-          desktop ? CupertinoDesktopTokens.surface : theme.scaffoldBackgroundColor,
+      backgroundColor: desktop
+          ? CupertinoDesktopTokens.surface
+          : theme.scaffoldBackgroundColor,
       floatingActionButton: desktop || !canUpload
           ? null
           : FloatingActionButton(
@@ -503,7 +545,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
         top: !desktop,
         child: desktop
             ? _DesktopWorkspaceBody(
-                path: controller.currentPath,
+                path: controller.displayPath(controller.currentPath),
                 canGoUp: controller.currentPath != AppController.rootPrefix,
                 canUpload: canUpload,
                 canDelete: canDelete,
@@ -518,7 +560,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 onGoUp: _goUp,
                 onRefresh: _reload,
                 onCreateFolder: _createFolder,
-                onUpload: () => _mockUpload(fromAlbum: false),
+                onUpload: () => _pickUpload(fromAlbum: false),
                 onBrowseModeChanged: controller.setBrowseMode,
                 onOpen: _handleOpen,
                 onPreview: _openPreview,
@@ -531,7 +573,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
                     _MobileHeader(
-                      path: controller.currentPath,
+                      path: controller.displayPath(controller.currentPath),
                       roleLabel: controller.session?.displayName ?? '成员',
                       canGoUp:
                           controller.currentPath != AppController.rootPrefix,
@@ -626,9 +668,7 @@ class _DesktopWorkspaceBody extends StatelessWidget {
             children: <Widget>[
               Row(
                 children: <Widget>[
-                  if (canGoUp) ...<
-                    Widget
-                  >[
+                  if (canGoUp) ...<Widget>[
                     OutlinedButton(
                       onPressed: onGoUp,
                       child: const Text('‹ 上级'),
@@ -650,14 +690,6 @@ class _DesktopWorkspaceBody extends StatelessWidget {
                             color: CupertinoDesktopTokens.ink,
                           ),
                         ),
-                        const SizedBox(height: 3),
-                        const Text(
-                          '按目录浏览 · 支持列表 / 缩略图 · 拖拽上传',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: CupertinoDesktopTokens.secondary,
-                          ),
-                        ),
                       ],
                     ),
                   ),
@@ -677,9 +709,7 @@ class _DesktopWorkspaceBody extends StatelessWidget {
                     onPressed: onRefresh,
                     child: const Text('刷新'),
                   ),
-                  if (canUpload) ...<
-                    Widget
-                  >[
+                  if (canUpload) ...<Widget>[
                     OutlinedButton(
                       onPressed: onCreateFolder,
                       child: const Text('新建文件夹'),
@@ -704,9 +734,7 @@ class _DesktopWorkspaceBody extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: <Widget>[
-                      if (!canUpload || !canDelete) ...<
-                        Widget
-                      >[
+                      if (!canUpload || !canDelete) ...<Widget>[
                         Container(
                           margin: const EdgeInsets.only(bottom: 12),
                           padding: const EdgeInsets.symmetric(
@@ -726,12 +754,6 @@ class _DesktopWorkspaceBody extends StatelessWidget {
                             ),
                           ),
                         ),
-                      ],
-                      if (canUpload) ...<
-                        Widget
-                      >[
-                        _DropZone(onTap: onUpload),
-                        const SizedBox(height: 12),
                       ],
                       Expanded(child: listArea),
                     ],
@@ -921,56 +943,6 @@ class _MobileHeader extends StatelessWidget {
   }
 }
 
-class _DropZone extends StatelessWidget {
-  const _DropZone({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: CupertinoDesktopTokens.blue.withValues(alpha: 0.04),
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: onTap,
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: CupertinoDesktopTokens.blue.withValues(alpha: 0.35),
-              width: 1.5,
-            ),
-          ),
-          child: const Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                '拖拽文件到这里上传',
-                style: TextStyle(
-                  color: CupertinoDesktopTokens.blue,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              SizedBox(height: 4),
-              Text(
-                'macOS 支持拖拽上传；也可点击选择文件。大文件将走分片上传。',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: CupertinoDesktopTokens.secondary,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _EmptyState extends StatelessWidget {
   const _EmptyState({required this.canUpload, this.onAction});
 
@@ -1009,9 +981,7 @@ class _EmptyState extends StatelessWidget {
               color: CupertinoDesktopTokens.secondary,
             ),
           ),
-          if (canUpload && onAction != null) ...<
-            Widget
-          >[
+          if (canUpload && onAction != null) ...<Widget>[
             const SizedBox(height: 16),
             FilledButton(onPressed: onAction, child: const Text('上传或新建')),
           ],
@@ -1037,8 +1007,9 @@ class _GhostAction extends StatelessWidget {
     return TextButton(
       onPressed: onPressed,
       style: TextButton.styleFrom(
-        foregroundColor:
-            danger ? CupertinoDesktopTokens.danger : CupertinoDesktopTokens.blue,
+        foregroundColor: danger
+            ? CupertinoDesktopTokens.danger
+            : CupertinoDesktopTokens.blue,
         minimumSize: const Size(0, 26),
         padding: const EdgeInsets.symmetric(horizontal: 10),
         textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
@@ -1095,7 +1066,8 @@ class _ListView extends StatelessWidget {
             final item = items[index];
             return ListTile(
               leading: FileTypeIcon(item: item),
-              title: Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+              title:
+                  Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
               subtitle: Text(
                 subtitleBuilder(item),
                 maxLines: 1,
@@ -1142,7 +1114,8 @@ class _ListView extends StatelessWidget {
               onDoubleTap: () => onOpen(item),
               hoverColor: CupertinoDesktopTokens.blue.withValues(alpha: 0.04),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
                 child: Row(
                   children: <Widget>[
                     FileTypeBadge(item: item),
@@ -1193,9 +1166,7 @@ class _ListView extends StatelessWidget {
                                 label: '打开',
                                 onPressed: () => onOpen(item),
                               )
-                            else ...<
-                              Widget
-                            >[
+                            else ...<Widget>[
                               if (canDownload)
                                 _GhostAction(
                                   label: '下载',
@@ -1276,7 +1247,9 @@ class _GridView extends StatelessWidget {
 
         if (!desktop) {
           return Material(
-            color: selected ? scheme.primary.withValues(alpha: 0.08) : scheme.surface,
+            color: selected
+                ? scheme.primary.withValues(alpha: 0.08)
+                : scheme.surface,
             borderRadius: BorderRadius.circular(18),
             child: InkWell(
               borderRadius: BorderRadius.circular(18),
@@ -1302,7 +1275,8 @@ class _GridView extends StatelessWidget {
                           borderRadius: BorderRadius.circular(14),
                           color: scheme.surfaceContainerHighest,
                         ),
-                        child: Center(child: FileTypeIcon(item: item, size: 36)),
+                        child:
+                            Center(child: FileTypeIcon(item: item, size: 36)),
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -1441,6 +1415,7 @@ class _DetailPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final controller = AppScope.of(context);
     return DecoratedBox(
       decoration: const BoxDecoration(
         color: CupertinoDesktopTokens.previewBg,
@@ -1452,7 +1427,7 @@ class _DetailPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           Container(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+            padding: const EdgeInsets.all(16),
             decoration: const BoxDecoration(
               border: Border(
                 bottom: BorderSide(color: CupertinoDesktopTokens.line),
@@ -1467,14 +1442,6 @@ class _DetailPanel extends StatelessWidget {
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
                     color: CupertinoDesktopTokens.ink,
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  '选中文件后展示基础信息',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: CupertinoDesktopTokens.secondary,
                   ),
                 ),
               ],
@@ -1512,7 +1479,7 @@ class _DetailPanel extends StatelessWidget {
                             ? '—'
                             : FileSizeFormatter.format(item!.size ?? 0),
                       ),
-                      _kv('路径', item!.path),
+                      _kv('路径', controller.displayPath(item!.path)),
                       _kv(
                         '更新',
                         item!.updatedAt == null
@@ -1528,7 +1495,9 @@ class _DetailPanel extends StatelessWidget {
                         ].join(' / '),
                       ),
                       const SizedBox(height: 16),
-                      if (canDownload && onDownload != null && !item!.isDirectory)
+                      if (canDownload &&
+                          onDownload != null &&
+                          !item!.isDirectory)
                         Padding(
                           padding: const EdgeInsets.only(bottom: 8),
                           child: SizedBox(
@@ -1547,7 +1516,9 @@ class _DetailPanel extends StatelessWidget {
                             width: double.infinity,
                             height: 36,
                             child: OutlinedButton(
-                              onPressed: item!.isDirectory ? onOpen : (onPreview ?? onOpen),
+                              onPressed: item!.isDirectory
+                                  ? onOpen
+                                  : (onPreview ?? onOpen),
                               child: Text(item!.isDirectory ? '打开' : '预览 / 打开'),
                             ),
                           ),
@@ -1560,8 +1531,8 @@ class _DetailPanel extends StatelessWidget {
                             onPressed: onDelete,
                             style: OutlinedButton.styleFrom(
                               foregroundColor: CupertinoDesktopTokens.danger,
-                              backgroundColor:
-                                  CupertinoDesktopTokens.danger.withValues(alpha: 0.12),
+                              backgroundColor: CupertinoDesktopTokens.danger
+                                  .withValues(alpha: 0.12),
                             ),
                             child: const Text('删除'),
                           ),

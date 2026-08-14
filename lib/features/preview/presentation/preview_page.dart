@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../../shared/state/app_scope.dart';
@@ -39,7 +42,7 @@ class PreviewPage extends StatelessWidget {
           children: <Widget>[
             Text(args.fileName, style: theme.textTheme.titleMedium),
             Text(
-              args.filePath,
+              controller.displayPath(args.filePath),
               style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ],
@@ -50,15 +53,20 @@ class PreviewPage extends StatelessWidget {
               tooltip: '下载',
               onPressed: () async {
                 try {
-                  await controller.mockDownload(
+                  final bytes = await controller.downloadBytes(
                     FileItem(
                       path: args.filePath,
                       name: args.fileName,
                       isDirectory: false,
                     ),
                   );
+                  final path = await FilePicker.platform.saveFile(
+                    fileName: args.fileName,
+                  );
+                  if (path == null) return;
+                  await File(path).writeAsBytes(bytes, flush: true);
                   if (context.mounted) {
-                    AppFeedback.showSnack(context, '已开始下载 ${args.fileName}');
+                    AppFeedback.showSnack(context, '已保存 ${args.fileName}');
                   }
                 } catch (error) {
                   if (context.mounted) {
@@ -82,7 +90,7 @@ class PreviewPage extends StatelessWidget {
               child: _PreviewBody(
                 previewType: previewType,
                 fileName: args.fileName,
-                textContent: controller.mockPreviewText(args.fileName),
+                textContent: '暂不支持在线读取此文件内容，请下载后查看。',
               ),
             ),
           ),

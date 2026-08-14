@@ -15,14 +15,10 @@ class AppConstants {
   static const fcAccessKeySecret = String.fromEnvironment('FC_ACCESS_KEY_SECRET');
   static const fcRegion = String.fromEnvironment('FC_REGION', defaultValue: 'cn-hangzhou');
   static const fcService = String.fromEnvironment('FC_SERVICE', defaultValue: 'fc');
+  /// FC HTTP 触发器要求签名请求；如本地调试入口明确关闭鉴权，可显式传入 false。
   static const fcSignRequests = bool.fromEnvironment('FC_SIGN_REQUESTS', defaultValue: true);
 
   /// Refresh STS this many minutes before expiration.
   static const stsRefreshSkew = Duration(minutes: 8);
 
-  /// When true, login falls back to local demo session if FC is unavailable.
-  static const allowLocalMockFallback = bool.fromEnvironment(
-    'ALLOW_LOCAL_MOCK_FALLBACK',
-    defaultValue: false,
-  );
 }

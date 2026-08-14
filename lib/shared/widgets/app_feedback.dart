@@ -46,6 +46,9 @@ class AppFeedback {
         );
       },
     );
+    // showDialog 返回时退出动画可能仍在重建 TextField，延后释放避免
+    // TextEditingController 在 widget 尚未卸载时被再次访问。
+    await Future<void>.delayed(const Duration(milliseconds: 300));
     controller.dispose();
     if (result == null || result.isEmpty) {
       return null;

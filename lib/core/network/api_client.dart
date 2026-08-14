@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:flutter/foundation.dart';
 
 import '../constants/app_constants.dart';
 import '../errors/app_error.dart';
@@ -73,6 +74,7 @@ class ApiClient {
     required Map<String, dynamic> body,
   }) async {
     final uri = Uri.parse('$_baseUrl$path');
+    if (kDebugMode) debugPrint('[FC] POST $uri');
     http.Response response;
     try {
       final encodedBody = jsonEncode(body);
@@ -115,6 +117,7 @@ class ApiClient {
     }
 
     final code = (payload['code'] ?? '').toString();
+    if (kDebugMode) debugPrint('[FC] response ${response.statusCode} code=$code');
     if (response.statusCode >= 200 && response.statusCode < 300 && code == 'OK') {
       return payload;
     }

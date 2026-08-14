@@ -6,8 +6,9 @@ import 'package:private_domain_drive_client/shared/state/app_controller.dart';
 import 'package:private_domain_drive_client/shared/state/app_scope.dart';
 
 void main() {
-  testWidgets('login page renders demo fields', (tester) async {
-    final controller = AppController(sessionRepository: MemorySessionRepository());
+  testWidgets('登录页展示账号与口令输入项', (tester) async {
+    final controller =
+        AppController(sessionRepository: MemorySessionRepository());
 
     await tester.pumpWidget(
       AppScope(
@@ -20,6 +21,6 @@ void main() {
 
     expect(find.text('成员账号'), findsOneWidget);
     expect(find.text('访问口令'), findsOneWidget);
-    expect(find.textContaining('演示账号'), findsOneWidget);
+    expect(find.text('请使用服务端已配置的账号和访问口令'), findsOneWidget);
   });
 }

@@ -82,7 +82,5 @@ class AliyunRequestSigner {
       .replaceAll('*', '%2A')
       .replaceAll('%7E', '~');
 
-  String _date(DateTime v) =>
-      '${v.year.toString().padLeft(4, '0')}${v.month.toString().padLeft(2, '0')}${v.day.toString().padLeft(2, '0')}';
-  String _timestamp(DateTime v) => v.toIso8601String().split('.').first + 'Z';
+  String _timestamp(DateTime v) => '${v.toIso8601String().split('.').first}Z';
 }

@@ -20,6 +20,11 @@ class TransferTask {
     required this.progress,
     this.message,
     this.target,
+    this.sourcePath,
+    this.batchId,
+    this.transferredBytes = 0,
+    this.totalBytes,
+    this.error,
   });
 
   final String id;
@@ -29,6 +34,11 @@ class TransferTask {
   final double progress;
   final String? message;
   final String? target;
+  final String? sourcePath;
+  final String? batchId;
+  final int transferredBytes;
+  final int? totalBytes;
+  final String? error;
 
   TransferTask copyWith({
     String? id,
@@ -38,6 +48,11 @@ class TransferTask {
     double? progress,
     String? message,
     String? target,
+    String? sourcePath,
+    String? batchId,
+    int? transferredBytes,
+    int? totalBytes,
+    String? error,
   }) {
     return TransferTask(
       id: id ?? this.id,
@@ -47,6 +62,11 @@ class TransferTask {
       progress: progress ?? this.progress,
       message: message ?? this.message,
       target: target ?? this.target,
+      sourcePath: sourcePath ?? this.sourcePath,
+      batchId: batchId ?? this.batchId,
+      transferredBytes: transferredBytes ?? this.transferredBytes,
+      totalBytes: totalBytes ?? this.totalBytes,
+      error: error ?? this.error,
     );
   }
 }

@@ -139,7 +139,7 @@ class _LoginPageState extends State<LoginPage> {
                               const LinearProgressIndicator(minHeight: 8),
                               const SizedBox(height: 8),
                               Text(
-                                '优先连接服务端；失败时使用本地演示会话',
+                                '登录请求将直接发送到已部署的服务端',
                                 style: theme.textTheme.bodySmall?.copyWith(
                                   color: scheme.onSurfaceVariant,
                                 ),
@@ -182,7 +182,7 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        '演示账号：admin / 123456，member / 123456（权限相同）',
+                        '请使用服务端已配置的账号和访问口令',
                         style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
                         textAlign: TextAlign.center,
                       ),
