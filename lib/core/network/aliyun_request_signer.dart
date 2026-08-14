@@ -9,14 +9,12 @@ class AliyunRequestSigner {
     required this.accessKeySecret,
     required this.region,
     required this.service,
-    this.securityToken = '',
   });
 
   final String accessKeyId;
   final String accessKeySecret;
   final String region;
   final String service;
-  final String securityToken;
 
   bool get enabled => accessKeyId.isNotEmpty && accessKeySecret.isNotEmpty;
 
@@ -32,9 +30,6 @@ class AliyunRequestSigner {
     final headers = <String, String>{
       'x-acs-date': date,
     };
-    if (securityToken.isNotEmpty) {
-      headers['x-fc-security-token'] = securityToken;
-    }
 
     final canonicalHeaders = headers.keys.toList()..sort();
     final canonicalizedFcHeaders = canonicalHeaders
@@ -51,7 +46,6 @@ class AliyunRequestSigner {
     final stringToSign = 'ACS3-HMAC-SHA256\n${_sha(canonicalRequest)}';
     final signature = _hex(_mac(utf8.encode(accessKeySecret), stringToSign));
     return <String, String>{
-      if (securityToken.isNotEmpty) 'x-fc-security-token': securityToken,
       'x-acs-date': date,
       'Authorization': 'ACS3-HMAC-SHA256 Credential=$accessKeyId,SignedHeaders=${canonicalHeaders.join(';')},Signature=$signature',
     };

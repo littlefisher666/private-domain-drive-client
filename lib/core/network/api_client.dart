@@ -18,7 +18,6 @@ class ApiClient {
           accessKeySecret: AppConstants.fcAccessKeySecret,
           region: AppConstants.fcRegion,
           service: AppConstants.fcService,
-          securityToken: AppConstants.fcSecurityToken,
         );
 
   final http.Client _http;
