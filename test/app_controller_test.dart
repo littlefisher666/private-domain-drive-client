@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:private_domain_drive_client/features/auth/domain/user_session.dart';
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
@@ -160,6 +163,190 @@ void main() {
       expect(controller.tasks.single.status, TransferTaskStatus.canceled);
       expect(controller.tasks.single.message, '已取消');
     });
+
+    test('多选状态支持范围选择、全选与取消', () async {
+      final controller = await _controller();
+      const items = <FileItem>[
+        FileItem(path: 'shared/a.txt', name: 'a.txt', isDirectory: false),
+        FileItem(path: 'shared/b.txt', name: 'b.txt', isDirectory: false),
+        FileItem(path: 'shared/c.txt', name: 'c.txt', isDirectory: false),
+      ];
+
+      controller.enterMultiSelection(items.first);
+      controller.toggleMultiSelection(items.last,
+          visibleItems: items, range: true);
+      expect(controller.multiSelectedPaths, <String>{
+        'shared/a.txt',
+        'shared/b.txt',
+        'shared/c.txt',
+      });
+
+      controller.clearMultiSelection();
+      expect(controller.isMultiSelectionMode, isFalse);
+      expect(controller.multiSelectedPaths, isEmpty);
+    });
+
+    test('批次汇总统计独立下载任务', () async {
+      final controller = await _controller();
+      controller.tasksListenable.value = const <TransferTask>[
+        TransferTask(
+          id: 'a',
+          name: 'a.txt',
+          type: TransferTaskType.download,
+          status: TransferTaskStatus.success,
+          progress: 1,
+          batchId: 'batch-1',
+        ),
+        TransferTask(
+          id: 'b',
+          name: 'b.txt',
+          type: TransferTaskType.download,
+          status: TransferTaskStatus.pending,
+          progress: 0,
+          batchId: 'batch-1',
+        ),
+      ];
+
+      final summary = controller.transferBatches.single;
+      expect(summary.total, 2);
+      expect(summary.success, 1);
+      expect(summary.pending, 1);
+    });
+
+    test('下载队列遵守动态并发上限', () async {
+      final gate = Completer<void>();
+      final oss = _FakeOssClient()..downloadGate = gate;
+      final controller = await _controller(oss: oss);
+      await controller.setTransferConcurrency(1);
+      final directory = await Directory.systemTemp.createTemp('pdd-transfer-');
+      addTearDown(() => directory.delete(recursive: true));
+      const files = <FileItem>[
+        FileItem(path: 'shared/a.txt', name: 'a.txt', isDirectory: false),
+        FileItem(path: 'shared/b.txt', name: 'b.txt', isDirectory: false),
+      ];
+
+      controller.enqueueDownloads(files, targetDirectory: directory.path);
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.runningTransferCount, 1);
+      expect(controller.pendingTransferCount, 1);
+
+      await controller.setTransferConcurrency(2);
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.runningTransferCount, 2);
+      expect(controller.pendingTransferCount, 0);
+
+      gate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(controller.tasks.where((task) => task.status == TransferTaskStatus.success),
+          hasLength(2));
+    });
+
+    test('递归下载保留目录结构并去重重叠选择', () async {
+      final oss = _FakeOssClient()
+        ..objectKeysByPath['shared/资料/'] = <String>[
+          'shared/资料/',
+          'shared/资料/a.txt',
+          'shared/资料/子目录/b.txt',
+        ];
+      final controller = await _controller(oss: oss);
+      final directory = await Directory.systemTemp.createTemp('pdd-recursive-');
+      addTearDown(() => directory.delete(recursive: true));
+
+      final result = await controller.enqueueDownloadsRecursively(
+        const <FileItem>[
+          FileItem(path: 'shared/资料/', name: '资料', isDirectory: true),
+          FileItem(path: 'shared/资料/a.txt', name: 'a.txt', isDirectory: false),
+        ],
+        targetDirectory: directory.path,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(result.fileCount, 2);
+      expect(result.directoryCount, 1);
+      expect(controller.tasks.where((task) => task.batchId == result.batchId), hasLength(2));
+      expect(await File('${directory.path}/资料/a.txt').exists(), isTrue);
+      expect(await File('${directory.path}/资料/子目录/b.txt').exists(), isTrue);
+    });
+    test('同名下载目标自动递增改名并保留扩展名', () async {
+      final controller = await _controller();
+      final directory = await Directory.systemTemp.createTemp('pdd-rename-');
+      addTearDown(() => directory.delete(recursive: true));
+      // 占用原名与第一次递增名，应继续递增到 (2)。
+      await File('${directory.path}/a.txt').writeAsBytes(<int>[0]);
+      await File('${directory.path}/a (1).txt').writeAsBytes(<int>[0]);
+
+      controller.enqueueDownload(
+        const FileItem(path: 'shared/a.txt', name: 'a.txt', isDirectory: false),
+        targetDirectory: directory.path,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      final task = controller.tasks.single;
+      expect(task.status, TransferTaskStatus.success);
+      expect(task.target, '${directory.path}/a (2).txt');
+      expect(await File('${directory.path}/a (2).txt').exists(), isTrue);
+      // 原有文件不被覆盖。
+      expect(await File('${directory.path}/a.txt').readAsBytes(), <int>[0]);
+    });
+
+    test('无扩展名同名下载目标自动改名', () async {
+      final controller = await _controller();
+      final directory =
+          await Directory.systemTemp.createTemp('pdd-rename-noext-');
+      addTearDown(() => directory.delete(recursive: true));
+      await File('${directory.path}/README').writeAsBytes(<int>[0]);
+
+      controller.enqueueDownload(
+        const FileItem(
+            path: 'shared/README', name: 'README', isDirectory: false),
+        targetDirectory: directory.path,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(controller.tasks.single.status, TransferTaskStatus.success);
+      expect(controller.tasks.single.target, '${directory.path}/README (1)');
+    });
+
+    test('下载失败时清理 part 临时文件并标记失败', () async {
+      final oss = _FakeOssClient()
+        ..downloadToFileError = const SocketException('网络中断');
+      final controller = await _controller(oss: oss);
+      final directory = await Directory.systemTemp.createTemp('pdd-part-fail-');
+      addTearDown(() => directory.delete(recursive: true));
+
+      controller.enqueueDownload(
+        const FileItem(path: 'shared/a.txt', name: 'a.txt', isDirectory: false),
+        targetDirectory: directory.path,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      final task = controller.tasks.single;
+      expect(task.status, TransferTaskStatus.failed);
+      expect(await directory.list().toList(), isEmpty);
+    });
+
+    test('下载取消时清理 part 临时文件', () async {
+      final gate = Completer<void>();
+      final oss = _FakeOssClient()..downloadGate = gate;
+      final controller = await _controller(oss: oss);
+      final directory =
+          await Directory.systemTemp.createTemp('pdd-part-cancel-');
+      addTearDown(() => directory.delete(recursive: true));
+
+      controller.enqueueDownload(
+        const FileItem(path: 'shared/a.txt', name: 'a.txt', isDirectory: false),
+        targetDirectory: directory.path,
+      );
+      // 等待任务开始运行并已在临时文件上写入数据。
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      controller.cancelTask(controller.tasks.single.id);
+      gate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      final task = controller.tasks.single;
+      expect(task.status, TransferTaskStatus.canceled);
+      expect(await directory.list().toList(), isEmpty);
+    });
   });
 }
 
@@ -217,16 +404,23 @@ class _FakeSessionRepository implements SessionRepository {
 
 class _FakeOssClient extends OssClient {
   final Map<String, List<FileItem>> itemsByPath = <String, List<FileItem>>{};
+  final Map<String, List<String>> objectKeysByPath = <String, List<String>>{};
   final List<String> createdFolders = <String>[];
   final List<String> deleted = <String>[];
   final List<(String, String)> copies = <(String, String)>[];
   final List<({String path, List<int> bytes})> uploads =
       <({String path, List<int> bytes})>[];
   List<int> downloadResult = const <int>[];
+  Completer<void>? downloadGate;
+  Object? downloadToFileError;
 
   @override
   Future<List<FileItem>> list(String path, UserSession session) async =>
       itemsByPath[path] ?? const <FileItem>[];
+
+  @override
+  Future<List<String>> listAllObjectKeys(String path, UserSession session) async =>
+      objectKeysByPath[path] ?? const <String>[];
 
   @override
   Future<void> createFolder(String path, UserSession session) async {
@@ -251,4 +445,23 @@ class _FakeOssClient extends OssClient {
   @override
   Future<List<int>> download(String path, UserSession session) async =>
       downloadResult;
+
+  @override
+  Future<void> downloadToFile(
+    String path,
+    UserSession session,
+    File target, {
+    required void Function(int receivedBytes, int? totalBytes) onProgress,
+    required bool Function() isCanceled,
+  }) async {
+    // 先落盘再等待闸门，模拟流式写入中途被取消/失败的场景。
+    await target.parent.create(recursive: true);
+    await target.writeAsBytes(<int>[1], flush: true);
+    final gate = downloadGate;
+    if (gate != null) await gate.future;
+    if (isCanceled()) throw const TransferCanceledException();
+    onProgress(1, 1);
+    final error = downloadToFileError;
+    if (error != null) throw error;
+  }
 }

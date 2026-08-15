@@ -79,6 +79,79 @@ class OssClient {
     _check(response);
   }
 
+  /// 列出指定前缀下的全部对象键，供目录递归删除使用。
+  Future<List<String>> listAllObjectKeys(
+    String path,
+    UserSession session,
+  ) async {
+    final config = _config(session);
+    final prefix = _dir(path);
+    final keys = <String>[];
+    String? marker;
+    do {
+      final query = <String, String>{
+        'prefix': prefix,
+        'max-keys': '1000',
+        if (marker != null) 'marker': marker,
+      };
+      final response = await _request(
+        method: 'GET',
+        config: config,
+        credentials: session.credentials!,
+        query: query,
+      );
+      _check(response);
+      final xml = utf8.decode(response.bodyBytes, allowMalformed: true);
+      keys.addAll(_tags(xml, 'Contents')
+          .map((value) => _xmlValue(value, 'Key'))
+          .where((key) => key.isNotEmpty));
+      final truncated = _xmlValue(xml, 'IsTruncated').toLowerCase() == 'true';
+      marker = truncated ? _xmlValue(xml, 'NextMarker') : null;
+      if (truncated && (marker == null || marker.isEmpty)) {
+        marker = keys.isEmpty ? null : keys.last;
+      }
+    } while (marker != null && marker.isNotEmpty);
+    return keys;
+  }
+
+  Future<BatchDeleteResult> deleteMany(
+    Iterable<String> paths,
+    UserSession session,
+  ) async {
+    final requested = paths.toSet();
+    if (requested.isEmpty) return const BatchDeleteResult();
+    final config = _config(session);
+    final body = utf8.encode(
+      '<Delete>'
+      '${requested.map((path) => '<Object><Key>${_escapeXml(path)}</Key></Object>').join()}'
+      '<Quiet>false</Quiet>'
+      '</Delete>',
+    );
+    final response = await _request(
+      method: 'POST',
+      config: config,
+      credentials: session.credentials!,
+      rawQuery: 'delete',
+      body: body,
+    );
+    _check(response);
+    final xml = utf8.decode(response.bodyBytes, allowMalformed: true);
+    final deleted = _tags(xml, 'Deleted')
+        .map((value) => _xmlValue(value, 'Key'))
+        .where((key) => key.isNotEmpty)
+        .toSet();
+    final failed = _tags(xml, 'Error')
+        .map((value) => _xmlValue(value, 'Key'))
+        .where((key) => key.isNotEmpty)
+        .toSet();
+    // 部分 OSS 配置在成功时可能省略 Deleted 明细；此时没有错误即视为全部成功。
+    final success = deleted.isEmpty && failed.isEmpty ? requested : deleted;
+    return BatchDeleteResult(
+      deletedPaths: success.toList(growable: false),
+      failedPaths: failed.toList(growable: false),
+    );
+  }
+
   Future<void> upload(String path, List<int> bytes, UserSession session) async {
     if (bytes.length >= session.constraints.multipartUploadThresholdBytes) {
       await _multipartUpload(path, bytes, session);
@@ -187,6 +260,48 @@ class OssClient {
     return response.bodyBytes;
   }
 
+  /// 将 OSS 对象直接写入临时文件，避免批量下载时把完整文件保留在内存中。
+  Future<void> downloadToFile(
+    String path,
+    UserSession session,
+    File target, {
+    required void Function(int receivedBytes, int? totalBytes) onProgress,
+    required bool Function() isCanceled,
+  }) async {
+    final config = _config(session);
+    final request = _streamRequest(
+      method: 'GET',
+      config: config,
+      credentials: session.credentials!,
+      objectKey: path,
+    );
+    final response = await _http.send(request);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      _check(await http.Response.fromStream(response));
+      return;
+    }
+
+    await target.parent.create(recursive: true);
+    final sink = target.openWrite();
+    var received = 0;
+    final total = response.contentLength;
+    try {
+      await for (final chunk in response.stream) {
+        if (isCanceled()) {
+          throw const TransferCanceledException();
+        }
+        sink.add(chunk);
+        received += chunk.length;
+        onProgress(received, total);
+      }
+      if (isCanceled()) {
+        throw const TransferCanceledException();
+      }
+    } finally {
+      await sink.close();
+    }
+  }
+
   Future<void> copy(String from, String to, UserSession session) async {
     final config = _config(session);
     // OSS 要求 x-oss-copy-source 的对象路径进行 URL 编码；逐段编码可保留
@@ -282,6 +397,29 @@ class OssClient {
     };
   }
 
+  http.Request _streamRequest({
+    required String method,
+    required OssConfig config,
+    required StsCredentials credentials,
+    required String objectKey,
+  }) {
+    final uri = _uri(config, objectKey: objectKey);
+    final date = HttpDate.format(DateTime.now().toUtc());
+    final canonicalHeaders =
+        'x-oss-security-token:${credentials.securityToken}';
+    final stringToSign = '$method\n\n\n$date\n$canonicalHeaders\n'
+        '/${config.bucket}/$objectKey';
+    final digest = Hmac(sha1, utf8.encode(credentials.accessKeySecret))
+        .convert(utf8.encode(stringToSign));
+    return http.Request(method, uri)
+      ..headers.addAll(<String, String>{
+        'Date': date,
+        'x-oss-security-token': credentials.securityToken,
+        'Authorization':
+            'OSS ${credentials.accessKeyId}:${base64Encode(digest.bytes)}',
+      });
+  }
+
   OssConfig _config(UserSession session) =>
       session.ossConfig ??
       (throw AppError('会话缺少 OSS 配置', code: 'OSS_CONFIG_MISSING'));
@@ -325,6 +463,13 @@ class OssClient {
           .replaceAll('&lt;', '<')
           .replaceAll('&gt;', '>') ??
       '';
+
+  String _escapeXml(String value) => value
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&apos;');
 }
 
 class _MultipartPart {
@@ -332,4 +477,18 @@ class _MultipartPart {
 
   final int number;
   final String eTag;
+}
+
+class TransferCanceledException implements Exception {
+  const TransferCanceledException();
+}
+
+class BatchDeleteResult {
+  const BatchDeleteResult({
+    this.deletedPaths = const <String>[],
+    this.failedPaths = const <String>[],
+  });
+
+  final List<String> deletedPaths;
+  final List<String> failedPaths;
 }
