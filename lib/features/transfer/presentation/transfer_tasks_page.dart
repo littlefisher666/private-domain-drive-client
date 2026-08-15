@@ -6,6 +6,105 @@ import '../../../shared/state/app_scope.dart';
 import '../../../shared/widgets/app_feedback.dart';
 import '../domain/transfer_task.dart';
 
+class _TransferHeaderActions extends StatelessWidget {
+  const _TransferHeaderActions({required this.controller, required this.tasks});
+
+  final AppController controller;
+  final List<TransferTask> tasks;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 6,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: <Widget>[
+        Text(
+          '${controller.runningTransferCount}/${controller.transferConcurrency} 进行中 · ${controller.pendingTransferCount} 等待',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        IconButton(
+          tooltip: '传输并发数',
+          onPressed: () => _showConcurrencyPicker(context, controller),
+          icon: const Icon(Icons.tune),
+        ),
+        OutlinedButton(
+          onPressed: tasks.isEmpty
+              ? null
+              : () {
+                  controller.clearCompletedTasks();
+                  AppFeedback.showSnack(context, '已清除已完成任务');
+                },
+          child: const Text('清除已完成'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _showConcurrencyPicker(
+    BuildContext context,
+    AppController controller,
+  ) async {
+    final value = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('总传输并发数'),
+        children: <Widget>[
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24),
+            child: Text('上传和下载共用此上限，默认值为 3。'),
+          ),
+          const SizedBox(height: 8),
+          for (var value = 1; value <= 5; value++)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(dialogContext).pop(value),
+              child: Row(
+                children: <Widget>[
+                  Expanded(child: Text('$value 个并发')),
+                  if (value == controller.transferConcurrency)
+                    const Icon(Icons.check, size: 18),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (value == null) return;
+    await controller.setTransferConcurrency(value);
+    if (context.mounted) {
+      AppFeedback.showSnack(context, '并发数已设为 $value');
+    }
+  }
+}
+
+class _BatchSummaryStrip extends StatelessWidget {
+  const _BatchSummaryStrip({required this.controller});
+
+  final AppController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xFFF7F9FC),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 6,
+        children: controller.transferBatches.map((batch) {
+          return Chip(
+            label: Text(
+              '批量下载：${batch.success}/${batch.total} 完成 · ${batch.running} 进行中 · ${batch.pending} 等待${batch.failed == 0 ? '' : ' · ${batch.failed} 失败'}',
+            ),
+            deleteIcon: const Icon(Icons.cancel_outlined, size: 18),
+            onDeleted: batch.pending + batch.running == 0
+                ? null
+                : () => controller.cancelBatch(batch.id),
+          );
+        }).toList(growable: false),
+      ),
+    );
+  }
+}
+
 class TransferTasksPage extends StatelessWidget {
   const TransferTasksPage({
     super.key,
@@ -59,17 +158,20 @@ class TransferTasksPage extends StatelessWidget {
     final desktop =
         desktopChrome || MediaQuery.sizeOf(context).width >= 960;
 
-    return ValueListenableBuilder<List<TransferTask>>(
-      valueListenable: controller.tasksListenable,
-      builder: (context, tasks, _) {
-        return _buildBody(
-          context: context,
-          controller: controller,
-          tasks: tasks,
-          theme: theme,
-          desktop: desktop,
-        );
-      },
+    return ValueListenableBuilder<int>(
+      valueListenable: controller.transferConcurrencyListenable,
+      builder: (context, _, __) => ValueListenableBuilder<List<TransferTask>>(
+        valueListenable: controller.tasksListenable,
+        builder: (context, tasks, _) {
+          return _buildBody(
+            context: context,
+            controller: controller,
+            tasks: tasks,
+            theme: theme,
+            desktop: desktop,
+          );
+        },
+      ),
     );
   }
 
@@ -126,18 +228,12 @@ class TransferTasksPage extends StatelessWidget {
                       ],
                     ),
                   ),
-                  OutlinedButton(
-                    onPressed: tasks.isEmpty
-                        ? null
-                        : () {
-                            controller.clearCompletedTasks();
-                            AppFeedback.showSnack(context, '已清除已完成任务');
-                          },
-                    child: const Text('清除已完成'),
-                  ),
+                  _TransferHeaderActions(controller: controller, tasks: tasks),
                 ],
               ),
             ),
+            if (controller.transferBatches.isNotEmpty)
+              _BatchSummaryStrip(controller: controller),
             Expanded(
               child: tasks.isEmpty
                   ? const Center(
@@ -154,6 +250,7 @@ class TransferTasksPage extends StatelessWidget {
                         final task = tasks[index];
                         final progressLabel = '${(task.progress * 100).round()}%';
                         final colors = _progressColors(task.status);
+                        final completed = task.status == TransferTaskStatus.success;
                         return Container(
                           padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
                           decoration: BoxDecoration(
@@ -205,12 +302,21 @@ class TransferTasksPage extends StatelessWidget {
                                   height: 8,
                                   child: Stack(
                                     children: <Widget>[
-                                      Container(color: const Color(0x29767680)),
+                                      Container(
+                                        color: completed
+                                            ? const Color(0x2634C759)
+                                            : const Color(0x29767680),
+                                      ),
                                       FractionallySizedBox(
                                         widthFactor: task.progress.clamp(0.0, 1.0),
                                         child: DecoratedBox(
                                           decoration: BoxDecoration(
-                                            gradient: LinearGradient(colors: colors),
+                                            color: completed
+                                                ? const Color(0xFF34C759)
+                                                : null,
+                                            gradient: completed
+                                                ? null
+                                                : LinearGradient(colors: colors),
                                           ),
                                         ),
                                       ),
@@ -290,7 +396,7 @@ class TransferTasksPage extends StatelessWidget {
       body: SafeArea(
         child: ListView.separated(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-          itemCount: tasks.length + 1,
+          itemCount: tasks.length + 2,
           separatorBuilder: (_, __) => const SizedBox(height: 12),
           itemBuilder: (context, index) {
             if (index == 0) {
@@ -316,20 +422,18 @@ class TransferTasksPage extends StatelessWidget {
                       ],
                     ),
                   ),
-                  OutlinedButton(
-                    onPressed: tasks.isEmpty
-                        ? null
-                        : () {
-                            controller.clearCompletedTasks();
-                            AppFeedback.showSnack(context, '已清除已完成任务');
-                          },
-                    child: const Text('清除已完成'),
-                  ),
+                  _TransferHeaderActions(controller: controller, tasks: tasks),
                 ],
               );
             }
 
-            final task = tasks[index - 1];
+            if (index == 1) {
+              return controller.transferBatches.isEmpty
+                  ? const SizedBox.shrink()
+                  : _BatchSummaryStrip(controller: controller);
+            }
+
+            final task = tasks[index - 2];
             final progressLabel = '${(task.progress * 100).round()}%';
             return Card(
               child: Padding(
@@ -385,6 +489,12 @@ class TransferTasksPage extends StatelessWidget {
                       value: task.progress.clamp(0.0, 1.0),
                       minHeight: 8,
                       borderRadius: BorderRadius.circular(999),
+                      color: task.status == TransferTaskStatus.success
+                          ? CupertinoDesktopTokens.success
+                          : null,
+                      backgroundColor: task.status == TransferTaskStatus.success
+                          ? CupertinoDesktopTokens.success.withValues(alpha: 0.16)
+                          : null,
                     ),
                     const SizedBox(height: 8),
                     Text('$progressLabel${task.message == null ? '' : ' · ${task.message}'}'),

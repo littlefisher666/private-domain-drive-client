@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../app/router/route_names.dart';
 import '../../../app/theme/cupertino_desktop.dart';
@@ -170,45 +171,97 @@ class _WorkspacePageState extends State<WorkspacePage> {
           );
         }
 
-        return ValueListenableBuilder<FileItem?>(
-          valueListenable: controller.selectedItemListenable,
-          builder: (context, selected, _) {
-            final selectedPath = selected?.path;
-            if (controller.browseMode == BrowseMode.grid) {
-              return _GridView(
-                items: items,
-                selectedPath: selectedPath,
-                desktop: desktop,
-                subtitleBuilder: _subtitle,
-                onOpen: _handleOpen,
-                onMore: desktop ? (_) {} : _showItemActions,
-                onSelect: _handleSelect,
-                canUpload: canUpload,
-                canDelete: controller.capabilities.delete,
-                canDownload: controller.capabilities.download,
-                onDownload: _download,
-                onRename: _rename,
-                onDelete: _delete,
-              );
+        return Focus(
+          autofocus: desktop,
+          onKeyEvent: (_, event) {
+            if (desktop &&
+                event is KeyDownEvent &&
+                HardwareKeyboard.instance.isMetaPressed &&
+                event.logicalKey == LogicalKeyboardKey.keyA) {
+              controller.selectAllItems(items);
+              return KeyEventResult.handled;
             }
-            return _ListView(
-              items: items,
-              desktop: desktop,
-              selectedPath: selectedPath,
-              subtitleBuilder: _subtitle,
-              metaTimeBuilder: _metaTime,
-              canUpload: canUpload,
-              canDelete: controller.capabilities.delete,
-              canDownload: controller.capabilities.download,
-              onOpen: _handleOpen,
-              onMore: desktop ? (_) {} : _showItemActions,
-              onSelect: _handleSelect,
-              onPreview: _openPreview,
-              onDownload: _download,
-              onRename: _rename,
-              onDelete: _delete,
-            );
+            return KeyEventResult.ignored;
           },
+          child: ValueListenableBuilder<Set<String>>(
+            valueListenable: controller.multiSelectedPathsListenable,
+            builder: (context, selectedPaths, _) {
+              final selectedItems = items
+                  .where((item) => selectedPaths.contains(item.path))
+                  .toList(growable: false);
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  _BatchSelectionBar(
+                    selecting: controller.isMultiSelectionMode,
+                    selectedCount: selectedItems.length,
+                    allSelected: selectedItems.length == items.length,
+                    canDownload: controller.capabilities.download,
+                    canDelete: controller.capabilities.delete,
+                    onEnter: controller.enterMultiSelection,
+                    onSelectAll: () => controller.selectAllItems(items),
+                    onCancel: controller.clearMultiSelection,
+                    onDownload: selectedItems.isEmpty
+                        ? null
+                        : () => _downloadSelected(selectedItems),
+                    onDelete: selectedItems.isEmpty
+                        ? null
+                        : () => _deleteSelected(selectedItems),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ValueListenableBuilder<FileItem?>(
+                      valueListenable: controller.selectedItemListenable,
+                      builder: (context, selected, _) {
+                        final selectedPath = selected?.path;
+                        final onSelect = controller.isMultiSelectionMode
+                            ? (FileItem item) => _toggleMultiSelection(item, items)
+                            : _handleSelect;
+                        if (controller.browseMode == BrowseMode.grid) {
+                          return _GridView(
+                            items: items,
+                            selectedPath: selectedPath,
+                            selectedPaths: selectedPaths,
+                            multiSelecting: controller.isMultiSelectionMode,
+                            desktop: desktop,
+                            subtitleBuilder: _subtitle,
+                            onOpen: _handleOpen,
+                            onMore: desktop ? (_) {} : _showItemActions,
+                            onSelect: onSelect,
+                            canUpload: canUpload,
+                            canDelete: controller.capabilities.delete,
+                            canDownload: controller.capabilities.download,
+                            onDownload: _download,
+                            onRename: _rename,
+                            onDelete: _delete,
+                          );
+                        }
+                        return _ListView(
+                          items: items,
+                          desktop: desktop,
+                          selectedPath: selectedPath,
+                          selectedPaths: selectedPaths,
+                          multiSelecting: controller.isMultiSelectionMode,
+                          subtitleBuilder: _subtitle,
+                          metaTimeBuilder: _metaTime,
+                          canUpload: canUpload,
+                          canDelete: controller.capabilities.delete,
+                          canDownload: controller.capabilities.download,
+                          onOpen: _handleOpen,
+                          onMore: desktop ? (_) {} : _showItemActions,
+                          onSelect: onSelect,
+                          onPreview: _openPreview,
+                          onDownload: _download,
+                          onRename: _rename,
+                          onDelete: _delete,
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
         );
       },
     );
@@ -247,6 +300,14 @@ class _WorkspacePageState extends State<WorkspacePage> {
 
   void _handleSelect(FileItem item) {
     AppScope.read(context).selectItem(item);
+  }
+
+  void _toggleMultiSelection(FileItem item, List<FileItem> items) {
+    AppScope.read(context).toggleMultiSelection(
+      item,
+      visibleItems: items,
+      range: HardwareKeyboard.instance.isShiftPressed,
+    );
   }
 
   Future<void> _createFolder() async {
@@ -346,14 +407,13 @@ class _WorkspacePageState extends State<WorkspacePage> {
   Future<void> _download(FileItem item) async {
     final controller = AppScope.of(context);
     try {
-      final bytes = await controller.downloadBytes(item);
-      final path = await FilePicker.platform.saveFile(fileName: item.name);
-      if (path == null) {
+      final directory = await FilePicker.platform.getDirectoryPath();
+      if (directory == null) {
         return;
       }
-      await File(path).writeAsBytes(bytes, flush: true);
+      controller.enqueueDownload(item, targetDirectory: directory);
       if (mounted) {
-        AppFeedback.showSnack(context, '已保存 ${item.name}');
+        AppFeedback.showSnack(context, '已加入下载队列：${item.name}');
       }
     } catch (error) {
       if (mounted) {
@@ -361,6 +421,85 @@ class _WorkspacePageState extends State<WorkspacePage> {
           context,
           error.toString().replaceFirst('Bad state: ', ''),
         );
+      }
+    }
+  }
+
+  Future<void> _downloadSelected(List<FileItem> items) async {
+    final controller = AppScope.of(context);
+    final directory = await FilePicker.platform.getDirectoryPath();
+    if (directory == null) return;
+    if (!mounted) return;
+    try {
+      final directoryCount = items.where((item) => item.isDirectory).length;
+      if (directoryCount > 0) {
+        AppFeedback.showSnack(context, '正在展开 $directoryCount 个文件夹…');
+      }
+      final result = await controller.enqueueDownloadsRecursively(
+        items,
+        targetDirectory: directory,
+      );
+      controller.clearMultiSelection();
+      if (!mounted) return;
+      AppFeedback.showSnack(
+        context,
+        result.fileCount == 0
+            ? '所选文件夹为空，没有可下载文件'
+            : '已加入 ${result.fileCount} 个下载任务${result.directoryCount == 0 ? '' : '，已保留文件夹结构'}',
+      );
+    } catch (error) {
+      if (mounted) {
+        AppFeedback.showSnack(
+          context,
+          error.toString().replaceFirst('Bad state: ', ''),
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteSelected(List<FileItem> items) async {
+    final controller = AppScope.of(context);
+    try {
+      final preview = await controller.prepareBatchDelete(items);
+      if (!mounted) return;
+      final confirmed = await AppFeedback.confirm(
+        context,
+        title: '确认删除 ${preview.selectedCount} 项？',
+        message: '其中包含 ${preview.directoryCount} 个文件夹，共影响 ${preview.objectCount} 个对象。'
+            '一期没有回收站，删除后无法恢复。',
+        confirmLabel: '删除',
+        destructive: true,
+      );
+      if (!confirmed) return;
+      var result = await controller.deleteBatch(preview);
+      if (result.failedPaths.isNotEmpty && mounted) {
+        final retry = await AppFeedback.confirm(
+          context,
+          title: '部分删除失败',
+          message: '已删除 ${result.deletedPaths.length} 项，${result.failedPaths.length} 项失败。是否重试失败项？',
+          confirmLabel: '重试失败项',
+        );
+        if (retry) {
+          final retried = await controller.retryBatchDelete(result.failedPaths);
+          result = BatchDeleteSummary(
+            deletedPaths: <String>[...result.deletedPaths, ...retried.deletedPaths],
+            failedPaths: retried.failedPaths,
+          );
+        }
+      }
+      await _reload();
+      controller.clearMultiSelection();
+      if (mounted) {
+        AppFeedback.showSnack(
+          context,
+          result.failedPaths.isEmpty
+              ? '已删除 ${result.deletedPaths.length} 项'
+              : '已删除 ${result.deletedPaths.length} 项，${result.failedPaths.length} 项失败',
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        AppFeedback.showSnack(context, error.toString().replaceFirst('Bad state: ', ''));
       }
     }
   }
@@ -606,6 +745,112 @@ class _WorkspacePageState extends State<WorkspacePage> {
                   ],
                 ),
               ),
+      ),
+    );
+  }
+}
+
+class _BatchSelectionBar extends StatelessWidget {
+  const _BatchSelectionBar({
+    required this.selecting,
+    required this.selectedCount,
+    required this.allSelected,
+    required this.canDownload,
+    required this.canDelete,
+    required this.onEnter,
+    required this.onSelectAll,
+    required this.onCancel,
+    this.onDownload,
+    this.onDelete,
+  });
+
+  final bool selecting;
+  final int selectedCount;
+  final bool allSelected;
+  final bool canDownload;
+  final bool canDelete;
+  final VoidCallback onEnter;
+  final VoidCallback onSelectAll;
+  final VoidCallback onCancel;
+  final VoidCallback? onDownload;
+  final VoidCallback? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!selecting) {
+      return Align(
+        alignment: Alignment.centerRight,
+        child: FilledButton.tonalIcon(
+          onPressed: onEnter,
+          icon: const Icon(Icons.checklist_outlined),
+          label: const Text('选择'),
+        ),
+      );
+    }
+    final scheme = Theme.of(context).colorScheme;
+    const compactButtonStyle = ButtonStyle(
+      minimumSize: WidgetStatePropertyAll<Size>(Size(0, 32)),
+      padding: WidgetStatePropertyAll<EdgeInsetsGeometry>(
+        EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      ),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      visualDensity: VisualDensity.compact,
+    );
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 6,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: <Widget>[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              '已选 $selectedCount 项',
+              style: TextStyle(
+                color: scheme.onPrimaryContainer,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          TextButton.icon(
+            onPressed: onSelectAll,
+            style: compactButtonStyle,
+            icon: Icon(allSelected ? Icons.select_all : Icons.done_all),
+            label: Text(allSelected ? '重新全选' : '全选'),
+          ),
+          if (canDownload)
+            FilledButton.icon(
+              onPressed: onDownload,
+              style: compactButtonStyle,
+              icon: const Icon(Icons.download_outlined),
+              label: const Text('下载'),
+            ),
+          if (canDelete)
+            TextButton.icon(
+              onPressed: onDelete,
+              style: compactButtonStyle.copyWith(
+                foregroundColor: WidgetStatePropertyAll<Color>(scheme.error),
+              ),
+              icon: const Icon(Icons.delete_outline),
+              label: const Text('删除'),
+            ),
+          TextButton.icon(
+            onPressed: onCancel,
+            style: compactButtonStyle,
+            icon: const Icon(Icons.close),
+            label: const Text('退出选择'),
+          ),
+        ],
       ),
     );
   }
@@ -1024,6 +1269,8 @@ class _ListView extends StatelessWidget {
     required this.items,
     required this.desktop,
     required this.selectedPath,
+    required this.selectedPaths,
+    required this.multiSelecting,
     required this.subtitleBuilder,
     required this.metaTimeBuilder,
     required this.canUpload,
@@ -1041,6 +1288,8 @@ class _ListView extends StatelessWidget {
   final List<FileItem> items;
   final bool desktop;
   final String? selectedPath;
+  final Set<String> selectedPaths;
+  final bool multiSelecting;
   final String Function(FileItem) subtitleBuilder;
   final String Function(FileItem) metaTimeBuilder;
   final bool canUpload;
@@ -1065,7 +1314,12 @@ class _ListView extends StatelessWidget {
           itemBuilder: (context, index) {
             final item = items[index];
             return ListTile(
-              leading: FileTypeIcon(item: item),
+              leading: multiSelecting
+                  ? Checkbox(
+                      value: selectedPaths.contains(item.path),
+                      onChanged: (_) => onSelect(item),
+                    )
+                  : FileTypeIcon(item: item),
               title:
                   Text(item.name, maxLines: 1, overflow: TextOverflow.ellipsis),
               subtitle: Text(
@@ -1075,9 +1329,9 @@ class _ListView extends StatelessWidget {
               ),
               onTap: () {
                 onSelect(item);
-                onOpen(item);
+                if (!multiSelecting) onOpen(item);
               },
-              onLongPress: () => onMore(item),
+              onLongPress: () => onSelect(item),
               trailing: IconButton(
                 tooltip: '更多',
                 onPressed: () => onMore(item),
@@ -1104,20 +1358,29 @@ class _ListView extends StatelessWidget {
         ),
         itemBuilder: (context, index) {
           final item = items[index];
-          final selected = item.path == selectedPath;
+          final selected = multiSelecting
+              ? selectedPaths.contains(item.path)
+              : item.path == selectedPath;
           return Material(
             color: selected
                 ? CupertinoDesktopTokens.blue.withValues(alpha: 0.12)
                 : Colors.transparent,
             child: InkWell(
               onTap: () => onSelect(item),
-              onDoubleTap: () => onOpen(item),
+              onDoubleTap: multiSelecting ? null : () => onOpen(item),
               hoverColor: CupertinoDesktopTokens.blue.withValues(alpha: 0.04),
               child: Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
                 child: Row(
                   children: <Widget>[
+                    if (multiSelecting) ...<Widget>[
+                      Checkbox(
+                        value: selected,
+                        onChanged: (_) => onSelect(item),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
                     FileTypeBadge(item: item),
                     const SizedBox(width: 12),
                     Expanded(
@@ -1161,7 +1424,9 @@ class _ListView extends StatelessWidget {
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
-                            if (item.isDirectory)
+                            if (multiSelecting)
+                              const SizedBox.shrink()
+                            else if (item.isDirectory)
                               _GhostAction(
                                 label: '打开',
                                 onPressed: () => onOpen(item),
@@ -1203,6 +1468,8 @@ class _GridView extends StatelessWidget {
   const _GridView({
     required this.items,
     required this.selectedPath,
+    required this.selectedPaths,
+    required this.multiSelecting,
     required this.desktop,
     required this.subtitleBuilder,
     required this.onOpen,
@@ -1218,6 +1485,8 @@ class _GridView extends StatelessWidget {
 
   final List<FileItem> items;
   final String? selectedPath;
+  final Set<String> selectedPaths;
+  final bool multiSelecting;
   final bool desktop;
   final String Function(FileItem) subtitleBuilder;
   final ValueChanged<FileItem> onOpen;
@@ -1242,7 +1511,9 @@ class _GridView extends StatelessWidget {
       itemCount: items.length,
       itemBuilder: (context, index) {
         final item = items[index];
-        final selected = item.path == selectedPath;
+        final selected = multiSelecting
+            ? selectedPaths.contains(item.path)
+            : item.path == selectedPath;
         final scheme = Theme.of(context).colorScheme;
 
         if (!desktop) {
@@ -1255,9 +1526,9 @@ class _GridView extends StatelessWidget {
               borderRadius: BorderRadius.circular(18),
               onTap: () {
                 onSelect(item);
-                onOpen(item);
+                if (!multiSelecting) onOpen(item);
               },
-              onLongPress: () => onMore(item),
+              onLongPress: () => onSelect(item),
               child: Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -1280,6 +1551,14 @@ class _GridView extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 10),
+                    if (multiSelecting)
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: Checkbox(
+                          value: selected,
+                          onChanged: (_) => onSelect(item),
+                        ),
+                      ),
                     Text(
                       item.name,
                       maxLines: 1,
@@ -1306,7 +1585,7 @@ class _GridView extends StatelessWidget {
           child: InkWell(
             borderRadius: BorderRadius.circular(16),
             onTap: () => onSelect(item),
-            onDoubleTap: () => onOpen(item),
+            onDoubleTap: multiSelecting ? null : () => onOpen(item),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 120),
               padding: const EdgeInsets.all(12),
@@ -1355,7 +1634,15 @@ class _GridView extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 4),
-                  if (item.isDirectory)
+                  if (multiSelecting)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Checkbox(
+                        value: selected,
+                        onChanged: (_) => onSelect(item),
+                      ),
+                    )
+                  else if (item.isDirectory)
                     Align(
                       alignment: Alignment.centerLeft,
                       child: _GhostAction(
