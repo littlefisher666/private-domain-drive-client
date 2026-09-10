@@ -255,6 +255,11 @@ class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         val maxBytes = call.argument<Number>("maxBytes")?.toLong() ?: 0L
         require(maxBytes > 0 && maxBytes <= Int.MAX_VALUE) { "maxBytes is invalid" }
         val request = GetObjectRequest(bucketName, call.requiredString("key"))
+        call.argument<String>("range")?.let { range ->
+            Regex("^bytes=(\\d+)-(\\d+)$").matchEntire(range)?.let { match ->
+                request.setRange(match.groupValues[1].toLong(), match.groupValues[2].toLong())
+            }
+        }
         call.argument<String>("process")?.takeIf { it.isNotBlank() }?.let { request.setxOssProcess(it) }
         oss.asyncGetObject(request, object : OSSCompletedCallback<GetObjectRequest, GetObjectResult> {
             override fun onSuccess(request: GetObjectRequest, response: GetObjectResult) {

@@ -98,6 +98,36 @@ class _WorkspacePageState extends State<WorkspacePage> {
     await future;
   }
 
+  Future<void> _setSortOption(FileSortOption option) async {
+    final controller = AppScope.of(context);
+    await controller.setFileSortOption(option);
+    if (mounted) await _reload();
+  }
+
+  void _showSortSheet() {
+    final current = AppScope.read(context).fileSortOption;
+    showModalBottomSheet<FileSortOption>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const ListTile(title: Text('排序方式')),
+            for (final option in FileSortOption.values)
+              ListTile(
+                title: Text(option.label),
+                trailing: option == current ? const Icon(Icons.check) : null,
+                onTap: () => Navigator.of(sheetContext).pop(option),
+              ),
+          ],
+        ),
+      ),
+    ).then((option) {
+      if (option != null) _setSortOption(option);
+    });
+  }
+
   void _ensureDefaultSelection(List<FileItem> items) {
     if (items.isEmpty) {
       return;
@@ -728,6 +758,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 canDelete: canDelete,
                 canDownload: canDownload,
                 browseMode: controller.browseMode,
+                sortOption: controller.fileSortOption,
                 selectedListenable: controller.selectedItemListenable,
                 listArea: _buildItemsArea(
                   controller: controller,
@@ -739,6 +770,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 onCreateFolder: _createFolder,
                 onUpload: () => _pickUpload(fromAlbum: false),
                 onBrowseModeChanged: controller.setBrowseMode,
+                onSortChanged: _setSortOption,
                 onOpen: _handleOpen,
                 onPreview: _openPreview,
                 onDownload: _download,
@@ -755,9 +787,11 @@ class _WorkspacePageState extends State<WorkspacePage> {
                       canGoUp:
                           controller.currentPath != AppController.rootPrefix,
                       browseMode: controller.browseMode,
+                      sortOption: controller.fileSortOption,
                       onGoUp: _goUp,
                       onRefresh: _reload,
                       onBrowseModeChanged: controller.setBrowseMode,
+                      onChooseSort: _showSortSheet,
                     ),
                     const SizedBox(height: 12),
                     if (!canUpload || !canDelete)
@@ -876,6 +910,7 @@ class _DesktopWorkspaceBody extends StatelessWidget {
     required this.canDelete,
     required this.canDownload,
     required this.browseMode,
+    required this.sortOption,
     required this.selectedListenable,
     required this.listArea,
     required this.onGoUp,
@@ -883,6 +918,7 @@ class _DesktopWorkspaceBody extends StatelessWidget {
     required this.onCreateFolder,
     required this.onUpload,
     required this.onBrowseModeChanged,
+    required this.onSortChanged,
     required this.onOpen,
     required this.onPreview,
     required this.onDownload,
@@ -895,6 +931,7 @@ class _DesktopWorkspaceBody extends StatelessWidget {
   final bool canDelete;
   final bool canDownload;
   final BrowseMode browseMode;
+  final FileSortOption sortOption;
   final ValueNotifier<FileItem?> selectedListenable;
   final Widget listArea;
   final VoidCallback onGoUp;
@@ -902,6 +939,7 @@ class _DesktopWorkspaceBody extends StatelessWidget {
   final VoidCallback onCreateFolder;
   final VoidCallback onUpload;
   final ValueChanged<BrowseMode> onBrowseModeChanged;
+  final ValueChanged<FileSortOption> onSortChanged;
   final ValueChanged<FileItem> onOpen;
   final ValueChanged<FileItem> onPreview;
   final ValueChanged<FileItem> onDownload;
@@ -961,6 +999,37 @@ class _DesktopWorkspaceBody extends StatelessWidget {
                   _CupertinoSegmented(
                     browseMode: browseMode,
                     onChanged: onBrowseModeChanged,
+                  ),
+                  PopupMenuButton<FileSortOption>(
+                    tooltip: '排序',
+                    onSelected: onSortChanged,
+                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                    elevation: 10,
+                    shadowColor: Colors.black26,
+                    offset: const Offset(0, 42),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(
+                        color: Theme.of(context).colorScheme.outlineVariant,
+                      ),
+                    ),
+                    itemBuilder: (context) => FileSortOption.values
+                        .map(
+                          (option) => CheckedPopupMenuItem<FileSortOption>(
+                            value: option,
+                            checked: option == sortOption,
+                            child: Text(option.label),
+                          ),
+                        )
+                        .toList(growable: false),
+                    // 保持与“刷新”等工具栏按钮同一视觉语言；点击由外层菜单处理。
+                    child: IgnorePointer(
+                      child: OutlinedButton.icon(
+                        onPressed: () {},
+                        icon: const Icon(Icons.sort, size: 18),
+                        label: Text('排序：${sortOption.shortLabel}'),
+                      ),
+                    ),
                   ),
                   OutlinedButton(
                     onPressed: onRefresh,
@@ -1117,18 +1186,22 @@ class _MobileHeader extends StatelessWidget {
     required this.roleLabel,
     required this.canGoUp,
     required this.browseMode,
+    required this.sortOption,
     required this.onGoUp,
     required this.onRefresh,
     required this.onBrowseModeChanged,
+    required this.onChooseSort,
   });
 
   final String path;
   final String roleLabel;
   final bool canGoUp;
   final BrowseMode browseMode;
+  final FileSortOption sortOption;
   final VoidCallback onGoUp;
   final VoidCallback onRefresh;
   final ValueChanged<BrowseMode> onBrowseModeChanged;
+  final VoidCallback onChooseSort;
 
   @override
   Widget build(BuildContext context) {
@@ -1158,6 +1231,11 @@ class _MobileHeader extends StatelessWidget {
                   ),
                 ],
               ),
+            ),
+            IconButton(
+              onPressed: onChooseSort,
+              icon: const Icon(Icons.sort),
+              tooltip: '排序：${sortOption.label}',
             ),
             IconButton(
               onPressed: onRefresh,
@@ -1731,6 +1809,13 @@ class _DetailPanel extends StatelessWidget {
                             ? '—'
                             : _formatTime(item!.updatedAt!),
                       ),
+                      if (item!.kind == FileKind.image)
+                        _kv(
+                          '拍摄',
+                          item!.takenAt == null
+                              ? ''
+                              : _formatTime(item!.takenAt!),
+                        ),
                     ],
                   ),
           ),

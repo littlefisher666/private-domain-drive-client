@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -101,6 +102,10 @@ class AppController extends ChangeNotifier {
 
   static const rootPrefix = 'shared/';
   static const _transferConcurrencyKey = 'transfer_concurrency';
+  static const _fileSortOptionKey = 'file_sort_option';
+  static const _fileSortOptionsByDirectoryKey =
+      'file_sort_options_by_directory';
+  static const _takenAtCachePrefix = 'image_taken_at:v5:';
   static const _minTransferConcurrency = 1;
   static const _maxTransferConcurrency = 5;
 
@@ -122,6 +127,9 @@ class AppController extends ChangeNotifier {
   UserSession? _session;
   String _currentPath = rootPrefix;
   BrowseMode _browseMode = BrowseMode.list;
+  FileSortOption _defaultFileSortOption = FileSortOption.updatedNewest;
+  final Map<String, FileSortOption> _fileSortOptionsByDirectory =
+      <String, FileSortOption>{};
   final Set<String> _remoteDirectories = <String>{};
   List<ShareImportItem> _pendingShareItems = const <ShareImportItem>[];
   String _shareTargetPath = 'shared/photos/';
@@ -159,6 +167,7 @@ class AppController extends ChangeNotifier {
   }
 
   BrowseMode get browseMode => _browseMode;
+  FileSortOption get fileSortOption => _fileSortOptionForPath(_currentPath);
   List<TransferTask> get tasks => tasksListenable.value;
   int get transferConcurrency => transferConcurrencyListenable.value;
   int get runningTransferCount => _runningTransferIds.length;
@@ -205,6 +214,7 @@ class AppController extends ChangeNotifier {
           savedConcurrency <= _maxTransferConcurrency) {
         transferConcurrencyListenable.value = savedConcurrency;
       }
+      _restoreSortPreferences(preferences);
     } catch (_) {
       // 偏好读取失败不应阻断会话恢复。
     }
@@ -308,7 +318,11 @@ class AppController extends ChangeNotifier {
         notifyListeners();
       }
     }
-    return items;
+    return _sortDirectoryItems(
+      items,
+      _session!,
+      _fileSortOptionForPath(path ?? _currentPath),
+    );
   }
 
   Future<List<int>> loadThumbnail(FileItem item) async {
@@ -350,6 +364,151 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setFileSortOption(FileSortOption option) async {
+    final key = _directorySortKey(_currentPath);
+    if (_fileSortOptionsByDirectory[key] == option) return;
+    _fileSortOptionsByDirectory[key] = option;
+    notifyListeners();
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(
+        _fileSortOptionsByDirectoryKey,
+        jsonEncode(
+          _fileSortOptionsByDirectory.map(
+            (key, value) => MapEntry<String, int>(key, value.index),
+          ),
+        ),
+      );
+    } catch (_) {
+      // 排序偏好写入失败不影响当前会话内的排序。
+    }
+  }
+
+  Future<List<FileItem>> _sortDirectoryItems(
+    List<FileItem> items,
+    UserSession session,
+    FileSortOption sortOption,
+  ) async {
+    if (!sortOption.needsTakenAt) {
+      return sortFileItems(items, sortOption);
+    }
+
+    SharedPreferences? preferences;
+    try {
+      preferences = await SharedPreferences.getInstance();
+    } catch (_) {
+      // 读取 EXIF 仍可用，只是不跨重启缓存。
+    }
+    // 避免大目录首次按拍摄时间排序时同时发起过多 OSS 请求。
+    const concurrency = 6;
+    final resolved = <FileItem>[];
+    for (var start = 0; start < items.length; start += concurrency) {
+      final end = start + concurrency > items.length
+          ? items.length
+          : start + concurrency;
+      resolved.addAll(await Future.wait(items.sublist(start, end).map(
+            (item) => _loadItemTakenAt(item, session, preferences),
+          )));
+    }
+    return sortFileItems(resolved, sortOption);
+  }
+
+  void _restoreSortPreferences(SharedPreferences preferences) {
+    // 保留旧版本的全局排序作为未单独设置目录时的默认值。
+    final savedSort = preferences.getInt(_fileSortOptionKey);
+    if (savedSort != null &&
+        savedSort >= 0 &&
+        savedSort < FileSortOption.values.length) {
+      _defaultFileSortOption = FileSortOption.values[savedSort];
+    }
+    final raw = preferences.getString(_fileSortOptionsByDirectoryKey);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      for (final entry in decoded.entries) {
+        final index = entry.value is num ? (entry.value as num).toInt() : null;
+        if (entry.key is String &&
+            index != null &&
+            index >= 0 &&
+            index < FileSortOption.values.length) {
+          _fileSortOptionsByDirectory[entry.key as String] =
+              FileSortOption.values[index];
+        }
+      }
+    } catch (_) {
+      // 本地偏好损坏时使用默认排序，不阻断会话恢复。
+    }
+  }
+
+  FileSortOption _fileSortOptionForPath(String path) =>
+      _fileSortOptionsByDirectory[_directorySortKey(path)] ??
+      _defaultFileSortOption;
+
+  String _directorySortKey(String path) {
+    final session = _session;
+    final bucket = session?.ossConfig?.bucket ?? '';
+    final userId = session?.userId ?? '';
+    return '$bucket:$userId:${_normalizeDir(path)}';
+  }
+
+  String _takenAtCacheKey(UserSession session, String path) {
+    final bucket = session.ossConfig?.bucket ?? '';
+    return '$_takenAtCachePrefix$bucket:${session.userId}:$path';
+  }
+
+  Future<FileItem> _loadItemTakenAt(
+    FileItem item,
+    UserSession session, [
+    SharedPreferences? preferences,
+  ]) async {
+    if (item.isDirectory ||
+        item.kind != FileKind.image ||
+        item.takenAt != null) {
+      return item;
+    }
+    SharedPreferences? cache = preferences;
+    if (cache == null) {
+      try {
+        cache = await SharedPreferences.getInstance();
+      } catch (_) {
+        // 无本地缓存时仍尝试读取 EXIF。
+      }
+    }
+    final version = item.objectVersionToken;
+    final cacheKey = _takenAtCacheKey(session, item.path);
+    final cached = cache?.getString(cacheKey);
+    if (cached != null) {
+      final parts = cached.split('\t');
+      if (parts.length == 2 && parts.first == version) {
+        final milliseconds = int.tryParse(parts.last);
+        return milliseconds == null
+            ? item
+            : item.copyWith(
+                takenAt: DateTime.fromMillisecondsSinceEpoch(milliseconds));
+      }
+    }
+
+    DateTime? takenAt;
+    try {
+      takenAt = await _ossClient.readImageTakenAt(item.path, session);
+    } catch (_) {
+      // OSS 图片处理异常时不缓存，后续进入详情或排序时允许重新尝试。
+      return item;
+    }
+    if (cache != null) {
+      try {
+        await cache.setString(
+          cacheKey,
+          '$version\t${takenAt?.millisecondsSinceEpoch ?? ''}',
+        );
+      } catch (_) {
+        // 缓存写入失败不影响本次展示。
+      }
+    }
+    return item.copyWith(takenAt: takenAt);
+  }
+
   void selectItem(FileItem? item) {
     final current = selectedItemListenable.value;
     if (current?.path == item?.path &&
@@ -362,6 +521,22 @@ class AppController extends ChangeNotifier {
       return;
     }
     selectedItemListenable.value = item;
+    if (item != null && item.kind == FileKind.image && item.takenAt == null) {
+      unawaited(_loadSelectedImageTakenAt(item));
+    }
+  }
+
+  Future<void> _loadSelectedImageTakenAt(FileItem item) async {
+    final session = _session;
+    if (session == null || !session.isRemote || session.credentials == null) {
+      return;
+    }
+    final resolved = await _loadItemTakenAt(item, session);
+    final selected = selectedItemListenable.value;
+    if (selected?.path == item.path &&
+        selected?.objectVersionToken == item.objectVersionToken) {
+      selectedItemListenable.value = resolved;
+    }
   }
 
   void enterMultiSelection([FileItem? initial]) {
