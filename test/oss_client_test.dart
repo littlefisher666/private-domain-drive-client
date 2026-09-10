@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -56,6 +57,38 @@ void main() {
     expect(result, <int>[4, 5, 6]);
     expect(native.lastProcess, 'image/resize,m_lfit,w_1200,h_900');
     expect(native.lastMaxBytes, 8 * 1024 * 1024);
+  });
+
+  test('读取 OSS EXIF 中的原始拍摄时间', () async {
+    final native = _FakeNative()
+      ..bytesResult = Uint8List.fromList(
+        utf8.encode(
+          '{"DateTimeOriginal":"2026:09:08 19:25:41"}',
+        ),
+      );
+
+    final takenAt = await OssClient(native: native).readImageTakenAt(
+      'shared/相册/test.jpg',
+      _session(),
+    );
+
+    expect(takenAt, DateTime(2026, 9, 8, 19, 25, 41));
+    expect(native.lastProcess, 'image/exif');
+  });
+
+  test('图片处理未返回 EXIF 时从 JPEG 文件头读取拍摄时间', () async {
+    final native = _FakeNative()
+      ..processedBytesError = PlatformException(code: 'invalidRequest')
+      ..bytesResult = _jpegHeaderWithTakenAt('2026:09:08 19:25:41');
+
+    final takenAt = await OssClient(native: native).readImageTakenAt(
+      'shared/相册/test.jpg',
+      _session(),
+    );
+
+    expect(takenAt, DateTime(2026, 9, 8, 19, 25, 41));
+    expect(native.processes, <String?>['image/exif', 'image/exif', null]);
+    expect(native.maxBytesRequests.last, 2 * 1024);
   });
 
   test('缩略图请求会重新同步原生 OSS 会话', () async {
@@ -145,6 +178,70 @@ void main() {
     expect(native.uploadKey, 'shared/a.bin');
     expect(reports, <(int, int)>[(5, 10), (10, 10)]);
   });
+}
+
+Uint8List _jpegHeaderWithTakenAt(String date) {
+  final dateBytes = ascii.encode('$date\x00');
+  expect(dateBytes, hasLength(20));
+  return Uint8List.fromList(<int>[
+    0xff,
+    0xd8,
+    0xff,
+    0xe1,
+    0x00,
+    0x48,
+    0x45,
+    0x78,
+    0x69,
+    0x66,
+    0x00,
+    0x00,
+    0x4d,
+    0x4d,
+    0x00,
+    0x2a,
+    0x00,
+    0x00,
+    0x00,
+    0x08,
+    0x00,
+    0x01,
+    0x87,
+    0x69,
+    0x00,
+    0x04,
+    0x00,
+    0x00,
+    0x00,
+    0x01,
+    0x00,
+    0x00,
+    0x00,
+    0x1a,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x01,
+    0x90,
+    0x03,
+    0x00,
+    0x02,
+    0x00,
+    0x00,
+    0x00,
+    0x14,
+    0x00,
+    0x00,
+    0x00,
+    0x2c,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    ...dateBytes,
+  ]);
 }
 
 UserSession _session() {
