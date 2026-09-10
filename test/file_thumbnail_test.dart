@@ -167,6 +167,31 @@ void main() {
     expect(find.byType(Image), findsOneWidget);
   });
 
+  testWidgets('同一缩略图重建时不显示占位图', (tester) async {
+    const item = FileItem(
+      path: 'shared/stable-thumbnail.png',
+      name: 'stable-thumbnail.png',
+      isDirectory: false,
+    );
+
+    await tester.pumpWidget(MaterialApp(
+      home: FileTypeThumbnail(item: item, loader: (_) async => pngBytes),
+    ));
+    await tester.pumpAndSettle();
+    final providerBeforeRebuild =
+        tester.widget<Image>(find.byType(Image)).image;
+
+    await tester.pumpWidget(MaterialApp(
+      home: FileTypeThumbnail(item: item, loader: (_) async => pngBytes),
+    ));
+    await tester.pump();
+
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.byIcon(Icons.image_outlined), findsNothing);
+    expect(tester.widget<Image>(find.byType(Image)).image,
+        same(providerBeforeRebuild));
+  });
+
   testWidgets('对象版本变化后重新加载缩略图', (tester) async {
     var calls = 0;
     final original = FileItem(

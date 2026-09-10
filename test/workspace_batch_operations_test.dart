@@ -1,7 +1,9 @@
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:file_picker_platform_interface/file_picker_platform_interface.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -26,33 +28,22 @@ void main() {
     const FileItem(path: 'shared/c.txt', name: 'c.txt', isDirectory: false),
   ];
 
-  testWidgets('桌面表头与条目复选框支持多选、范围选择和清空', (tester) async {
+  testWidgets('桌面普通选择不显示条目复选框，批量选择可清空', (tester) async {
     final controller = await _pumpWorkspace(tester, items);
 
     expect(find.text('已全部加载，共 3 项'), findsOneWidget);
-    expect(find.byType(Checkbox), findsNWidgets(4));
+    expect(find.byType(Checkbox), findsOneWidget);
 
-    // 点击条目复选框直接开始选择。
-    await tester.tap(find.byType(Checkbox).at(2));
+    await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
-    expect(find.text('已选 1 项'), findsOneWidget);
-    expect(controller.multiSelectedPaths, <String>{'shared/b.txt'});
-
-    // Shift + 点击做范围选择。
-    await tester.tap(find.byType(Checkbox).at(1));
-    await tester.pumpAndSettle();
-    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
-    await tester.tap(find.byType(Checkbox).at(3));
-    await tester.pumpAndSettle();
-    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
     expect(controller.multiSelectedPaths, <String>{
       'shared/a.txt',
       'shared/b.txt',
       'shared/c.txt',
     });
     expect(find.text('已选 3 项'), findsOneWidget);
+    expect(find.byType(Checkbox), findsNWidgets(4));
 
-    // 点击已全选表头复选框清空选择。
     await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
     expect(controller.isMultiSelectionMode, isFalse);
@@ -61,6 +52,13 @@ void main() {
 
   testWidgets('桌面支持 Cmd+A 与表头三态全选', (tester) async {
     final controller = await _pumpWorkspace(tester, items);
+
+    tester
+        .widget<Focus>(
+          find.byKey(const ValueKey<String>('workspace-items-focus')),
+        )
+        .focusNode!
+        .requestFocus();
 
     // Cmd+A 触发全选。
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
@@ -75,6 +73,161 @@ void main() {
     await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
     expect(controller.multiSelectedPaths, isEmpty);
+  });
+
+  testWidgets('桌面批量勾选后按 Esc 清空选择', (tester) async {
+    final controller = await _pumpWorkspace(tester, items);
+    tester
+        .widget<Focus>(
+          find.byKey(const ValueKey<String>('workspace-items-focus')),
+        )
+        .focusNode!
+        .requestFocus();
+    controller.selectAllItems(items);
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(controller.isMultiSelectionMode, isFalse);
+    expect(controller.multiSelectedPaths, isEmpty);
+    expect(find.byType(Checkbox), findsOneWidget);
+  });
+
+  testWidgets('桌面仅在主内容区获得焦点后响应上下方向键', (tester) async {
+    final controller = await _pumpWorkspace(tester, items);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(controller.multiSelectedPaths, isEmpty);
+
+    tester
+        .widget<Focus>(
+          find.byKey(const ValueKey<String>('workspace-items-focus')),
+        )
+        .focusNode!
+        .requestFocus();
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(controller.selectedItem?.path, 'shared/b.txt');
+    expect(controller.multiSelectedPaths, isEmpty);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pumpAndSettle();
+    expect(controller.selectedItem?.path, 'shared/b.txt');
+    expect(controller.multiSelectedPaths, isEmpty);
+  });
+
+  testWidgets('桌面主内容区支持 Cmd 加方向键进入和返回目录', (tester) async {
+    const folder = FileItem(
+      path: 'shared/资料/',
+      name: '资料',
+      isDirectory: true,
+    );
+    final oss = _FakeOssClient()
+      ..itemsByPath['shared/'] = const <FileItem>[folder]
+      ..itemsByPath['shared/资料/'] = const <FileItem>[];
+    final controller = await _pumpWorkspace(
+      tester,
+      const <FileItem>[folder],
+      oss: oss,
+    );
+    tester
+        .widget<Focus>(
+          find.byKey(const ValueKey<String>('workspace-items-focus')),
+        )
+        .focusNode!
+        .requestFocus();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pumpAndSettle();
+    expect(controller.currentPath, 'shared/资料/');
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pumpAndSettle();
+    expect(controller.currentPath, AppController.rootPrefix);
+  });
+
+  testWidgets('桌面缩略图模式支持左右方向键切换条目', (tester) async {
+    final controller = await _pumpWorkspace(tester, items);
+    controller.setBrowseMode(BrowseMode.grid);
+    await tester.pumpAndSettle();
+    tester
+        .widget<Focus>(
+          find.byKey(const ValueKey<String>('workspace-items-focus')),
+        )
+        .focusNode!
+        .requestFocus();
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pumpAndSettle();
+    expect(controller.selectedItem?.path, 'shared/b.txt');
+    expect(controller.multiSelectedPaths, isEmpty);
+  });
+
+  testWidgets('桌面列表支持拖拽框选多个条目', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final controller = await _pumpWorkspace(tester, items);
+
+    final start = tester.getCenter(find.text('a.txt').first);
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer(location: start);
+    await gesture.down(start);
+    await gesture.moveBy(const Offset(8, 120));
+    await tester.pump();
+    await gesture.moveBy(const Offset(1, 1));
+    await gesture.up();
+    await gesture.removePointer();
+    await tester.pumpAndSettle();
+
+    expect(controller.multiSelectedPaths,
+        <String>{'shared/a.txt', 'shared/b.txt', 'shared/c.txt'});
+
+    final clearGesture =
+        await tester.createGesture(kind: PointerDeviceKind.mouse);
+    const blankPosition = Offset(420, 520);
+    await clearGesture.addPointer(location: blankPosition);
+    await clearGesture.down(blankPosition);
+    await clearGesture.up();
+    await clearGesture.removePointer();
+    await tester.pumpAndSettle();
+
+    expect(controller.multiSelectedPaths, isEmpty);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('桌面宫格支持拖拽框选多个文件夹', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    const folders = <FileItem>[
+      FileItem(path: 'shared/a/', name: 'a', isDirectory: true),
+      FileItem(path: 'shared/b/', name: 'b', isDirectory: true),
+      FileItem(path: 'shared/c/', name: 'c', isDirectory: true),
+    ];
+    final controller = await _pumpWorkspace(tester, folders);
+    controller.setBrowseMode(BrowseMode.grid);
+    await tester.pumpAndSettle();
+
+    final start = tester.getCenter(find.text('a').first);
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer(location: start);
+    await gesture.down(start);
+    await gesture.moveBy(const Offset(520, 12));
+    await tester.pump();
+    await gesture.moveBy(const Offset(1, 1));
+    await gesture.up();
+    await gesture.removePointer();
+    await tester.pumpAndSettle();
+
+    expect(controller.multiSelectedPaths,
+        <String>{'shared/a/', 'shared/b/', 'shared/c/'});
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('桌面列表普通浏览时双击文件夹可进入目录', (tester) async {

@@ -12,6 +12,16 @@ class FileSizeFormatter {
     }
 
     final mb = kb / 1024;
-    return '${mb.toStringAsFixed(1)} MB';
+    if (mb < 1024) {
+      return '${mb.toStringAsFixed(1)} MB';
+    }
+
+    final gb = mb / 1024;
+    if (gb < 1024) {
+      return '${gb.toStringAsFixed(1)} GB';
+    }
+
+    final tb = gb / 1024;
+    return '${tb.toStringAsFixed(1)} TB';
   }
 }

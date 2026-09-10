@@ -33,6 +33,36 @@ void main() {
     expect(find.text('暂无传输任务'), findsOneWidget);
   });
 
+  testWidgets('可按上传和下载分别查看任务', (tester) async {
+    await pumpTasks(
+      tester,
+      const <TransferTask>[
+        TransferTask(
+          id: 'upload-1',
+          name: '照片.jpg',
+          type: TransferTaskType.upload,
+          status: TransferTaskStatus.success,
+          progress: 1,
+        ),
+        TransferTask(
+          id: 'download-1',
+          name: '资料.pdf',
+          type: TransferTaskType.download,
+          status: TransferTaskStatus.success,
+          progress: 1,
+        ),
+      ],
+    );
+
+    expect(find.text('上传 1'), findsOneWidget);
+    expect(find.text('下载 1'), findsOneWidget);
+    await tester.tap(find.text('上传 1'));
+    await tester.pump();
+
+    expect(find.text('上传 · 照片.jpg'), findsOneWidget);
+    expect(find.text('下载 · 资料.pdf'), findsNothing);
+  });
+
   testWidgets('失败任务可重试，进行中任务可取消', (tester) async {
     final controller = await pumpTasks(
       tester,
@@ -58,6 +88,56 @@ void main() {
     await tester.pump();
     expect(controller.tasks.single.status, TransferTaskStatus.canceled);
     expect(find.text('已取消'), findsWidgets);
+  });
+
+  testWidgets('可全选任务后批量重试和取消', (tester) async {
+    final controller = await pumpTasks(
+      tester,
+      const <TransferTask>[
+        TransferTask(
+          id: 'failed-1',
+          name: '失败文件',
+          type: TransferTaskType.upload,
+          status: TransferTaskStatus.failed,
+          progress: 0,
+        ),
+        TransferTask(
+          id: 'canceled-1',
+          name: '已取消文件',
+          type: TransferTaskType.download,
+          status: TransferTaskStatus.canceled,
+          progress: 0.2,
+        ),
+        TransferTask(
+          id: 'pending-1',
+          name: '等待文件',
+          type: TransferTaskType.download,
+          status: TransferTaskStatus.pending,
+          progress: 0,
+        ),
+      ],
+    );
+
+    await tester.tap(find.text('全选当前列表'));
+    await tester.pump();
+    await tester.tap(find.text('批量重试 (2)'));
+    await tester.pump();
+    expect(
+      controller.tasks
+          .where((task) => task.id != 'pending-1')
+          .every((task) => task.status == TransferTaskStatus.running),
+      isTrue,
+    );
+
+    await tester.tap(find.text('全选当前列表'));
+    await tester.pump();
+    await tester.tap(find.text('批量取消 (3)'));
+    await tester.pump();
+    expect(
+      controller.tasks
+          .every((task) => task.status == TransferTaskStatus.canceled),
+      isTrue,
+    );
   });
 
   testWidgets('进行中的任务展示传输大小和速度', (tester) async {

@@ -36,7 +36,7 @@ class OssClient {
     final page = await _platform(
       () => _native.listObjects(prefix: prefix, delimiter: '/'),
     );
-    return <FileItem>[
+    final folders = <FileItem>[
       for (final key in page.commonPrefixes)
         if (key != prefix)
           FileItem(
@@ -44,6 +44,25 @@ class OssClient {
             name: key.substring(prefix.length).replaceFirst(RegExp(r'/$'), ''),
             isDirectory: true,
           ),
+    ];
+    final folderSummaries = await Future.wait<_DirectorySummary?>(
+      folders.map((folder) async {
+        try {
+          return await _readDirectorySummary(folder.path);
+        } catch (_) {
+          // 文件夹统计失败不应阻断当前目录的浏览，界面会回退显示“文件夹”。
+          return null;
+        }
+      }),
+    );
+    return <FileItem>[
+      for (var index = 0; index < folders.length; index++)
+        folderSummaries[index] == null
+            ? folders[index]
+            : folders[index].copyWith(
+                itemCount: folderSummaries[index]!.itemCount,
+                updatedAt: folderSummaries[index]!.updatedAt,
+              ),
       for (final object in page.objects)
         if (object.key != prefix &&
             !object.key.substring(prefix.length).contains('/'))
@@ -60,6 +79,46 @@ class OssClient {
                   ).toLocal(),
           ),
     ];
+  }
+
+  /// 读取文件夹直属内容及最新直属对象的更新时间，不递归遍历子目录。
+  Future<_DirectorySummary> _readDirectorySummary(String path) async {
+    final prefix = _dir(path);
+    var itemCount = 0;
+    DateTime? updatedAt;
+    String? marker;
+    do {
+      final page = await _platform(
+        () => _native.listObjects(
+          prefix: prefix,
+          delimiter: '/',
+          marker: marker,
+          maxKeys: 1000,
+        ),
+      );
+      itemCount += page.commonPrefixes.where((key) => key != prefix).length;
+      for (final object in page.objects) {
+        if (object.key == prefix) {
+          updatedAt = _latestUpdatedAt(updatedAt, object);
+        } else if (!object.key.substring(prefix.length).contains('/')) {
+          itemCount++;
+          updatedAt = _latestUpdatedAt(updatedAt, object);
+        }
+      }
+      marker = page.isTruncated ? page.nextMarker : null;
+      if (page.isTruncated && (marker == null || marker.isEmpty)) {
+        throw AppError('OSS 分页响应缺少下一页标识', code: 'OSS_INVALID_RESPONSE');
+      }
+    } while (marker != null && marker.isNotEmpty);
+    return _DirectorySummary(itemCount: itemCount, updatedAt: updatedAt);
+  }
+
+  DateTime? _latestUpdatedAt(DateTime? current, OssNativeObject object) {
+    final modified = object.lastModifiedMilliseconds;
+    if (modified == null) return current;
+    final candidate =
+        DateTime.fromMillisecondsSinceEpoch(modified, isUtc: true).toLocal();
+    return current == null || candidate.isAfter(current) ? candidate : current;
   }
 
   Future<void> createFolder(String path, UserSession session) async {
@@ -94,6 +153,39 @@ class OssClient {
       }
     } while (marker != null && marker.isNotEmpty);
     return keys;
+  }
+
+  /// 统计指定目录前缀下所有文件的总大小。
+  ///
+  /// OSS 的目录没有独立大小；每个列表分页已携带对象大小，因此无需逐个
+  /// 请求对象元数据。目录标记对象不计入结果。
+  Future<int> calculateDirectorySize(
+    String path,
+    UserSession session,
+  ) async {
+    await _ensureConfigured(session);
+    final prefix = _dir(path);
+    var totalSize = 0;
+    String? marker;
+    do {
+      final page = await _platform(
+        () => _native.listObjects(
+          prefix: prefix,
+          marker: marker,
+          maxKeys: 1000,
+        ),
+      );
+      for (final object in page.objects) {
+        if (object.key != prefix && !object.key.endsWith('/')) {
+          totalSize += object.size;
+        }
+      }
+      marker = page.isTruncated ? page.nextMarker : null;
+      if (page.isTruncated && (marker == null || marker.isEmpty)) {
+        throw AppError('OSS 分页响应缺少下一页标识', code: 'OSS_INVALID_RESPONSE');
+      }
+    } while (marker != null && marker.isNotEmpty);
+    return totalSize;
   }
 
   Future<BatchDeleteResult> deleteMany(
@@ -416,6 +508,13 @@ class OssClient {
   }
 
   String _dir(String value) => value.endsWith('/') ? value : '$value/';
+}
+
+class _DirectorySummary {
+  const _DirectorySummary({required this.itemCount, required this.updatedAt});
+
+  final int itemCount;
+  final DateTime? updatedAt;
 }
 
 DateTime? _parseExifDate(String value) {

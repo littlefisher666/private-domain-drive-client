@@ -72,6 +72,20 @@ class BatchDownloadEnqueueResult {
   final int directoryCount;
 }
 
+class DirectorySizeState {
+  const DirectorySizeState._({this.size, required this.isLoading});
+
+  const DirectorySizeState.loading() : this._(isLoading: true);
+
+  const DirectorySizeState.ready(int size)
+      : this._(size: size, isLoading: false);
+
+  const DirectorySizeState.failed() : this._(isLoading: false);
+
+  final int? size;
+  final bool isLoading;
+}
+
 class TransferBatchSummary {
   const TransferBatchSummary({
     required this.id,
@@ -102,6 +116,7 @@ class AppController extends ChangeNotifier {
 
   static const rootPrefix = 'shared/';
   static const _transferConcurrencyKey = 'transfer_concurrency';
+  static const _transferHistoryKey = 'transfer_history:v1';
   static const _fileSortOptionKey = 'file_sort_option';
   static const _fileSortOptionsByDirectoryKey =
       'file_sort_options_by_directory';
@@ -115,6 +130,14 @@ class AppController extends ChangeNotifier {
 
   final ValueNotifier<Set<String>> multiSelectedPathsListenable =
       ValueNotifier<Set<String>>(<String>{});
+
+  /// 仅用于详情页的目录大小异步计算状态，避免重建整个工作区。
+  final ValueNotifier<Map<String, DirectorySizeState>>
+      directorySizeStatesListenable =
+      ValueNotifier<Map<String, DirectorySizeState>>(
+          const <String, DirectorySizeState>{});
+  final Map<String, int> _directorySizeCache = <String, int>{};
+  final Map<String, Object> _directorySizeRequests = <String, Object>{};
 
   /// Transfer task list/progress updates only; does not rebuild workspace.
   final ValueNotifier<List<TransferTask>> tasksListenable =
@@ -144,6 +167,10 @@ class AppController extends ChangeNotifier {
       <String, _QueuedTransfer>{};
   final Set<String> _canceledTransferIds = <String>{};
   int _nextTransferId = 0;
+  SharedPreferences? _preferences;
+  bool _transferHistoryReady = false;
+  bool _isSavingTransferHistory = false;
+  bool _transferHistoryDirty = false;
 
   UserSession? get session => _session;
   bool get isLoggedIn => _session != null;
@@ -208,6 +235,7 @@ class AppController extends ChangeNotifier {
   Future<void> bootstrap() async {
     try {
       final preferences = await SharedPreferences.getInstance();
+      _preferences = preferences;
       final savedConcurrency = preferences.getInt(_transferConcurrencyKey);
       if (savedConcurrency != null &&
           savedConcurrency >= _minTransferConcurrency &&
@@ -215,6 +243,8 @@ class AppController extends ChangeNotifier {
         transferConcurrencyListenable.value = savedConcurrency;
       }
       _restoreSortPreferences(preferences);
+      _restoreTransferHistory(preferences);
+      _transferHistoryReady = true;
     } catch (_) {
       // 偏好读取失败不应阻断会话恢复。
     }
@@ -251,6 +281,7 @@ class AppController extends ChangeNotifier {
         await _ossClient.configureSession(session);
       }
       selectedItemListenable.value = null;
+      _clearDirectorySizeCache();
       notifyListeners();
       return LoginResult.success(session);
     } on AppError catch (error) {
@@ -270,6 +301,7 @@ class AppController extends ChangeNotifier {
     _session = null;
     _remoteDirectories.clear();
     selectedItemListenable.value = null;
+    _clearDirectorySizeCache();
     clearMultiSelection();
     _pendingShareItems = const <ShareImportItem>[];
     _pendingTransferIds.clear();
@@ -518,12 +550,65 @@ class AppController extends ChangeNotifier {
       if (!identical(current, item)) {
         selectedItemListenable.value = item;
       }
+      if (item?.isDirectory ?? false) {
+        unawaited(_loadDirectorySize(item!));
+      }
       return;
     }
     selectedItemListenable.value = item;
     if (item != null && item.kind == FileKind.image && item.takenAt == null) {
       unawaited(_loadSelectedImageTakenAt(item));
     }
+    if (item?.isDirectory ?? false) {
+      unawaited(_loadDirectorySize(item!));
+    }
+  }
+
+  Future<void> _loadDirectorySize(FileItem item) async {
+    final path = _normalizeDir(item.path);
+    final cached = _directorySizeCache[path];
+    if (cached != null) {
+      _setDirectorySizeState(path, DirectorySizeState.ready(cached));
+      return;
+    }
+    if (_directorySizeRequests.containsKey(path)) return;
+
+    final request = Object();
+    _directorySizeRequests[path] = request;
+    _setDirectorySizeState(path, const DirectorySizeState.loading());
+    try {
+      await ensureFreshCredentials();
+      final size = await _ossClient.calculateDirectorySize(
+        path,
+        _requireSession(),
+      );
+      if (_directorySizeRequests[path] == request) {
+        _directorySizeCache[path] = size;
+        _setDirectorySizeState(path, DirectorySizeState.ready(size));
+      }
+    } catch (_) {
+      if (_directorySizeRequests[path] == request) {
+        _setDirectorySizeState(path, const DirectorySizeState.failed());
+      }
+    } finally {
+      if (_directorySizeRequests[path] == request) {
+        _directorySizeRequests.remove(path);
+      }
+    }
+  }
+
+  void _setDirectorySizeState(String path, DirectorySizeState state) {
+    directorySizeStatesListenable.value = Map<String,
+        DirectorySizeState>.unmodifiable(<String, DirectorySizeState>{
+      ...directorySizeStatesListenable.value,
+      path: state,
+    });
+  }
+
+  void _clearDirectorySizeCache() {
+    _directorySizeCache.clear();
+    _directorySizeRequests.clear();
+    directorySizeStatesListenable.value = const <String, DirectorySizeState>{};
   }
 
   Future<void> _loadSelectedImageTakenAt(FileItem item) async {
@@ -586,6 +671,15 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 用于桌面端拖拽框选，以一次状态更新替换当前可见项的选择结果。
+  void replaceMultiSelection(Iterable<String> paths) {
+    final next = Set<String>.unmodifiable(paths.toSet());
+    _isMultiSelectionMode = next.isNotEmpty;
+    _selectionAnchorPath = next.isEmpty ? null : next.last;
+    multiSelectedPathsListenable.value = next;
+    notifyListeners();
+  }
+
   void clearMultiSelection() {
     _isMultiSelectionMode = false;
     _selectionAnchorPath = null;
@@ -593,6 +687,31 @@ class AppController extends ChangeNotifier {
     // 文件视图从选择模式重建回普通浏览模式。
     multiSelectedPathsListenable.value = Set<String>.unmodifiable(<String>{});
     notifyListeners();
+  }
+
+  /// 在当前目录的可见排序中移动当前项，不改变批量勾选状态。
+  bool moveSelection(
+    List<FileItem> visibleItems, {
+    required int offset,
+  }) {
+    if (visibleItems.isEmpty || offset == 0) {
+      return false;
+    }
+
+    final selectedPath = selectedItemListenable.value?.path;
+    var currentIndex = visibleItems.indexWhere(
+      (item) => item.path == selectedPath,
+    );
+    if (currentIndex < 0) {
+      currentIndex = offset > 0 ? 0 : visibleItems.length - 1;
+    }
+    final targetIndex =
+        (currentIndex + offset).clamp(0, visibleItems.length - 1);
+    final target = visibleItems[targetIndex];
+
+    clearMultiSelection();
+    selectItem(target);
+    return true;
   }
 
   String parentPath(String path) {
@@ -606,16 +725,17 @@ class AppController extends ChangeNotifier {
     return normalized.substring(0, idx + 1);
   }
 
-  Future<void> createFolder(String name) async {
+  Future<void> createFolder(String name, {String? targetPath}) async {
     _ensureUploadCapability();
     final folderName = name.trim();
     if (folderName.isEmpty) {
       throw StateError('文件夹名称不能为空');
     }
-    final dir = _normalizeDir(_currentPath);
+    final dir = _normalizeDir(targetPath ?? _currentPath);
     final path = '$dir$folderName/';
     await ensureFreshCredentials();
     await _ossClient.createFolder(path, _requireSession());
+    _clearDirectorySizeCache();
     _treeRevision++;
     notifyListeners();
   }
@@ -639,6 +759,7 @@ class AppController extends ChangeNotifier {
     await _ossClient.copy(item.path, newPath, session);
     await _ossClient.delete(item.path, session);
     _treeRevision++;
+    _clearDirectorySizeCache();
     notifyListeners();
   }
 
@@ -659,6 +780,7 @@ class AppController extends ChangeNotifier {
       await _ossClient.delete(item.path, session);
     }
     _treeRevision++;
+    _clearDirectorySizeCache();
 
     if (selectedItemListenable.value?.path == item.path) {
       selectedItemListenable.value = null;
@@ -708,6 +830,7 @@ class AppController extends ChangeNotifier {
       }
     }
     if (deleted.isNotEmpty) {
+      _clearDirectorySizeCache();
       _remoteDirectories.removeWhere((path) => deleted.contains(path));
       if (deleted.any((path) => _currentPath.startsWith(_normalizeDir(path)))) {
         _currentPath = parentPath(_currentPath);
@@ -774,6 +897,7 @@ class AppController extends ChangeNotifier {
         );
         if (isCanceled()) throw const TransferCanceledException();
         _treeRevision++;
+        _clearDirectorySizeCache();
         notifyListeners();
       }),
     );
@@ -956,6 +1080,13 @@ class AppController extends ChangeNotifier {
     _drainTransferQueue();
   }
 
+  /// 对已失败或已取消的任务重新排队。
+  void retryTasks(Iterable<String> taskIds) {
+    for (final taskId in taskIds.toSet()) {
+      retryTask(taskId);
+    }
+  }
+
   void cancelTask(String taskId) {
     final task = tasks.where((item) => item.id == taskId).firstOrNull;
     if (task == null ||
@@ -976,10 +1107,17 @@ class AppController extends ChangeNotifier {
             ));
   }
 
-  void cancelBatch(String batchId) {
-    for (final task in tasks.where((task) => task.batchId == batchId)) {
-      cancelTask(task.id);
+  /// 取消正在等待或执行中的任务。
+  void cancelTasks(Iterable<String> taskIds) {
+    for (final taskId in taskIds.toSet()) {
+      cancelTask(taskId);
     }
+  }
+
+  void cancelBatch(String batchId) {
+    cancelTasks(
+      tasks.where((task) => task.batchId == batchId).map((task) => task.id),
+    );
   }
 
   void clearCompletedTasks() {
@@ -1188,6 +1326,60 @@ class AppController extends ChangeNotifier {
 
   void _setTasks(List<TransferTask> next) {
     tasksListenable.value = List<TransferTask>.unmodifiable(next);
+    _saveTransferHistory();
+  }
+
+  void _restoreTransferHistory(SharedPreferences preferences) {
+    final rawHistory = preferences.getString(_transferHistoryKey);
+    if (rawHistory == null) return;
+    try {
+      final decoded = jsonDecode(rawHistory);
+      if (decoded is! List) return;
+      final history = decoded
+          .whereType<Map>()
+          .map((item) => TransferTask.fromJson(
+                item.map((key, value) => MapEntry(key.toString(), value)),
+              ))
+          .whereType<TransferTask>()
+          .where(_isHistoricalTransferTask)
+          .toList(growable: false);
+      tasksListenable.value = List<TransferTask>.unmodifiable(history);
+    } catch (_) {
+      // 本地历史损坏时忽略，避免影响应用启动。
+    }
+  }
+
+  bool _isHistoricalTransferTask(TransferTask task) {
+    return task.status == TransferTaskStatus.success ||
+        task.status == TransferTaskStatus.canceled;
+  }
+
+  void _saveTransferHistory() {
+    if (!_transferHistoryReady) return;
+    _transferHistoryDirty = true;
+    if (_isSavingTransferHistory) return;
+    _isSavingTransferHistory = true;
+    unawaited(_persistTransferHistory());
+  }
+
+  Future<void> _persistTransferHistory() async {
+    try {
+      final preferences = _preferences ?? await SharedPreferences.getInstance();
+      _preferences = preferences;
+      while (_transferHistoryDirty) {
+        _transferHistoryDirty = false;
+        final history = tasks.where(_isHistoricalTransferTask).toList();
+        await preferences.setString(
+          _transferHistoryKey,
+          jsonEncode(history.map((task) => task.toJson()).toList()),
+        );
+      }
+    } catch (_) {
+      // 历史记录写入失败不影响当前传输。
+    } finally {
+      _isSavingTransferHistory = false;
+      if (_transferHistoryDirty) _saveTransferHistory();
+    }
   }
 
   void _ensureUploadCapability() {
@@ -1217,6 +1409,7 @@ class AppController extends ChangeNotifier {
     }
     selectedItemListenable.dispose();
     multiSelectedPathsListenable.dispose();
+    directorySizeStatesListenable.dispose();
     tasksListenable.dispose();
     transferConcurrencyListenable.dispose();
     super.dispose();
@@ -1239,7 +1432,7 @@ class _TransferSpeedTracker {
     }
     final first = _samples.first;
     final elapsedMicros = (now - first.$1).inMicroseconds;
-    if (elapsedMicros < const Duration(milliseconds: 500).inMicroseconds) {
+    if (elapsedMicros < const Duration(milliseconds: 100).inMicroseconds) {
       return _previousSpeed;
     }
     final delta = bytes - first.$2;

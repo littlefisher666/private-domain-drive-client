@@ -17,14 +17,28 @@ void main() {
         ],
         commonPrefixes: <String>['shared/folder/'],
         isTruncated: false,
+      )
+      ..listPagesByPrefix['shared/folder/'] = const OssListPage(
+        objects: <OssNativeObject>[
+          OssNativeObject(
+            key: 'shared/folder/',
+            size: 0,
+            lastModifiedMilliseconds: 1778893200000,
+          ),
+          OssNativeObject(key: 'shared/folder/a.txt', size: 12),
+        ],
+        commonPrefixes: <String>['shared/folder/child/'],
+        isTruncated: false,
       );
 
     final items = await OssClient(native: native).list('shared/', _session());
 
     expect(items.map((item) => item.name), <String>['folder', 'a.txt']);
+    expect(items.first.itemCount, 2);
+    expect(items.first.updatedAt, isNotNull);
     expect(native.configureCalls, 1);
-    expect(native.listPrefix, 'shared/');
-    expect(native.listDelimiter, '/');
+    expect(native.listRequests.first.prefix, 'shared/');
+    expect(native.listRequests.first.delimiter, '/');
   });
 
   test('缩略图通过 SDK 图片处理参数读取受限字节', () async {
@@ -278,8 +292,9 @@ class _FakeNative extends PrivateDomainOss {
     commonPrefixes: <String>[],
     isTruncated: false,
   );
-  String? listPrefix;
-  String? listDelimiter;
+  final Map<String, OssListPage> listPagesByPrefix = <String, OssListPage>{};
+  final List<({String prefix, String? delimiter})> listRequests =
+      <({String prefix, String? delimiter})>[];
   Uint8List bytesResult = Uint8List(0);
   Object? bytesError;
   Object? processedBytesError;
@@ -313,9 +328,8 @@ class _FakeNative extends PrivateDomainOss {
     String? marker,
     int maxKeys = 1000,
   }) async {
-    listPrefix = prefix;
-    listDelimiter = delimiter;
-    return listPage;
+    listRequests.add((prefix: prefix, delimiter: delimiter));
+    return listPagesByPrefix[prefix] ?? listPage;
   }
 
   @override

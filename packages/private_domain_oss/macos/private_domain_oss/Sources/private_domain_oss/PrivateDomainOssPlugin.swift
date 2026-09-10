@@ -3,6 +3,99 @@ import Cocoa
 import FlutterMacOS
 import private_domain_oss_contract
 
+private final class DownloadStreamDelegate: NSObject, URLSessionDataDelegate {
+    private let output: FileHandle
+    private let onProgress: (Int64, Int64) -> Void
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var transferred: Int64 = 0
+    private var total: Int64 = 0
+    private var writeError: Error?
+
+    init(
+        targetURL: URL,
+        onProgress: @escaping (Int64, Int64) -> Void
+    ) throws {
+        FileManager.default.createFile(atPath: targetURL.path, contents: nil)
+        output = try FileHandle(forWritingTo: targetURL)
+        self.onProgress = onProgress
+    }
+
+    deinit {
+        try? output.close()
+    }
+
+    func begin(
+        session: URLSession,
+        request: URLRequest
+    ) async throws {
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                self.continuation = continuation
+                session.dataTask(with: request).resume()
+            }
+        }, onCancel: {
+            session.invalidateAndCancel()
+        })
+    }
+
+    func urlSession(
+        _: URLSession,
+        dataTask _: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let response = response as? HTTPURLResponse,
+              (200...299).contains(response.statusCode) else {
+            completionHandler(.cancel)
+            finish(throwing: OssBridgeContract.BridgeError.unknown)
+            return
+        }
+        total = max(0, response.expectedContentLength)
+        onProgress(0, total)
+        completionHandler(.allow)
+    }
+
+    func urlSession(
+        _: URLSession,
+        dataTask _: URLSessionDataTask,
+        didReceive data: Data
+    ) {
+        guard writeError == nil else { return }
+        do {
+            try output.write(contentsOf: data)
+            transferred += Int64(data.count)
+            onProgress(transferred, total)
+        } catch {
+            writeError = error
+        }
+    }
+
+    func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        try? output.close()
+        if let writeError {
+            finish(throwing: writeError)
+        } else if let error {
+            finish(throwing: error)
+        } else {
+            finish()
+        }
+    }
+
+    private func finish(throwing error: Error? = nil) {
+        guard let continuation else { return }
+        self.continuation = nil
+        if let error {
+            continuation.resume(throwing: error)
+        } else {
+            continuation.resume()
+        }
+    }
+}
+
 public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private var client: Client?
     private var bucket: String?
@@ -160,10 +253,14 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
         }
         let attributes = try FileManager.default.attributesOfItem(atPath: path)
         let fileSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
-        let threshold = (arguments["multipartThresholdBytes"] as? NSNumber)?.int64Value
+        let configuredThreshold = (arguments["multipartThresholdBytes"] as? NSNumber)?.int64Value
             ?? 16 * 1024 * 1024
+        // 单次 putObject 的 SDK 进度回调在部分网络环境中只会在结束时触发。
+        // 将较大的文件拆为较小分片，并在每个分片完成后上报真实已发送字节，
+        // 保证传输中心可以持续展示上传进度。
+        let progressThreshold = min(configuredThreshold, 1 * 1024 * 1024)
         let (client, bucket) = try session()
-        if fileSize >= threshold {
+        if fileSize >= progressThreshold {
             try await multipartUpload(
                 client: client,
                 bucket: bucket,
@@ -202,7 +299,7 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
         do {
             let handle = try FileHandle(forReadingFrom: fileURL)
             defer { try? handle.close() }
-            let partSize = 8 * 1024 * 1024
+            let partSize = 1 * 1024 * 1024
             var uploaded: Int64 = 0
             var partNumber = 1
             var parts: [UploadPart] = []
@@ -257,16 +354,33 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
             at: targetURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let (client, bucket) = try session()
-        let progress = ProgressClosure { [weak self] _, transferred, total in
-            self?.emitProgress(taskId, "download", transferred, total)
-        }
         do {
-            _ = try await client.getObjectToFile(GetObjectRequest(
+            let (client, bucket) = try session()
+            let presigned = try await client.presign(GetObjectRequest(
                 bucket: bucket,
-                key: try OssBridgeContract.string(arguments, "key"),
-                progress: progress
-            ), targetURL)
+                key: try OssBridgeContract.string(arguments, "key")
+            ))
+            guard let url = URL(string: presigned.url) else {
+                throw OssBridgeContract.BridgeError.invalidRequest
+            }
+            var request = URLRequest(url: url)
+            request.httpMethod = presigned.method
+            presigned.signedHeaders?.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+            let delegate = try DownloadStreamDelegate(
+                targetURL: targetURL,
+                onProgress: { [weak self] transferred, total in
+                    self?.emitProgress(taskId, "download", transferred, total)
+                }
+            )
+            let queue = OperationQueue()
+            queue.maxConcurrentOperationCount = 1
+            let session = URLSession(
+                configuration: .ephemeral,
+                delegate: delegate,
+                delegateQueue: queue
+            )
+            defer { session.finishTasksAndInvalidate() }
+            try await delegate.begin(session: session, request: request)
         } catch {
             try? FileManager.default.removeItem(at: targetURL)
             throw error
@@ -338,7 +452,11 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
                     try Task.checkCancellation()
                     await MainActor.run { result(nil) }
                 } catch {
-                    await MainActor.run { result(Self.flutterError(error)) }
+                    await MainActor.run {
+                        result(Self.flutterError(
+                            Task.isCancelled ? CancellationError() : error
+                        ))
+                    }
                 }
                 await MainActor.run { self?.transfers.removeValue(forKey: taskId) }
             }

@@ -1,9 +1,15 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 
 import '../../../app/router/route_names.dart';
 import '../../../app/theme/cupertino_desktop.dart';
+import '../../../core/utils/download_directory.dart';
 import '../../../core/utils/file_size_formatter.dart';
 import '../../../shared/state/app_controller.dart';
 import '../../../shared/state/app_scope.dart';
@@ -21,7 +27,7 @@ class WorkspacePage extends StatefulWidget {
   State<WorkspacePage> createState() => _WorkspacePageState();
 }
 
-/// 打开系统文件选择器并将选中文件上传到当前目录。
+/// 打开系统文件选择器并将选中的一个或多个文件上传到当前目录。
 ///
 /// 该入口同时供桌面标题栏和目录页按钮使用，确保两个按钮行为一致。
 Future<void> pickAndUploadFile(
@@ -35,21 +41,97 @@ Future<void> pickAndUploadFile(
   }
 
   try {
-    final picked = await FilePicker.pickFile(
+    final picked = await FilePicker.pickFiles(
       type: fromAlbum ? FileType.image : FileType.any,
     );
-    if (picked == null) return;
-    final localPath = picked.path;
-    if (localPath == null || localPath.isEmpty) {
-      throw StateError('无法获取所选文件路径');
+    if (picked.isEmpty) return;
+    for (final file in picked) {
+      final localPath = file.path;
+      if (localPath == null || localPath.isEmpty) {
+        throw StateError('无法获取所选文件路径');
+      }
+      await controller.uploadFile(
+        fileName: file.name,
+        localPath: localPath,
+        fileSize: await file.length(),
+      );
     }
-    await controller.uploadFile(
-      fileName: picked.name,
-      localPath: localPath,
-      fileSize: await picked.length(),
-    );
     if (context.mounted) {
-      AppFeedback.showSnack(context, '已上传 ${picked.name}');
+      AppFeedback.showSnack(context, '已创建 ${picked.length} 个文件的上传任务');
+    }
+  } catch (error) {
+    if (context.mounted) {
+      AppFeedback.showSnack(
+        context,
+        error.toString().replaceFirst('Bad state: ', ''),
+      );
+    }
+  }
+}
+
+/// 选择本地文件夹，将其中内容按原有层级上传到当前目录。
+Future<void> pickAndUploadDirectory(BuildContext context) async {
+  final controller = AppScope.read(context);
+  if (!controller.capabilities.upload) {
+    AppFeedback.showSnack(context, '当前身份没有上传权限');
+    return;
+  }
+
+  try {
+    final selectedPath = await FilePicker.getDirectoryPath(
+      dialogTitle: '选择要上传的文件夹',
+    );
+    if (selectedPath == null || selectedPath.isEmpty) return;
+
+    final directory = Directory(selectedPath);
+    if (!await directory.exists()) {
+      throw StateError('所选文件夹不存在或无法访问');
+    }
+    final rootPath = directory.path.replaceAll('\\', '/').replaceFirst(
+          RegExp(r'/+$'),
+          '',
+        );
+    final folderName = rootPath.split('/').last;
+    final uploadRoot = controller.currentPath;
+    if (folderName.isEmpty) throw StateError('无法获取文件夹名称');
+
+    final entities =
+        await directory.list(recursive: true, followLinks: false).toList();
+    final folders = <String>[''];
+    final files = <File>[];
+    for (final entity in entities) {
+      final entityPath = entity.path.replaceAll('\\', '/');
+      if (!entityPath.startsWith('$rootPath/')) continue;
+      final relativePath = entityPath.substring(rootPath.length + 1);
+      if (entity is Directory) {
+        folders.add(relativePath);
+      } else if (entity is File) {
+        files.add(entity);
+      }
+    }
+
+    for (final relativePath in folders) {
+      final name =
+          relativePath.isEmpty ? folderName : '$folderName/$relativePath';
+      await controller.createFolder(name, targetPath: uploadRoot);
+    }
+    for (final file in files) {
+      final relativePath = file.path.replaceAll('\\', '/').substring(
+            rootPath.length + 1,
+          );
+      final segments = relativePath.split('/');
+      final fileName = segments.removeLast();
+      final parent =
+          segments.isEmpty ? folderName : '$folderName/${segments.join('/')}';
+      await controller.uploadFile(
+        fileName: fileName,
+        localPath: file.path,
+        fileSize: await file.length(),
+        targetPath: '$uploadRoot$parent/',
+      );
+    }
+    if (context.mounted) {
+      AppFeedback.showSnack(context, '已创建 ${files.length} 个文件的上传任务');
     }
   } catch (error) {
     if (context.mounted) {
@@ -63,6 +145,9 @@ Future<void> pickAndUploadFile(
 
 class _WorkspacePageState extends State<WorkspacePage> {
   late Future<List<FileItem>> _itemsFuture;
+  final FocusNode _itemsFocusNode = FocusNode(
+    debugLabel: 'workspace-items',
+  );
   String? _boundPath;
   int? _boundTreeRevision;
   String? _renamingPath;
@@ -85,6 +170,12 @@ class _WorkspacePageState extends State<WorkspacePage> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _syncDirectoryBinding(AppScope.of(context));
+  }
+
+  @override
+  void dispose() {
+    _itemsFocusNode.dispose();
+    super.dispose();
   }
 
   Future<void> _reload() async {
@@ -189,88 +280,216 @@ class _WorkspacePageState extends State<WorkspacePage> {
         }
 
         if (items.isEmpty) {
-          return _EmptyState(
-            canUpload: canUpload,
-            onAction: canUpload
-                ? (desktop
-                    ? () => _pickUpload(fromAlbum: false)
-                    : _showUploadSheet)
-                : null,
+          return Listener(
+            onPointerDown: (_) {
+              if (desktop) {
+                _itemsFocusNode.requestFocus();
+              }
+            },
+            child: Focus(
+              focusNode: _itemsFocusNode,
+              onKeyEvent: (_, event) {
+                if (desktop && event is KeyDownEvent) {
+                  if (HardwareKeyboard.instance.isMetaPressed &&
+                      event.logicalKey == LogicalKeyboardKey.arrowUp) {
+                    unawaited(_goUp());
+                    return KeyEventResult.handled;
+                  }
+                  if (event.logicalKey == LogicalKeyboardKey.arrowUp ||
+                      event.logicalKey == LogicalKeyboardKey.arrowDown ||
+                      event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+                      event.logicalKey == LogicalKeyboardKey.arrowRight) {
+                    return KeyEventResult.handled;
+                  }
+                }
+                return KeyEventResult.ignored;
+              },
+              child: _EmptyState(
+                canUpload: canUpload,
+                onAction: canUpload
+                    ? (desktop
+                        ? () => _pickUpload(fromAlbum: false)
+                        : _showUploadSheet)
+                    : null,
+              ),
+            ),
           );
         }
 
-        return Focus(
-          autofocus: desktop,
-          onKeyEvent: (_, event) {
-            if (desktop &&
-                event is KeyDownEvent &&
-                HardwareKeyboard.instance.isMetaPressed &&
-                event.logicalKey == LogicalKeyboardKey.keyA) {
-              controller.selectAllItems(items);
-              return KeyEventResult.handled;
+        return Listener(
+          onPointerDown: (_) {
+            if (desktop) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) {
+                  _itemsFocusNode.requestFocus();
+                }
+              });
             }
-            return KeyEventResult.ignored;
           },
-          child: ValueListenableBuilder<Set<String>>(
-            valueListenable: controller.multiSelectedPathsListenable,
-            builder: (context, selectedPaths, _) {
-              final selectedItems = items
-                  .where((item) => selectedPaths.contains(item.path))
-                  .toList(growable: false);
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: <Widget>[
-                  _BatchSelectionBar(
-                    selectedCount: selectedItems.length,
-                    allSelected: selectedItems.length == items.length,
-                    itemCount: items.length,
-                    canDownload: controller.capabilities.download,
-                    canDelete: controller.capabilities.delete,
-                    onSelectAll: () {
-                      if (selectedItems.length == items.length) {
-                        controller.clearMultiSelection();
-                      } else {
-                        controller.selectAllItems(items);
-                      }
-                    },
-                    onDownload: selectedItems.isEmpty
-                        ? null
-                        : () => _downloadSelected(selectedItems),
-                    onDelete: selectedItems.isEmpty
-                        ? null
-                        : () => _deleteSelected(selectedItems),
-                  ),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: ValueListenableBuilder<FileItem?>(
-                      valueListenable: controller.selectedItemListenable,
-                      builder: (context, selected, _) {
-                        final selectedPath = selected?.path;
-                        final selecting =
-                            desktop || controller.isMultiSelectionMode;
-                        final onSelect = controller.isMultiSelectionMode
-                            ? (FileItem item) =>
-                                _toggleMultiSelection(item, items)
-                            : _handleSelect;
-                        if (controller.browseMode == BrowseMode.grid) {
-                          return _GridView(
+          child: Focus(
+            key: const ValueKey<String>('workspace-items-focus'),
+            focusNode: _itemsFocusNode,
+            descendantsAreFocusable: _renamingPath != null,
+            onKeyEvent: (node, event) {
+              if (desktop && event is KeyDownEvent) {
+                if (event.logicalKey == LogicalKeyboardKey.escape &&
+                    controller.isMultiSelectionMode) {
+                  controller.clearMultiSelection();
+                  return KeyEventResult.handled;
+                }
+                if (HardwareKeyboard.instance.isMetaPressed &&
+                    event.logicalKey == LogicalKeyboardKey.keyA) {
+                  controller.selectAllItems(items);
+                  return KeyEventResult.handled;
+                }
+                if (HardwareKeyboard.instance.isMetaPressed) {
+                  if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+                    unawaited(_goUp());
+                    return KeyEventResult.handled;
+                  }
+                  if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                    final selected = controller.selectedItem;
+                    if (selected != null) {
+                      unawaited(_handleOpen(selected));
+                    }
+                    return KeyEventResult.handled;
+                  }
+                  if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+                      event.logicalKey == LogicalKeyboardKey.arrowRight) {
+                    return KeyEventResult.handled;
+                  }
+                }
+                if (HardwareKeyboard.instance.isShiftPressed) {
+                  return switch (event.logicalKey) {
+                    LogicalKeyboardKey.arrowUp ||
+                    LogicalKeyboardKey.arrowDown ||
+                    LogicalKeyboardKey.arrowLeft ||
+                    LogicalKeyboardKey.arrowRight =>
+                      KeyEventResult.handled,
+                    _ => KeyEventResult.ignored,
+                  };
+                }
+                final isGrid = controller.browseMode == BrowseMode.grid;
+                final offset = switch (event.logicalKey) {
+                  LogicalKeyboardKey.arrowUp =>
+                    isGrid ? -_gridColumnCount(node, items.length) : -1,
+                  LogicalKeyboardKey.arrowDown =>
+                    isGrid ? _gridColumnCount(node, items.length) : 1,
+                  LogicalKeyboardKey.arrowLeft => isGrid ? -1 : 0,
+                  LogicalKeyboardKey.arrowRight => isGrid ? 1 : 0,
+                  _ => 0,
+                };
+                if (offset != 0 &&
+                    controller.moveSelection(
+                      items,
+                      offset: offset,
+                    )) {
+                  return KeyEventResult.handled;
+                }
+                if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+                    event.logicalKey == LogicalKeyboardKey.arrowRight) {
+                  return KeyEventResult.handled;
+                }
+              }
+              return KeyEventResult.ignored;
+            },
+            child: ValueListenableBuilder<Set<String>>(
+              valueListenable: controller.multiSelectedPathsListenable,
+              builder: (context, selectedPaths, _) {
+                final selectedItems = items
+                    .where((item) => selectedPaths.contains(item.path))
+                    .toList(growable: false);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    _BatchSelectionBar(
+                      selectedCount: selectedItems.length,
+                      allSelected: selectedItems.length == items.length,
+                      itemCount: items.length,
+                      canDownload: controller.capabilities.download,
+                      canDelete: controller.capabilities.delete,
+                      onSelectAll: () {
+                        if (selectedItems.length == items.length) {
+                          controller.clearMultiSelection();
+                        } else {
+                          controller.selectAllItems(items);
+                        }
+                      },
+                      onDownload: selectedItems.isEmpty
+                          ? null
+                          : () => _downloadSelected(selectedItems),
+                      onDelete: selectedItems.isEmpty
+                          ? null
+                          : () => _deleteSelected(selectedItems),
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: ValueListenableBuilder<FileItem?>(
+                        valueListenable: controller.selectedItemListenable,
+                        builder: (context, selected, _) {
+                          final selectedPath = selected?.path;
+                          final selecting = controller.isMultiSelectionMode;
+                          final isMultiSelectionMode =
+                              controller.isMultiSelectionMode;
+                          void onSelect(FileItem item) {
+                            if (desktop) {
+                              _itemsFocusNode.requestFocus();
+                            }
+                            if (isMultiSelectionMode) {
+                              _toggleMultiSelection(item, items);
+                            } else {
+                              _handleSelect(item);
+                            }
+                          }
+
+                          if (controller.browseMode == BrowseMode.grid) {
+                            return _GridView(
+                              items: items,
+                              selectedPath: selectedPath,
+                              selectedPaths: selectedPaths,
+                              multiSelecting: selecting,
+                              desktop: desktop,
+                              subtitleBuilder: _subtitle,
+                              thumbnailLoader: controller.loadThumbnail,
+                              thumbnailCacheNamespace:
+                                  controller.thumbnailCacheNamespace,
+                              onOpen: _handleOpen,
+                              onMore: desktop ? (_) {} : _showItemActions,
+                              onSelect: onSelect,
+                              onToggle: (item) =>
+                                  _toggleMultiSelection(item, items),
+                              onMarqueeSelectionChanged:
+                                  controller.replaceMultiSelection,
+                              canUpload: canUpload,
+                              canDelete: controller.capabilities.delete,
+                              canDownload: controller.capabilities.download,
+                              onDownload: _download,
+                              onRename: _rename,
+                              renamingPath: _renamingPath,
+                              onRenameSubmit: _commitRename,
+                              onRenameCancel: _cancelRename,
+                              onDelete: _delete,
+                            );
+                          }
+                          return _ListView(
                             items: items,
+                            desktop: desktop,
                             selectedPath: selectedPath,
                             selectedPaths: selectedPaths,
                             multiSelecting: selecting,
-                            desktop: desktop,
                             subtitleBuilder: _subtitle,
-                            thumbnailLoader: controller.loadThumbnail,
-                            thumbnailCacheNamespace:
-                                controller.thumbnailCacheNamespace,
+                            metaTimeBuilder: _metaTime,
+                            canUpload: canUpload,
+                            canDelete: controller.capabilities.delete,
+                            canDownload: controller.capabilities.download,
                             onOpen: _handleOpen,
                             onMore: desktop ? (_) {} : _showItemActions,
                             onSelect: onSelect,
                             onToggle: (item) =>
                                 _toggleMultiSelection(item, items),
-                            canUpload: canUpload,
-                            canDelete: controller.capabilities.delete,
-                            canDownload: controller.capabilities.download,
+                            onMarqueeSelectionChanged:
+                                controller.replaceMultiSelection,
+                            onPreview: _openPreview,
                             onDownload: _download,
                             onRename: _rename,
                             renamingPath: _renamingPath,
@@ -278,47 +497,44 @@ class _WorkspacePageState extends State<WorkspacePage> {
                             onRenameCancel: _cancelRename,
                             onDelete: _delete,
                           );
-                        }
-                        return _ListView(
-                          items: items,
-                          desktop: desktop,
-                          selectedPath: selectedPath,
-                          selectedPaths: selectedPaths,
-                          multiSelecting: selecting,
-                          subtitleBuilder: _subtitle,
-                          metaTimeBuilder: _metaTime,
-                          canUpload: canUpload,
-                          canDelete: controller.capabilities.delete,
-                          canDownload: controller.capabilities.download,
-                          onOpen: _handleOpen,
-                          onMore: desktop ? (_) {} : _showItemActions,
-                          onSelect: onSelect,
-                          onToggle: (item) =>
-                              _toggleMultiSelection(item, items),
-                          onPreview: _openPreview,
-                          onDownload: _download,
-                          onRename: _rename,
-                          renamingPath: _renamingPath,
-                          onRenameSubmit: _commitRename,
-                          onRenameCancel: _cancelRename,
-                          onDelete: _delete,
-                        );
-                      },
+                        },
+                      ),
                     ),
-                  ),
-                ],
-              );
-            },
+                  ],
+                );
+              },
+            ),
           ),
         );
       },
     );
   }
 
+  int _gridColumnCount(FocusNode node, int itemCount) {
+    final box = node.context?.findRenderObject() as RenderBox?;
+    final width = box?.size.width;
+    if (width == null || width <= 0) {
+      return 1;
+    }
+    const maxCrossAxisExtent = 190.0;
+    const crossAxisSpacing = 12.0;
+    final count =
+        ((width + crossAxisSpacing) / (maxCrossAxisExtent + crossAxisSpacing))
+            .ceil();
+    return count.clamp(1, itemCount);
+  }
+
   Future<void> _openDirectory(String path) async {
     final controller = AppScope.of(context);
     controller.setCurrentPath(path);
     await _reload();
+    if (mounted && _desktop) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _itemsFocusNode.requestFocus();
+        }
+      });
+    }
   }
 
   Future<void> _goUp() async {
@@ -467,9 +683,13 @@ class _WorkspacePageState extends State<WorkspacePage> {
   }
 
   Future<void> _download(FileItem item) async {
+    if (item.isDirectory) {
+      await _downloadSelected(<FileItem>[item]);
+      return;
+    }
     final controller = AppScope.of(context);
     try {
-      final directory = await FilePicker.getDirectoryPath();
+      final directory = await selectDownloadDirectory();
       if (directory == null) {
         return;
       }
@@ -489,7 +709,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
 
   Future<void> _downloadSelected(List<FileItem> items) async {
     final controller = AppScope.of(context);
-    final directory = await FilePicker.getDirectoryPath();
+    final directory = await selectDownloadDirectory();
     if (directory == null) return;
     if (!mounted) return;
     try {
@@ -577,6 +797,11 @@ class _WorkspacePageState extends State<WorkspacePage> {
     if (mounted) await _reload();
   }
 
+  Future<void> _pickUploadDirectory() async {
+    await pickAndUploadDirectory(context);
+    if (mounted) await _reload();
+  }
+
   Future<void> _showUploadSheet() async {
     final controller = AppScope.of(context);
     if (!controller.capabilities.upload) {
@@ -598,6 +823,14 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 onTap: () {
                   Navigator.pop(context);
                   _pickUpload(fromAlbum: false);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.drive_folder_upload_outlined),
+                title: const Text('上传文件夹'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _pickUploadDirectory();
                 },
               ),
               ListTile(
@@ -656,7 +889,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                     _openPreview(item);
                   },
                 ),
-              if (!item.isDirectory && controller.capabilities.download)
+              if (controller.capabilities.download)
                 ListTile(
                   leading: const Icon(Icons.download_outlined),
                   title: const Text('下载'),
@@ -700,7 +933,11 @@ class _WorkspacePageState extends State<WorkspacePage> {
   }
 
   String _subtitle(FileItem item) {
-    final parts = <String>[item.typeLabel];
+    final parts = <String>[
+      item.isDirectory && item.itemCount != null
+          ? '${item.itemCount} 项'
+          : item.typeLabel,
+    ];
     if (!item.isDirectory) {
       parts.add(FileSizeFormatter.format(item.size ?? 0));
     }
@@ -760,6 +997,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 browseMode: controller.browseMode,
                 sortOption: controller.fileSortOption,
                 selectedListenable: controller.selectedItemListenable,
+                directorySizeStatesListenable:
+                    controller.directorySizeStatesListenable,
                 listArea: _buildItemsArea(
                   controller: controller,
                   desktop: true,
@@ -769,6 +1008,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 onRefresh: _reload,
                 onCreateFolder: _createFolder,
                 onUpload: () => _pickUpload(fromAlbum: false),
+                onUploadDirectory: _pickUploadDirectory,
                 onBrowseModeChanged: controller.setBrowseMode,
                 onSortChanged: _setSortOption,
                 onOpen: _handleOpen,
@@ -912,11 +1152,13 @@ class _DesktopWorkspaceBody extends StatelessWidget {
     required this.browseMode,
     required this.sortOption,
     required this.selectedListenable,
+    required this.directorySizeStatesListenable,
     required this.listArea,
     required this.onGoUp,
     required this.onRefresh,
     required this.onCreateFolder,
     required this.onUpload,
+    required this.onUploadDirectory,
     required this.onBrowseModeChanged,
     required this.onSortChanged,
     required this.onOpen,
@@ -933,11 +1175,14 @@ class _DesktopWorkspaceBody extends StatelessWidget {
   final BrowseMode browseMode;
   final FileSortOption sortOption;
   final ValueNotifier<FileItem?> selectedListenable;
+  final ValueNotifier<Map<String, DirectorySizeState>>
+      directorySizeStatesListenable;
   final Widget listArea;
   final VoidCallback onGoUp;
   final VoidCallback onRefresh;
   final VoidCallback onCreateFolder;
   final VoidCallback onUpload;
+  final VoidCallback onUploadDirectory;
   final ValueChanged<BrowseMode> onBrowseModeChanged;
   final ValueChanged<FileSortOption> onSortChanged;
   final ValueChanged<FileItem> onOpen;
@@ -1044,6 +1289,10 @@ class _DesktopWorkspaceBody extends StatelessWidget {
                       onPressed: onUpload,
                       child: const Text('上传文件'),
                     ),
+                    FilledButton(
+                      onPressed: onUploadDirectory,
+                      child: const Text('上传文件夹'),
+                    ),
                   ],
                 ],
               ),
@@ -1091,8 +1340,15 @@ class _DesktopWorkspaceBody extends StatelessWidget {
                 child: ValueListenableBuilder<FileItem?>(
                   valueListenable: selectedListenable,
                   builder: (context, current, _) {
-                    return _DetailPanel(
-                      item: current,
+                    return ValueListenableBuilder<
+                        Map<String, DirectorySizeState>>(
+                      valueListenable: directorySizeStatesListenable,
+                      builder: (context, directorySizes, _) => _DetailPanel(
+                        item: current,
+                        directorySize: current == null || !current.isDirectory
+                            ? null
+                            : directorySizes[current.path],
+                      ),
                     );
                   },
                 ),
@@ -1330,6 +1586,7 @@ class _ListView extends StatelessWidget {
     required this.onMore,
     required this.onSelect,
     required this.onToggle,
+    required this.onMarqueeSelectionChanged,
     required this.onPreview,
     required this.onDownload,
     required this.onRename,
@@ -1353,6 +1610,7 @@ class _ListView extends StatelessWidget {
   final ValueChanged<FileItem> onMore;
   final ValueChanged<FileItem> onSelect;
   final ValueChanged<FileItem> onToggle;
+  final ValueChanged<Set<String>> onMarqueeSelectionChanged;
   final ValueChanged<FileItem> onPreview;
   final ValueChanged<FileItem> onDownload;
   final ValueChanged<FileItem> onRename;
@@ -1410,109 +1668,123 @@ class _ListView extends StatelessWidget {
       );
     }
 
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: CupertinoDesktopTokens.line),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: ListView.separated(
-        itemCount: items.length,
-        separatorBuilder: (_, __) => const Divider(
-          height: 1,
-          color: Color(0x1F3C3C43),
+    return _DesktopMarqueeSelection(
+      enabled: desktop && defaultTargetPlatform == TargetPlatform.macOS,
+      items: items,
+      selectedPaths: selectedPaths,
+      onSelectionChanged: onMarqueeSelectionChanged,
+      childBuilder: (context, itemKeys, marqueeSelecting, onItemPointerDown) =>
+          Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: CupertinoDesktopTokens.line),
         ),
-        itemBuilder: (context, index) {
-          final item = items[index];
-          final selected = multiSelecting
-              ? selectedPaths.contains(item.path)
-              : item.path == selectedPath;
-          return Material(
-            color: selected
-                ? CupertinoDesktopTokens.blue.withValues(alpha: 0.12)
-                : Colors.transparent,
-            child: GestureDetector(
-              onSecondaryTapDown: (details) => _showDesktopItemMenu(
-                context: context,
-                position: details.globalPosition,
-                item: item,
-                canDownload: canDownload,
-                canRename: canUpload || canDelete,
-                canDelete: canDelete,
-                onOpen: () => onOpen(item),
-                onPreview: () => onPreview(item),
-                onDownload: () => onDownload(item),
-                onRename: () => onRename(item),
-                onDelete: () => onDelete(item),
-              ),
-              child: InkWell(
-                onTap: () => onSelect(item),
-                onDoubleTap:
-                    selectedPaths.isNotEmpty ? null : () => onOpen(item),
-                hoverColor: CupertinoDesktopTokens.blue.withValues(alpha: 0.04),
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-                  child: Row(
-                    children: <Widget>[
-                      if (multiSelecting) ...<Widget>[
-                        _HoverCheckbox(
-                          value: selected,
-                          onChanged: () => onToggle(item),
-                        ),
-                        const SizedBox(width: 6),
-                      ],
-                      FileTypeBadge(item: item),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            if (renamingPath == item.path)
-                              _InlineRenameField(
-                                item: item,
-                                onSubmit: onRenameSubmit,
-                                onCancel: onRenameCancel,
-                              )
-                            else
-                              Text(
-                                item.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                  color: CupertinoDesktopTokens.ink,
-                                ),
-                              ),
-                            const SizedBox(height: 2),
-                            Text(
-                              item.isDirectory
-                                  ? item.typeLabel
-                                  : '${item.typeLabel} · ${FileSizeFormatter.format(item.size ?? 0)}',
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: CupertinoDesktopTokens.secondary,
-                              ),
+        clipBehavior: Clip.antiAlias,
+        child: ListView.separated(
+          itemCount: items.length,
+          separatorBuilder: (_, __) => const Divider(
+            height: 1,
+            color: Color(0x1F3C3C43),
+          ),
+          itemBuilder: (context, index) {
+            final item = items[index];
+            final selected = selectedPaths.isNotEmpty
+                ? selectedPaths.contains(item.path)
+                : item.path == selectedPath;
+            return Listener(
+              onPointerDown: (event) => onItemPointerDown(event.pointer),
+              child: Material(
+                key: itemKeys[index],
+                color: selected
+                    ? CupertinoDesktopTokens.blue.withValues(alpha: 0.12)
+                    : Colors.transparent,
+                child: GestureDetector(
+                  onSecondaryTapDown: (details) => _showDesktopItemMenu(
+                    context: context,
+                    position: details.globalPosition,
+                    item: item,
+                    canDownload: canDownload,
+                    canRename: canUpload || canDelete,
+                    canDelete: canDelete,
+                    onOpen: () => onOpen(item),
+                    onPreview: () => onPreview(item),
+                    onDownload: () => onDownload(item),
+                    onRename: () => onRename(item),
+                    onDelete: () => onDelete(item),
+                  ),
+                  child: InkWell(
+                    onTap: () => onSelect(item),
+                    onDoubleTap:
+                        selectedPaths.isNotEmpty ? null : () => onOpen(item),
+                    hoverColor:
+                        CupertinoDesktopTokens.blue.withValues(alpha: 0.04),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 11),
+                      child: Row(
+                        children: <Widget>[
+                          if (multiSelecting) ...<Widget>[
+                            _HoverCheckbox(
+                              value: selected,
+                              onChanged: () => onToggle(item),
                             ),
+                            const SizedBox(width: 6),
                           ],
-                        ),
+                          FileTypeBadge(item: item),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                if (renamingPath == item.path)
+                                  _InlineRenameField(
+                                    item: item,
+                                    onSubmit: onRenameSubmit,
+                                    onCancel: onRenameCancel,
+                                  )
+                                else
+                                  Text(
+                                    item.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: CupertinoDesktopTokens.ink,
+                                    ),
+                                  ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  item.isDirectory
+                                      ? item.itemCount == null
+                                          ? item.typeLabel
+                                          : '${item.itemCount} 项'
+                                      : '${item.typeLabel} · ${FileSizeFormatter.format(item.size ?? 0)}',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: CupertinoDesktopTokens.secondary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Text(
+                            metaTimeBuilder(item),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: CupertinoDesktopTokens.secondary,
+                            ),
+                          ),
+                        ],
                       ),
-                      Text(
-                        metaTimeBuilder(item),
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: CupertinoDesktopTokens.secondary,
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
@@ -1532,6 +1804,7 @@ class _GridView extends StatelessWidget {
     required this.onMore,
     required this.onSelect,
     required this.onToggle,
+    required this.onMarqueeSelectionChanged,
     required this.canUpload,
     required this.canDelete,
     required this.canDownload,
@@ -1555,6 +1828,7 @@ class _GridView extends StatelessWidget {
   final ValueChanged<FileItem> onMore;
   final ValueChanged<FileItem> onSelect;
   final ValueChanged<FileItem> onToggle;
+  final ValueChanged<Set<String>> onMarqueeSelectionChanged;
   final bool canUpload;
   final bool canDelete;
   final bool canDownload;
@@ -1567,174 +1841,385 @@ class _GridView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GridView.builder(
-      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: desktop ? 190 : 180,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: desktop ? 0.92 : 0.86,
-      ),
-      itemCount: items.length,
-      itemBuilder: (context, index) {
-        final item = items[index];
-        final selected = multiSelecting
-            ? selectedPaths.contains(item.path)
-            : item.path == selectedPath;
-        final scheme = Theme.of(context).colorScheme;
+    return _DesktopMarqueeSelection(
+      enabled: desktop && defaultTargetPlatform == TargetPlatform.macOS,
+      items: items,
+      selectedPaths: selectedPaths,
+      onSelectionChanged: onMarqueeSelectionChanged,
+      childBuilder: (context, itemKeys, marqueeSelecting, onItemPointerDown) =>
+          GridView.builder(
+        gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: desktop ? 190 : 180,
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+          childAspectRatio: desktop ? 0.92 : 0.86,
+        ),
+        itemCount: items.length,
+        itemBuilder: (context, index) {
+          final item = items[index];
+          final selected = selectedPaths.isNotEmpty
+              ? selectedPaths.contains(item.path)
+              : item.path == selectedPath;
+          final scheme = Theme.of(context).colorScheme;
 
-        if (!desktop) {
-          return Material(
-            color: selected
-                ? scheme.primary.withValues(alpha: 0.08)
-                : scheme.surface,
-            borderRadius: BorderRadius.circular(18),
-            child: InkWell(
+          if (!desktop) {
+            return Material(
+              color: selected
+                  ? scheme.primary.withValues(alpha: 0.08)
+                  : scheme.surface,
               borderRadius: BorderRadius.circular(18),
-              onTap: () {
-                onSelect(item);
-                if (!multiSelecting) onOpen(item);
-              },
-              onLongPress: () => onToggle(item),
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: selected ? scheme.primary : scheme.outlineVariant,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(18),
+                onTap: () {
+                  onSelect(item);
+                  if (!multiSelecting) onOpen(item);
+                },
+                onLongPress: () => onToggle(item),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: selected ? scheme.primary : scheme.outlineVariant,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      Expanded(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(14),
+                            color: scheme.surfaceContainerHighest,
+                          ),
+                          child: FileTypeThumbnail(
+                            item: item,
+                            height: double.infinity,
+                            loader: thumbnailLoader,
+                            cacheNamespace: thumbnailCacheNamespace,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      if (multiSelecting)
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: Checkbox(
+                            value: selected,
+                            onChanged: (_) => onToggle(item),
+                          ),
+                        ),
+                      if (renamingPath == item.path)
+                        _InlineRenameField(
+                          item: item,
+                          onSubmit: onRenameSubmit,
+                          onCancel: onRenameCancel,
+                        )
+                      else
+                        Text(
+                          item.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                      const SizedBox(height: 2),
+                      Text(
+                        item.typeLabel,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                      ),
+                    ],
                   ),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    Expanded(
-                      child: DecoratedBox(
+              ),
+            );
+          }
+
+          return Listener(
+            onPointerDown: (event) => onItemPointerDown(event.pointer),
+            child: Material(
+              key: itemKeys[index],
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              child: GestureDetector(
+                onSecondaryTapDown: (details) => _showDesktopItemMenu(
+                  context: context,
+                  position: details.globalPosition,
+                  item: item,
+                  canDownload: canDownload,
+                  canRename: canUpload || canDelete,
+                  canDelete: canDelete,
+                  onOpen: () => onOpen(item),
+                  onPreview: () => onOpen(item),
+                  onDownload: () => onDownload(item),
+                  onRename: () => onRename(item),
+                  onDelete: () => onDelete(item),
+                ),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () => onSelect(item),
+                  onDoubleTap: () => onOpen(item),
+                  child: Stack(
+                    children: <Widget>[
+                      Container(
+                        padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(14),
-                          color: scheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                              color: selected
+                                  ? CupertinoDesktopTokens.blue
+                                  : CupertinoDesktopTokens.line),
                         ),
-                        child: FileTypeThumbnail(
-                          item: item,
-                          height: double.infinity,
-                          loader: thumbnailLoader,
-                          cacheNamespace: thumbnailCacheNamespace,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: <Widget>[
+                            Expanded(
+                                child: FileTypeThumbnail(
+                                    item: item,
+                                    height: double.infinity,
+                                    loader: thumbnailLoader,
+                                    cacheNamespace: thumbnailCacheNamespace)),
+                            const SizedBox(height: 8),
+                            if (renamingPath == item.path)
+                              _InlineRenameField(
+                                item: item,
+                                onSubmit: onRenameSubmit,
+                                onCancel: onRenameCancel,
+                              )
+                            else
+                              Text(item.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: CupertinoDesktopTokens.ink)),
+                          ],
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 10),
-                    if (multiSelecting)
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: Checkbox(
-                          value: selected,
-                          onChanged: (_) => onToggle(item),
-                        ),
-                      ),
-                    if (renamingPath == item.path)
-                      _InlineRenameField(
-                        item: item,
-                        onSubmit: onRenameSubmit,
-                        onCancel: onRenameCancel,
-                      )
-                    else
-                      Text(
-                        item.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                    const SizedBox(height: 2),
-                    Text(
-                      item.typeLabel,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
+                      if (multiSelecting)
+                        Positioned(
+                          top: 4,
+                          left: 4,
+                          child: _HoverCheckbox(
+                            value: selected,
+                            onChanged: () => onToggle(item),
                           ),
-                    ),
-                  ],
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),
           );
-        }
-
-        return Material(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          child: GestureDetector(
-            onSecondaryTapDown: (details) => _showDesktopItemMenu(
-              context: context,
-              position: details.globalPosition,
-              item: item,
-              canDownload: canDownload,
-              canRename: canUpload || canDelete,
-              canDelete: canDelete,
-              onOpen: () => onOpen(item),
-              onPreview: () => onOpen(item),
-              onDownload: () => onDownload(item),
-              onRename: () => onRename(item),
-              onDelete: () => onDelete(item),
-            ),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(16),
-              onTap: () => onSelect(item),
-              onDoubleTap: () => onOpen(item),
-              child: Stack(
-                children: <Widget>[
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                          color: selected
-                              ? CupertinoDesktopTokens.blue
-                              : CupertinoDesktopTokens.line),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: <Widget>[
-                        Expanded(
-                            child: FileTypeThumbnail(
-                                item: item,
-                                height: double.infinity,
-                                loader: thumbnailLoader,
-                                cacheNamespace: thumbnailCacheNamespace)),
-                        const SizedBox(height: 8),
-                        if (renamingPath == item.path)
-                          _InlineRenameField(
-                            item: item,
-                            onSubmit: onRenameSubmit,
-                            onCancel: onRenameCancel,
-                          )
-                        else
-                          Text(item.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: CupertinoDesktopTokens.ink)),
-                      ],
-                    ),
-                  ),
-                  Positioned(
-                    top: 4,
-                    left: 4,
-                    child: _HoverCheckbox(
-                        value: selected, onChanged: () => onToggle(item)),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
+        },
+      ),
     );
   }
 }
 
+/// 桌面端在文件区域拖拽时绘制选框，并将与选框相交的可见条目交给
+/// 既有的多选状态管理。普通点击不会越过拖拽阈值，因此不影响单击、双击。
+class _DesktopMarqueeSelection extends StatefulWidget {
+  const _DesktopMarqueeSelection({
+    required this.enabled,
+    required this.items,
+    required this.selectedPaths,
+    required this.onSelectionChanged,
+    required this.childBuilder,
+  });
+
+  final bool enabled;
+  final List<FileItem> items;
+  final Set<String> selectedPaths;
+  final ValueChanged<Set<String>> onSelectionChanged;
+  final Widget Function(
+    BuildContext context,
+    List<GlobalKey> itemKeys,
+    bool marqueeSelecting,
+    ValueChanged<int> onItemPointerDown,
+  ) childBuilder;
+
+  @override
+  State<_DesktopMarqueeSelection> createState() =>
+      _DesktopMarqueeSelectionState();
+}
+
+class _DesktopMarqueeSelectionState extends State<_DesktopMarqueeSelection> {
+  final GlobalKey _selectionAreaKey = GlobalKey();
+  final Map<String, GlobalKey> _itemKeysByPath = <String, GlobalKey>{};
+  Offset? _startPosition;
+  Offset? _currentPosition;
+  int? _activePointer;
+  Offset? _pendingStartPosition;
+  final Set<int> _itemPointers = <int>{};
+  Set<String> _initialPaths = <String>{};
+
+  List<GlobalKey> get _itemKeys => widget.items
+      .map((item) => _itemKeysByPath.putIfAbsent(item.path, GlobalKey.new))
+      .toList(growable: false);
+
+  void _onPointerDown(PointerDownEvent event) {
+    if (!widget.enabled ||
+        event.kind != PointerDeviceKind.mouse ||
+        event.buttons & kPrimaryButton == 0) {
+      return;
+    }
+    _activePointer = event.pointer;
+    _pendingStartPosition = event.localPosition;
+  }
+
+  void _recordItemPointerDown(int pointer) {
+    _itemPointers.add(pointer);
+  }
+
+  void _onPointerMove(PointerMoveEvent event) {
+    if (_activePointer != event.pointer) return;
+    final pendingStart = _pendingStartPosition;
+    if (_startPosition == null && pendingStart != null) {
+      if ((event.localPosition - pendingStart).distance < kTouchSlop) return;
+      _startSelection(pendingStart);
+    }
+    _updateSelection(event.localPosition);
+  }
+
+  void _startSelection(Offset position) {
+    if (!widget.enabled) return;
+    final preserveSelection = HardwareKeyboard.instance.isMetaPressed ||
+        HardwareKeyboard.instance.isControlPressed;
+    setState(() {
+      _startPosition = position;
+      _currentPosition = position;
+      _initialPaths = preserveSelection
+          ? Set<String>.from(widget.selectedPaths)
+          : <String>{};
+    });
+    _updateSelection(position);
+  }
+
+  void _updateSelection(Offset position) {
+    setState(() => _currentPosition = position);
+    final start = _startPosition;
+    final current = _currentPosition;
+    final selectionArea =
+        _selectionAreaKey.currentContext?.findRenderObject() as RenderBox?;
+    if (start == null || current == null || selectionArea == null) return;
+
+    final globalOrigin = selectionArea.localToGlobal(Offset.zero);
+    final selection = Rect.fromPoints(
+      globalOrigin + start,
+      globalOrigin + current,
+    );
+    final paths = <String>{..._initialPaths};
+    for (final item in widget.items) {
+      final itemBox = _itemKeysByPath[item.path]
+          ?.currentContext
+          ?.findRenderObject() as RenderBox?;
+      if (itemBox == null || !itemBox.attached) continue;
+      final itemOrigin = itemBox.localToGlobal(Offset.zero);
+      if (selection.overlaps(itemOrigin & itemBox.size)) {
+        paths.add(item.path);
+      }
+    }
+    if (!_samePaths(paths, widget.selectedPaths)) {
+      widget.onSelectionChanged(paths);
+    }
+  }
+
+  void _finishSelection([PointerEvent? event]) {
+    if (event != null && _activePointer != event.pointer) return;
+    final startedOnItem = event != null && _itemPointers.remove(event.pointer);
+    if (event != null && _startPosition == null && !startedOnItem) {
+      widget.onSelectionChanged(<String>{});
+    }
+    _activePointer = null;
+    _pendingStartPosition = null;
+    if (_startPosition == null) return;
+    setState(() {
+      _startPosition = null;
+      _currentPosition = null;
+    });
+  }
+
+  bool _samePaths(Set<String> left, Set<String> right) =>
+      left.length == right.length && left.containsAll(right);
+
+  @override
+  Widget build(BuildContext context) {
+    final start = _startPosition;
+    final current = _currentPosition;
+    if (!widget.enabled) {
+      return widget.childBuilder(
+        context,
+        _itemKeys,
+        false,
+        _recordItemPointerDown,
+      );
+    }
+    final child = widget.childBuilder(
+      context,
+      _itemKeys,
+      start != null,
+      _recordItemPointerDown,
+    );
+    return Listener(
+      behavior: HitTestBehavior.deferToChild,
+      onPointerDown: widget.enabled ? _onPointerDown : null,
+      onPointerMove: widget.enabled ? _onPointerMove : null,
+      onPointerUp: widget.enabled ? _finishSelection : null,
+      onPointerCancel: widget.enabled ? _finishSelection : null,
+      child: Stack(
+        key: _selectionAreaKey,
+        fit: StackFit.expand,
+        children: <Widget>[
+          child,
+          if (start != null && current != null)
+            IgnorePointer(
+              child: CustomPaint(
+                painter: _SelectionRectanglePainter(
+                  Rect.fromPoints(start, current),
+                  Theme.of(context).colorScheme.primary,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SelectionRectanglePainter extends CustomPainter {
+  const _SelectionRectanglePainter(this.rect, this.color);
+
+  final Rect rect;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      rect,
+      Paint()..color = color.withValues(alpha: 0.14),
+    );
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _SelectionRectanglePainter oldDelegate) =>
+      oldDelegate.rect != rect || oldDelegate.color != color;
+}
+
 class _DetailPanel extends StatelessWidget {
-  const _DetailPanel({required this.item});
+  const _DetailPanel({required this.item, this.directorySize});
 
   final FileItem? item;
+  final DirectorySizeState? directorySize;
 
   @override
   Widget build(BuildContext context) {
@@ -1799,7 +2284,7 @@ class _DetailPanel extends StatelessWidget {
                       _kv(
                         '大小',
                         item!.isDirectory
-                            ? '—'
+                            ? _directorySizeLabel(directorySize)
                             : FileSizeFormatter.format(item!.size ?? 0),
                       ),
                       _kv('路径', controller.displayPath(item!.path)),
@@ -1855,6 +2340,12 @@ class _DetailPanel extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  String _directorySizeLabel(DirectorySizeState? state) {
+    if (state == null || state.isLoading) return '正在计算…';
+    if (state.size == null) return '暂无法获取';
+    return FileSizeFormatter.format(state.size!);
   }
 
   String _formatTime(DateTime d) {
@@ -2036,7 +2527,7 @@ Future<void> _showDesktopItemMenu({
         icon: item.isDirectory ? Icons.folder_open_outlined : Icons.open_in_new,
         label: item.isDirectory ? '打开' : '预览 / 打开',
       ),
-      if (!item.isDirectory && canDownload)
+      if (canDownload)
         _desktopContextMenuItem(
           value: _DesktopItemAction.download,
           icon: Icons.download_outlined,

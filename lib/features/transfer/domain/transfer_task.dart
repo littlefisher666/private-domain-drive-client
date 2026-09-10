@@ -73,4 +73,60 @@ class TransferTask {
       error: error ?? this.error,
     );
   }
+
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      'id': id,
+      'name': name,
+      'type': type.name,
+      'status': status.name,
+      'progress': progress,
+      'message': message,
+      'target': target,
+      'sourcePath': sourcePath,
+      'batchId': batchId,
+      'transferredBytes': transferredBytes,
+      'totalBytes': totalBytes,
+      'bytesPerSecond': bytesPerSecond,
+      'error': error,
+    };
+  }
+
+  static TransferTask? fromJson(Map<String, Object?> json) {
+    final id = json['id'];
+    final name = json['name'];
+    final type = _enumValue(TransferTaskType.values, json['type']);
+    final status = _enumValue(TransferTaskStatus.values, json['status']);
+    final progress = json['progress'];
+    if (id is! String ||
+        name is! String ||
+        type == null ||
+        status == null ||
+        progress is! num) {
+      return null;
+    }
+    return TransferTask(
+      id: id,
+      name: name,
+      type: type,
+      status: status,
+      progress: progress.toDouble(),
+      message: json['message'] as String?,
+      target: json['target'] as String?,
+      sourcePath: json['sourcePath'] as String?,
+      batchId: json['batchId'] as String?,
+      transferredBytes: (json['transferredBytes'] as num?)?.toInt() ?? 0,
+      totalBytes: (json['totalBytes'] as num?)?.toInt(),
+      bytesPerSecond: (json['bytesPerSecond'] as num?)?.toDouble(),
+      error: json['error'] as String?,
+    );
+  }
+
+  static T? _enumValue<T extends Enum>(Iterable<T> values, Object? value) {
+    if (value is! String) return null;
+    for (final item in values) {
+      if (item.name == value) return item;
+    }
+    return null;
+  }
 }

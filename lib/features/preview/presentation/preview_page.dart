@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../../../core/utils/download_directory.dart';
 import '../../../shared/state/app_scope.dart';
 import '../../../shared/widgets/app_feedback.dart';
 import '../../workspace/domain/file_item.dart';
@@ -43,7 +43,8 @@ class PreviewPage extends StatelessWidget {
             Text(args.fileName, style: theme.textTheme.titleMedium),
             Text(
               controller.displayPath(args.filePath),
-              style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ],
         ),
@@ -53,8 +54,7 @@ class PreviewPage extends StatelessWidget {
               tooltip: '下载',
               onPressed: () async {
                 try {
-                  final directory =
-                      await FilePicker.getDirectoryPath();
+                  final directory = await selectDownloadDirectory();
                   if (directory == null) return;
                   controller.enqueueDownload(
                     FileItem(
@@ -174,7 +174,8 @@ class _PreviewBody extends StatelessWidget {
                   borderRadius: BorderRadius.circular(18),
                 ),
                 child: SingleChildScrollView(
-                  child: SelectableText(textContent, style: theme.textTheme.bodyLarge),
+                  child: SelectableText(textContent,
+                      style: theme.textTheme.bodyLarge),
                 ),
               ),
             ),
@@ -192,7 +193,8 @@ class _PreviewBody extends StatelessWidget {
               Text(
                 '文件：$fileName\n当前类型仅支持下载。',
                 textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: scheme.onSurfaceVariant),
               ),
             ],
           ),
