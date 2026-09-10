@@ -15,6 +15,7 @@ class OssClient {
       : _native = native ?? PrivateDomainOss();
 
   final PrivateDomainOss _native;
+  final Set<String> _reportedErrorSignatures = <String>{};
   String? _configuredSession;
 
   Future<void> configureSession(UserSession session) =>
@@ -300,9 +301,19 @@ class OssClient {
       final nativeErrorType =
           details is Map ? details['nativeErrorType'] : null;
       final statusCode = details is Map ? details['statusCode'] : null;
-      debugPrint(
-        'OSS 请求失败：${error.code}（ossCode: ${ossCode ?? '-'}，sdkCode: ${sdkCode ?? '-'}，bridgeCode: ${bridgeCode ?? '-'}，nativeType: ${nativeErrorType ?? '-'}，状态码: ${statusCode ?? '-'}）',
-      );
+      final errorSignature = <Object?>[
+        error.code,
+        ossCode,
+        sdkCode,
+        bridgeCode,
+        nativeErrorType,
+        statusCode,
+      ].join('|');
+      if (kDebugMode && _reportedErrorSignatures.add(errorSignature)) {
+        debugPrint(
+          'OSS 请求失败：${error.code}（ossCode: ${ossCode ?? '-'}，sdkCode: ${sdkCode ?? '-'}，bridgeCode: ${bridgeCode ?? '-'}，nativeType: ${nativeErrorType ?? '-'}，状态码: ${statusCode ?? '-'}）',
+        );
+      }
       const messages = <String, String>{
         'credentialExpired': 'OSS 临时凭证已过期',
         'accessDenied': '没有权限执行该 OSS 操作',
