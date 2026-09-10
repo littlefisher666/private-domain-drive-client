@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:file_picker_platform_interface/file_picker_platform_interface.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -25,29 +26,23 @@ void main() {
     const FileItem(path: 'shared/c.txt', name: 'c.txt', isDirectory: false),
   ];
 
-  testWidgets('桌面列表支持多选、复选框切换、范围选择与退出', (tester) async {
+  testWidgets('桌面表头与条目复选框支持多选、范围选择和清空', (tester) async {
     final controller = await _pumpWorkspace(tester, items);
 
-    // 未进入多选时不显示复选框。
-    expect(find.byType(Checkbox), findsNothing);
+    expect(find.text('已全部加载，共 3 项'), findsOneWidget);
+    expect(find.byType(Checkbox), findsNWidgets(4));
 
-    await tester.tap(find.text('选择'));
-    await tester.pumpAndSettle();
-    expect(controller.isMultiSelectionMode, isTrue);
-    expect(find.text('已选 0 项'), findsOneWidget);
-    expect(find.byType(Checkbox), findsNWidgets(3));
-
-    // 点击行切换选中。
-    await tester.tap(find.text('b.txt'));
+    // 点击条目复选框直接开始选择。
+    await tester.tap(find.byType(Checkbox).at(2));
     await tester.pumpAndSettle();
     expect(find.text('已选 1 项'), findsOneWidget);
     expect(controller.multiSelectedPaths, <String>{'shared/b.txt'});
 
     // Shift + 点击做范围选择。
-    await tester.tap(find.text('a.txt'));
+    await tester.tap(find.byType(Checkbox).at(1));
     await tester.pumpAndSettle();
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
-    await tester.tap(find.text('c.txt'));
+    await tester.tap(find.byType(Checkbox).at(3));
     await tester.pumpAndSettle();
     await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
     expect(controller.multiSelectedPaths, <String>{
@@ -57,18 +52,15 @@ void main() {
     });
     expect(find.text('已选 3 项'), findsOneWidget);
 
-    // 退出选择后恢复普通浏览。
-    await tester.tap(find.text('退出选择'));
+    // 点击已全选表头复选框清空选择。
+    await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
     expect(controller.isMultiSelectionMode, isFalse);
-    expect(find.byType(Checkbox), findsNothing);
+    expect(find.text('已全部加载，共 3 项'), findsOneWidget);
   });
 
-  testWidgets('桌面支持 Cmd+A 全选与全选按钮', (tester) async {
+  testWidgets('桌面支持 Cmd+A 与表头三态全选', (tester) async {
     final controller = await _pumpWorkspace(tester, items);
-
-    await tester.tap(find.text('选择'));
-    await tester.pumpAndSettle();
 
     // Cmd+A 触发全选。
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
@@ -79,8 +71,34 @@ void main() {
     expect(controller.multiSelectedPaths.length, 3);
     expect(find.text('已选 3 项'), findsOneWidget);
 
-    // 工具栏全选按钮在已全选时变为重新全选。
-    expect(find.text('重新全选'), findsOneWidget);
+    // 表头维持全选状态，点击后清空。
+    await tester.tap(find.byType(Checkbox).first);
+    await tester.pumpAndSettle();
+    expect(controller.multiSelectedPaths, isEmpty);
+  });
+
+  testWidgets('桌面列表普通浏览时双击文件夹可进入目录', (tester) async {
+    const directory = FileItem(
+      path: 'shared/资料/',
+      name: '资料',
+      isDirectory: true,
+    );
+    final oss = _FakeOssClient()
+      ..itemsByPath['shared/'] = const <FileItem>[directory]
+      ..itemsByPath['shared/资料/'] = const <FileItem>[];
+    final controller = await _pumpWorkspace(
+      tester,
+      const <FileItem>[directory],
+      oss: oss,
+    );
+
+    final itemName = find.text('资料').first;
+    await tester.tap(itemName);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(itemName);
+    await tester.pumpAndSettle();
+
+    expect(controller.currentPath, 'shared/资料/');
   });
 
   testWidgets('移动端长按列表可进入多选并支持点击切换', (tester) async {
@@ -102,11 +120,11 @@ void main() {
     expect(controller.multiSelectedPaths,
         <String>{'shared/a.txt', 'shared/b.txt'});
 
-    await tester.tap(find.text('全选'));
+    await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
     expect(find.text('已选 3 项'), findsOneWidget);
 
-    await tester.tap(find.text('退出选择'));
+    await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
     expect(controller.isMultiSelectionMode, isFalse);
   });
@@ -114,9 +132,9 @@ void main() {
   testWidgets('批量下载展开文件夹入队并提示保留结构', (tester) async {
     final directory = await Directory.systemTemp.createTemp('pdd-batch-ui-');
     addTearDown(() => directory.delete(recursive: true));
-    final originalPicker = FilePicker.platform;
-    addTearDown(() => FilePicker.platform = originalPicker);
-    FilePicker.platform = _FakeFilePicker(directory.path);
+    final originalPicker = FilePickerPlatform.instance;
+    addTearDown(() => FilePickerPlatform.instance = originalPicker);
+    FilePickerPlatform.instance = _FakeFilePicker(directory.path);
 
     final oss = _FakeOssClient()
       ..itemsByPath['shared/'] = <FileItem>[
@@ -128,8 +146,8 @@ void main() {
         'shared/资料/a.txt',
         'shared/资料/子目录/b.txt',
       ];
-    final controller = await _pumpWorkspace(tester,
-        <FileItem>[oss.itemsByPath['shared/']!.first, items.first],
+    final controller = await _pumpWorkspace(
+        tester, <FileItem>[oss.itemsByPath['shared/']!.first, items.first],
         oss: oss);
 
     await tester.tap(find.text('选择'));
@@ -155,9 +173,9 @@ void main() {
   testWidgets('批量下载空文件夹时提示没有可下载文件', (tester) async {
     final directory = await Directory.systemTemp.createTemp('pdd-empty-ui-');
     addTearDown(() => directory.delete(recursive: true));
-    final originalPicker = FilePicker.platform;
-    addTearDown(() => FilePicker.platform = originalPicker);
-    FilePicker.platform = _FakeFilePicker(directory.path);
+    final originalPicker = FilePickerPlatform.instance;
+    addTearDown(() => FilePickerPlatform.instance = originalPicker);
+    FilePickerPlatform.instance = _FakeFilePicker(directory.path);
 
     final oss = _FakeOssClient()
       ..itemsByPath['shared/'] = <FileItem>[
@@ -250,8 +268,7 @@ void main() {
     final retryDialog = find.byType(AlertDialog);
     expect(retryDialog, findsOneWidget);
     expect(
-      find.descendant(
-          of: retryDialog, matching: find.text('部分删除失败')),
+      find.descendant(of: retryDialog, matching: find.text('部分删除失败')),
       findsOneWidget,
     );
     expect(
@@ -260,8 +277,8 @@ void main() {
       findsOneWidget,
     );
 
-    await tester.tap(
-        find.descendant(of: retryDialog, matching: find.text('重试失败项')));
+    await tester
+        .tap(find.descendant(of: retryDialog, matching: find.text('重试失败项')));
     await tester.pumpAndSettle();
 
     expect(oss.deleteManyCalls, 2);
@@ -278,7 +295,8 @@ Future<AppController> _pumpWorkspace(
 }) async {
   final controller = AppController(
     sessionRepository: _FakeSessionRepository(_session()),
-    ossClient: oss ?? _FakeOssClient()..itemsByPath['shared/'] = files,
+    ossClient: oss ?? _FakeOssClient()
+      ..itemsByPath['shared/'] = files,
   );
   await controller.bootstrap();
   await tester.pumpWidget(
@@ -336,7 +354,7 @@ class _FakeSessionRepository implements SessionRepository {
   Future<UserSession?> restore() async => session;
 }
 
-class _FakeFilePicker implements FilePicker {
+class _FakeFilePicker extends FilePickerPlatform {
   _FakeFilePicker(this.directoryPath);
 
   final String? directoryPath;
@@ -344,8 +362,11 @@ class _FakeFilePicker implements FilePicker {
   @override
   Future<String?> getDirectoryPath({
     String? dialogTitle,
-    bool lockParentWindow = false,
     String? initialDirectory,
+    AndroidOptions androidOptions = const AndroidOptions(),
+    WindowsOptions windowsOptions = const WindowsOptions(),
+    LinuxOptions linuxOptions = const LinuxOptions(),
+    WebOptions webOptions = const WebOptions(),
   }) async =>
       directoryPath;
 
@@ -365,8 +386,8 @@ class _FakeOssClient extends OssClient {
 
   @override
   Future<List<String>> listAllObjectKeys(String path, UserSession session) =>
-      Future<void>.value().then(
-          (_) => objectKeysByPath[path] ?? const <String>[]);
+      Future<void>.value()
+          .then((_) => objectKeysByPath[path] ?? const <String>[]);
 
   @override
   Future<BatchDeleteResult> deleteMany(
@@ -393,6 +414,7 @@ class _FakeOssClient extends OssClient {
     String path,
     UserSession session,
     File target, {
+    required String taskId,
     required void Function(int receivedBytes, int? totalBytes) onProgress,
     required bool Function() isCanceled,
   }) async {
@@ -400,4 +422,13 @@ class _FakeOssClient extends OssClient {
     await target.writeAsBytes(<int>[1], flush: true);
     onProgress(1, 1);
   }
+
+  @override
+  Future<void> configureSession(UserSession session) async {}
+
+  @override
+  Future<void> clearConfiguration() async {}
+
+  @override
+  Future<void> cancelTransfer(String taskId) async {}
 }

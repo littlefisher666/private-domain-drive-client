@@ -91,14 +91,7 @@ class _DesktopShell extends StatelessWidget {
       backgroundColor: CupertinoDesktopTokens.background,
       body: Column(
         children: <Widget>[
-          _DesktopTitleBar(
-            title: title,
-            showUpload: index == 0 && controller.capabilities.upload,
-            onUpload: () {
-              onSelect(0);
-              pickAndUploadFile(context);
-            },
-          ),
+          _DesktopTitleBar(title: title),
           Expanded(
             child: Row(
               children: <Widget>[
@@ -230,15 +223,9 @@ class _DesktopShell extends StatelessWidget {
 }
 
 class _DesktopTitleBar extends StatelessWidget {
-  const _DesktopTitleBar({
-    required this.title,
-    required this.showUpload,
-    required this.onUpload,
-  });
+  const _DesktopTitleBar({required this.title});
 
   final String title;
-  final bool showUpload;
-  final VoidCallback onUpload;
 
   @override
   Widget build(BuildContext context) {
@@ -263,18 +250,6 @@ class _DesktopTitleBar extends StatelessWidget {
                 fontWeight: FontWeight.w600,
                 color: Color(0xFF3A3A3C),
               ),
-            ),
-          ),
-          SizedBox(
-            width: 88,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: showUpload
-                  ? FilledButton(
-                      onPressed: onUpload,
-                      child: const Text('上传'),
-                    )
-                  : const SizedBox.shrink(),
             ),
           ),
         ],
@@ -312,11 +287,11 @@ class _BrandHeader extends StatelessWidget {
               ],
             ),
             child: const Text(
-              'PD',
+              'PDD',
               style: TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.w800,
-                fontSize: 13,
+                fontSize: 11,
               ),
             ),
           ),

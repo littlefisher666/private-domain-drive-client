@@ -94,9 +94,9 @@ class _LoginPageState extends State<LoginPage> {
                             ],
                           ),
                           child: const Text(
-                            'PD',
+                            'PDD',
                             style: TextStyle(
-                              fontSize: 22,
+                              fontSize: 20,
                               fontWeight: FontWeight.w800,
                               color: Colors.white,
                             ),

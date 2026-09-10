@@ -183,6 +183,7 @@ class AppController extends ChangeNotifier {
       );
     }).toList(growable: false);
   }
+
   List<ShareImportItem> get pendingShareItems =>
       List<ShareImportItem>.unmodifiable(_pendingShareItems);
   String get shareTargetPath => _shareTargetPath;
@@ -213,6 +214,9 @@ class AppController extends ChangeNotifier {
         _session = restored;
         _currentPath =
             restored.rootPrefix.isEmpty ? rootPrefix : restored.rootPrefix;
+        if (restored.isRemote && restored.credentials != null) {
+          await _ossClient.configureSession(restored);
+        }
       }
     } catch (_) {
       // Keep app usable even if secure storage restore fails.
@@ -233,6 +237,9 @@ class AppController extends ChangeNotifier {
       _session = session;
       _currentPath =
           session.rootPrefix.isEmpty ? rootPrefix : session.rootPrefix;
+      if (session.isRemote && session.credentials != null) {
+        await _ossClient.configureSession(session);
+      }
       selectedItemListenable.value = null;
       notifyListeners();
       return LoginResult.success(session);
@@ -244,31 +251,35 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    for (final taskId in _runningTransferIds) {
+      _canceledTransferIds.add(taskId);
+      unawaited(_ossClient.cancelTransfer(taskId));
+    }
+    await _ossClient.clearConfiguration();
     await _sessionRepository.logout();
     _session = null;
     _remoteDirectories.clear();
     selectedItemListenable.value = null;
     clearMultiSelection();
     _pendingShareItems = const <ShareImportItem>[];
-    for (final taskId in _runningTransferIds) {
-      _canceledTransferIds.add(taskId);
-    }
     _pendingTransferIds.clear();
     notifyListeners();
   }
 
-  Future<void> ensureFreshCredentials() async {
+  Future<void> ensureFreshCredentials({bool force = false}) async {
     final session = _session;
     if (session == null || !session.isRemote) {
       return;
     }
     final credentials = session.credentials;
-    if (credentials != null &&
+    if (!force &&
+        credentials != null &&
         credentials.isValid(skew: const Duration(minutes: 8))) {
       return;
     }
     final refreshed = await _sessionRepository.refreshCredentials(session);
     _session = refreshed;
+    await _ossClient.configureSession(refreshed);
     notifyListeners();
   }
 
@@ -298,6 +309,30 @@ class AppController extends ChangeNotifier {
       }
     }
     return items;
+  }
+
+  Future<List<int>> loadThumbnail(FileItem item) async {
+    if (item.isDirectory || item.kind != FileKind.image) {
+      throw StateError('只有图片文件支持缩略图');
+    }
+    final session = _requireSession();
+    await ensureFreshCredentials();
+    return _ossClient.downloadThumbnail(item.path, _session ?? session);
+  }
+
+  Future<List<int>> loadImagePreview(FileItem item) async {
+    if (item.isDirectory || item.kind != FileKind.image) {
+      throw StateError('只有图片文件支持在线预览');
+    }
+    final session = _requireSession();
+    await ensureFreshCredentials();
+    return _ossClient.downloadImagePreview(item.path, _session ?? session);
+  }
+
+  String get thumbnailCacheNamespace {
+    final session = _session;
+    final bucket = session?.ossConfig?.bucket ?? '';
+    return '$bucket|${session?.userId ?? ''}';
   }
 
   void setCurrentPath(String path) {
@@ -338,26 +373,35 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void toggleMultiSelection(FileItem item, {List<FileItem>? visibleItems, bool range = false}) {
+  void toggleMultiSelection(FileItem item,
+      {List<FileItem>? visibleItems, bool range = false}) {
     if (!_isMultiSelectionMode) {
       enterMultiSelection(item);
       return;
     }
     final next = <String>{...multiSelectedPathsListenable.value};
     if (range && visibleItems != null && _selectionAnchorPath != null) {
-      final anchor = visibleItems.indexWhere((value) => value.path == _selectionAnchorPath);
-      final target = visibleItems.indexWhere((value) => value.path == item.path);
+      final anchor = visibleItems
+          .indexWhere((value) => value.path == _selectionAnchorPath);
+      final target =
+          visibleItems.indexWhere((value) => value.path == item.path);
       if (anchor >= 0 && target >= 0) {
         final start = anchor < target ? anchor : target;
         final end = anchor > target ? anchor : target;
-        next.addAll(visibleItems.sublist(start, end + 1).map((value) => value.path));
+        next.addAll(
+            visibleItems.sublist(start, end + 1).map((value) => value.path));
       }
     } else if (!next.add(item.path)) {
       next.remove(item.path);
     } else {
       _selectionAnchorPath = item.path;
     }
+    if (next.isEmpty) {
+      _isMultiSelectionMode = false;
+      _selectionAnchorPath = null;
+    }
     multiSelectedPathsListenable.value = Set<String>.unmodifiable(next);
+    notifyListeners();
   }
 
   void selectAllItems(Iterable<FileItem> items) {
@@ -524,9 +568,10 @@ class AppController extends ChangeNotifier {
     await _ossClient.delete(path, session);
   }
 
-  Future<void> uploadBytes(
+  Future<void> uploadFile(
       {required String fileName,
-      required List<int> bytes,
+      required String localPath,
+      required int fileSize,
       String? targetPath}) async {
     _ensureUploadCapability();
     final dir = _normalizeDir(targetPath ?? _currentPath);
@@ -539,14 +584,20 @@ class AppController extends ChangeNotifier {
         status: TransferTaskStatus.pending,
         progress: 0,
         target: displayPath(dir),
-        totalBytes: bytes.length,
+        sourcePath: localPath,
+        totalBytes: fileSize,
       ),
       _QueuedTransfer((report, isCanceled) async {
         if (isCanceled()) throw const TransferCanceledException();
         await ensureFreshCredentials();
-        await _ossClient.upload('$dir$fileName', bytes, _requireSession());
+        await _ossClient.uploadFile(
+          '$dir$fileName',
+          localPath,
+          _requireSession(),
+          taskId: taskId,
+          onProgress: report,
+        );
         if (isCanceled()) throw const TransferCanceledException();
-        report(bytes.length, bytes.length);
         _treeRevision++;
         notifyListeners();
       }),
@@ -593,19 +644,22 @@ class AppController extends ChangeNotifier {
       _QueuedTransfer((report, isCanceled) async {
         await ensureFreshCredentials();
         if (isCanceled()) throw const TransferCanceledException();
-        final destination = await _availableDownloadFile(targetDirectory, item.name);
+        final destination =
+            await _availableDownloadFile(targetDirectory, item.name);
         final temporary = File('${destination.path}.$taskId.part');
         try {
           await _ossClient.downloadToFile(
             item.path,
             _requireSession(),
             temporary,
+            taskId: taskId,
             onProgress: report,
             isCanceled: isCanceled,
           );
           if (isCanceled()) throw const TransferCanceledException();
           await temporary.rename(destination.path);
-          _replaceTask(taskId, (task) => task.copyWith(target: destination.path));
+          _replaceTask(
+              taskId, (task) => task.copyWith(target: destination.path));
         } catch (_) {
           if (await temporary.exists()) await temporary.delete();
           rethrow;
@@ -705,20 +759,24 @@ class AppController extends ChangeNotifier {
     }
     if (!_queuedTransfers.containsKey(taskId)) {
       // 兼容应用恢复前遗留或测试注入的任务；真实任务均有执行器。
-      _replaceTask(taskId, (value) => value.copyWith(
-            status: TransferTaskStatus.running,
-            progress: 0,
-            message: '重新开始',
-          ));
+      _replaceTask(
+          taskId,
+          (value) => value.copyWith(
+                status: TransferTaskStatus.running,
+                progress: 0,
+                message: '重新开始',
+              ));
       return;
     }
     _canceledTransferIds.remove(taskId);
-    _replaceTask(taskId, (value) => value.copyWith(
-      status: TransferTaskStatus.pending,
-      progress: 0,
-      transferredBytes: 0,
-      message: '重新开始',
-    ));
+    _replaceTask(
+        taskId,
+        (value) => value.copyWith(
+              status: TransferTaskStatus.pending,
+              progress: 0,
+              transferredBytes: 0,
+              message: '重新开始',
+            ));
     _pendingTransferIds.add(taskId);
     _drainTransferQueue();
   }
@@ -732,10 +790,15 @@ class AppController extends ChangeNotifier {
     }
     _pendingTransferIds.remove(taskId);
     _canceledTransferIds.add(taskId);
-    _replaceTask(taskId, (value) => value.copyWith(
-      status: TransferTaskStatus.canceled,
-      message: '已取消',
-    ));
+    if (task.status == TransferTaskStatus.running) {
+      unawaited(_ossClient.cancelTransfer(taskId));
+    }
+    _replaceTask(
+        taskId,
+        (value) => value.copyWith(
+              status: TransferTaskStatus.canceled,
+              message: '已取消',
+            ));
   }
 
   void cancelBatch(String batchId) {
@@ -822,48 +885,72 @@ class AppController extends ChangeNotifier {
   Future<void> _runTransfer(String taskId) async {
     final queued = _queuedTransfers[taskId];
     if (queued == null) return;
-    _replaceTask(taskId, (task) => task.copyWith(
-          status: TransferTaskStatus.running,
-          message: '进行中',
-        ));
+    _replaceTask(
+        taskId,
+        (task) => task.copyWith(
+              status: TransferTaskStatus.running,
+              message: '进行中',
+            ));
+    final speedTracker = _TransferSpeedTracker();
+    var lastUiUpdate = Duration.zero;
     try {
       await queued.run(
         (received, total) {
+          final now = speedTracker.elapsed;
+          final isFinalBytes = total != null && total > 0 && received >= total;
+          final speed = speedTracker.update(received);
+          if (!isFinalBytes &&
+              now - lastUiUpdate < const Duration(milliseconds: 100)) {
+            return;
+          }
+          lastUiUpdate = now;
           final progress = total == null || total == 0
               ? 0.0
               : (received / total).clamp(0.0, 1.0);
-          _replaceTask(taskId, (task) => task.copyWith(
-                progress: progress,
-                transferredBytes: received,
-                totalBytes: total,
-                message: '进行中 · ${(progress * 100).round()}%',
-              ));
+          _replaceTask(
+              taskId,
+              (task) => task.copyWith(
+                    progress: progress,
+                    transferredBytes: received,
+                    totalBytes: total,
+                    bytesPerSecond: speed,
+                    message: isFinalBytes ? '正在确认' : '进行中',
+                  ));
         },
         () => _canceledTransferIds.contains(taskId),
       );
       if (_canceledTransferIds.contains(taskId)) {
-        _replaceTask(taskId, (task) => task.copyWith(
-              status: TransferTaskStatus.canceled,
-              message: '已取消',
-            ));
+        _replaceTask(
+            taskId,
+            (task) => task.copyWith(
+                  status: TransferTaskStatus.canceled,
+                  message: '已取消',
+                ));
       } else {
-        _replaceTask(taskId, (task) => task.copyWith(
-              status: TransferTaskStatus.success,
-              progress: 1,
-              message: '已完成',
-            ));
+        _replaceTask(
+            taskId,
+            (task) => task.copyWith(
+                  status: TransferTaskStatus.success,
+                  progress: 1,
+                  bytesPerSecond: null,
+                  message: '已完成',
+                ));
       }
     } on TransferCanceledException {
-      _replaceTask(taskId, (task) => task.copyWith(
-            status: TransferTaskStatus.canceled,
-            message: '已取消',
-          ));
+      _replaceTask(
+          taskId,
+          (task) => task.copyWith(
+                status: TransferTaskStatus.canceled,
+                message: '已取消',
+              ));
     } catch (error) {
-      _replaceTask(taskId, (task) => task.copyWith(
-            status: TransferTaskStatus.failed,
-            message: '失败',
-            error: error.toString().replaceFirst('Bad state: ', ''),
-          ));
+      _replaceTask(
+          taskId,
+          (task) => task.copyWith(
+                status: TransferTaskStatus.failed,
+                message: '失败',
+                error: error.toString().replaceFirst('Bad state: ', ''),
+              ));
     } finally {
       _runningTransferIds.remove(taskId);
       _canceledTransferIds.remove(taskId);
@@ -901,7 +988,8 @@ class AppController extends ChangeNotifier {
     final relative = objectPath.startsWith(_currentPath)
         ? objectPath.substring(_currentPath.length)
         : objectPath;
-    final segments = relative.split('/').where((segment) => segment.isNotEmpty).toList();
+    final segments =
+        relative.split('/').where((segment) => segment.isNotEmpty).toList();
     if (segments.length < 2) return targetDirectory;
     return <String>[
       targetDirectory,
@@ -910,7 +998,8 @@ class AppController extends ChangeNotifier {
   }
 
   String _fileName(String path) {
-    final normalized = path.endsWith('/') ? path.substring(0, path.length - 1) : path;
+    final normalized =
+        path.endsWith('/') ? path.substring(0, path.length - 1) : path;
     final index = normalized.lastIndexOf('/');
     return index < 0 ? normalized : normalized.substring(index + 1);
   }
@@ -948,11 +1037,41 @@ class AppController extends ChangeNotifier {
   @override
   void dispose() {
     _canceledTransferIds.addAll(_runningTransferIds);
+    for (final taskId in _runningTransferIds) {
+      unawaited(_ossClient.cancelTransfer(taskId));
+    }
     selectedItemListenable.dispose();
     multiSelectedPathsListenable.dispose();
     tasksListenable.dispose();
     transferConcurrencyListenable.dispose();
     super.dispose();
+  }
+}
+
+class _TransferSpeedTracker {
+  final Stopwatch _watch = Stopwatch()..start();
+  final List<(Duration, int)> _samples = <(Duration, int)>[];
+  double? _previousSpeed;
+
+  Duration get elapsed => _watch.elapsed;
+
+  double? update(int bytes) {
+    final now = _watch.elapsed;
+    _samples.add((now, bytes));
+    final cutoff = now - const Duration(seconds: 2);
+    while (_samples.length > 2 && _samples[1].$1 < cutoff) {
+      _samples.removeAt(0);
+    }
+    final first = _samples.first;
+    final elapsedMicros = (now - first.$1).inMicroseconds;
+    if (elapsedMicros < const Duration(milliseconds: 500).inMicroseconds) {
+      return _previousSpeed;
+    }
+    final delta = bytes - first.$2;
+    if (delta < 0) return _previousSpeed;
+    final speed = delta * Duration.microsecondsPerSecond / elapsedMicros;
+    _previousSpeed = speed;
+    return speed;
   }
 }
 

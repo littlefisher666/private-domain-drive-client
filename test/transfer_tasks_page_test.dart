@@ -59,4 +59,25 @@ void main() {
     expect(controller.tasks.single.status, TransferTaskStatus.canceled);
     expect(find.text('已取消'), findsWidgets);
   });
+
+  testWidgets('进行中的任务展示传输大小和速度', (tester) async {
+    await pumpTasks(
+      tester,
+      const <TransferTask>[
+        TransferTask(
+          id: 'upload-1',
+          name: '归档.zip',
+          type: TransferTaskType.upload,
+          status: TransferTaskStatus.running,
+          progress: 0.5,
+          transferredBytes: 5 * 1024 * 1024,
+          totalBytes: 10 * 1024 * 1024,
+          bytesPerSecond: 2 * 1024 * 1024,
+          message: '进行中',
+        ),
+      ],
+    );
+
+    expect(find.text('5.0 MB / 10.0 MB · 2.0 MB/s'), findsOneWidget);
+  });
 }

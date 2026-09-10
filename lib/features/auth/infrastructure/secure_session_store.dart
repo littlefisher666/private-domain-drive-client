@@ -9,9 +9,7 @@ import '../domain/user_session.dart';
 class SecureSessionStore {
   SecureSessionStore({FlutterSecureStorage? storage})
       : _storage = storage ??
-            const FlutterSecureStorage(
-              aOptions: AndroidOptions(encryptedSharedPreferences: true),
-            );
+            const FlutterSecureStorage();
 
   static const _sessionKey = 'pdd.user_session.v1';
 
