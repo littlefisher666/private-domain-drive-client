@@ -73,10 +73,10 @@ class _SplashPageState extends State<SplashPage> {
                   ],
                 ),
                 child: const Text(
-                  'PD',
+                  'PDD',
                   style: TextStyle(
                     color: Colors.white,
-                    fontSize: 22,
+                    fontSize: 20,
                     fontWeight: FontWeight.w800,
                   ),
                 ),

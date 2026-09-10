@@ -145,18 +145,44 @@ class TransferTasksPage extends StatelessWidget {
 
   List<Color> _progressColors(TransferTaskStatus status) {
     return switch (status) {
-      TransferTaskStatus.failed => const <Color>[Color(0xFFFF9F0A), Color(0xFFFF3B30)],
-      TransferTaskStatus.success => const <Color>[Color(0xFF30D158), Color(0xFF34C759)],
+      TransferTaskStatus.failed => const <Color>[
+          Color(0xFFFF9F0A),
+          Color(0xFFFF3B30)
+        ],
+      TransferTaskStatus.success => const <Color>[
+          Color(0xFF30D158),
+          Color(0xFF34C759)
+        ],
       _ => const <Color>[Color(0xFF5AC8FA), Color(0xFF007AFF)],
     };
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  }
+
+  String? _transferDetails(TransferTask task) {
+    if (task.status != TransferTaskStatus.running) return null;
+    final total = task.totalBytes;
+    final amount = total == null
+        ? _formatBytes(task.transferredBytes)
+        : '${_formatBytes(task.transferredBytes)} / ${_formatBytes(total)}';
+    final speed = task.bytesPerSecond;
+    return speed == null || speed <= 0
+        ? amount
+        : '$amount · ${_formatBytes(speed.round())}/s';
   }
 
   @override
   Widget build(BuildContext context) {
     final controller = AppScope.read(context);
     final theme = Theme.of(context);
-    final desktop =
-        desktopChrome || MediaQuery.sizeOf(context).width >= 960;
+    final desktop = desktopChrome || MediaQuery.sizeOf(context).width >= 960;
 
     return ValueListenableBuilder<int>(
       valueListenable: controller.transferConcurrencyListenable,
@@ -182,7 +208,6 @@ class TransferTasksPage extends StatelessWidget {
     required ThemeData theme,
     required bool desktop,
   }) {
-
     if (desktop) {
       return ColoredBox(
         color: CupertinoDesktopTokens.surface,
@@ -239,7 +264,8 @@ class TransferTasksPage extends StatelessWidget {
                   ? const Center(
                       child: Text(
                         '暂无传输任务',
-                        style: TextStyle(color: CupertinoDesktopTokens.secondary),
+                        style:
+                            TextStyle(color: CupertinoDesktopTokens.secondary),
                       ),
                     )
                   : ListView.separated(
@@ -248,15 +274,19 @@ class TransferTasksPage extends StatelessWidget {
                       separatorBuilder: (_, __) => const SizedBox(height: 12),
                       itemBuilder: (context, index) {
                         final task = tasks[index];
-                        final progressLabel = '${(task.progress * 100).round()}%';
+                        final progressLabel =
+                            '${(task.progress * 100).round()}%';
+                        final transferDetails = _transferDetails(task);
                         final colors = _progressColors(task.status);
-                        final completed = task.status == TransferTaskStatus.success;
+                        final completed =
+                            task.status == TransferTaskStatus.success;
                         return Container(
                           padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
                           decoration: BoxDecoration(
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: CupertinoDesktopTokens.line),
+                            border:
+                                Border.all(color: CupertinoDesktopTokens.line),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -277,15 +307,14 @@ class TransferTasksPage extends StatelessWidget {
                                     _labelForStatus(task.status),
                                     style: TextStyle(
                                       fontSize: 12,
-                                      color: _colorForStatus(context, task.status),
+                                      color:
+                                          _colorForStatus(context, task.status),
                                       fontWeight: FontWeight.w600,
                                     ),
                                   ),
                                 ],
                               ),
-                              if (task.target != null) ...<
-                                Widget
-                              >[
+                              if (task.target != null) ...<Widget>[
                                 const SizedBox(height: 4),
                                 Text(
                                   task.target!,
@@ -308,7 +337,8 @@ class TransferTasksPage extends StatelessWidget {
                                             : const Color(0x29767680),
                                       ),
                                       FractionallySizedBox(
-                                        widthFactor: task.progress.clamp(0.0, 1.0),
+                                        widthFactor:
+                                            task.progress.clamp(0.0, 1.0),
                                         child: DecoratedBox(
                                           decoration: BoxDecoration(
                                             color: completed
@@ -316,7 +346,8 @@ class TransferTasksPage extends StatelessWidget {
                                                 : null,
                                             gradient: completed
                                                 ? null
-                                                : LinearGradient(colors: colors),
+                                                : LinearGradient(
+                                                    colors: colors),
                                           ),
                                         ),
                                       ),
@@ -335,6 +366,17 @@ class TransferTasksPage extends StatelessWidget {
                                     ),
                                   ),
                                   const Spacer(),
+                                  if (transferDetails != null)
+                                    Text(
+                                      transferDetails,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: CupertinoDesktopTokens.secondary,
+                                      ),
+                                    ),
+                                  if (transferDetails != null &&
+                                      task.message != null)
+                                    const SizedBox(width: 8),
                                   if (task.message != null)
                                     Text(
                                       task.message!,
@@ -450,11 +492,18 @@ class TransferTasksPage extends StatelessWidget {
                             borderRadius: BorderRadius.circular(14),
                             gradient: LinearGradient(
                               colors: task.type == TransferTaskType.upload
-                                  ? const <Color>[Color(0xFF5EEAD4), Color(0xFF0EA5A4)]
-                                  : const <Color>[Color(0xFF7DD3FC), Color(0xFF2563EB)],
+                                  ? const <Color>[
+                                      Color(0xFF5EEAD4),
+                                      Color(0xFF0EA5A4)
+                                    ]
+                                  : const <Color>[
+                                      Color(0xFF7DD3FC),
+                                      Color(0xFF2563EB)
+                                    ],
                             ),
                           ),
-                          child: Icon(_iconForType(task.type), color: const Color(0xFF031B1A)),
+                          child: Icon(_iconForType(task.type),
+                              color: const Color(0xFF031B1A)),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -493,11 +542,13 @@ class TransferTasksPage extends StatelessWidget {
                           ? CupertinoDesktopTokens.success
                           : null,
                       backgroundColor: task.status == TransferTaskStatus.success
-                          ? CupertinoDesktopTokens.success.withValues(alpha: 0.16)
+                          ? CupertinoDesktopTokens.success
+                              .withValues(alpha: 0.16)
                           : null,
                     ),
                     const SizedBox(height: 8),
-                    Text('$progressLabel${task.message == null ? '' : ' · ${task.message}'}'),
+                    Text(
+                        '$progressLabel${task.message == null ? '' : ' · ${task.message}'}'),
                     const SizedBox(height: 12),
                     Wrap(
                       spacing: 8,
@@ -507,19 +558,22 @@ class TransferTasksPage extends StatelessWidget {
                                   task.status == TransferTaskStatus.canceled
                               ? () {
                                   controller.retryTask(task.id);
-                                  AppFeedback.showSnack(context, '已重新开始 ${task.name}');
+                                  AppFeedback.showSnack(
+                                      context, '已重新开始 ${task.name}');
                                 }
                               : null,
                           child: const Text('重试'),
                         ),
                         OutlinedButton(
-                          onPressed: task.status == TransferTaskStatus.running ||
-                                  task.status == TransferTaskStatus.pending
-                              ? () {
-                                  controller.cancelTask(task.id);
-                                  AppFeedback.showSnack(context, '已取消 ${task.name}');
-                                }
-                              : null,
+                          onPressed:
+                              task.status == TransferTaskStatus.running ||
+                                      task.status == TransferTaskStatus.pending
+                                  ? () {
+                                      controller.cancelTask(task.id);
+                                      AppFeedback.showSnack(
+                                          context, '已取消 ${task.name}');
+                                    }
+                                  : null,
                           child: const Text('取消'),
                         ),
                       ],

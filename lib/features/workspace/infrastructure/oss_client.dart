@@ -1,114 +1,86 @@
-import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 
-import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
+import 'package:flutter/services.dart';
+import 'package:private_domain_oss/private_domain_oss.dart';
 
 import '../../../core/errors/app_error.dart';
 import '../../auth/domain/user_session.dart';
 import '../domain/file_item.dart';
 
-/// 使用 FC 下发的 STS 临时凭证直连 OSS，不经过 FC 中转文件内容。
+/// 统一 OSS 基础设施入口。所有对象协议均由当前平台的阿里云官方 SDK执行。
 class OssClient {
-  OssClient({http.Client? httpClient}) : _http = httpClient ?? http.Client();
+  OssClient({PrivateDomainOss? native})
+      : _native = native ?? PrivateDomainOss();
 
-  static const _multipartPartSize = 5 * 1024 * 1024;
+  final PrivateDomainOss _native;
+  String? _configuredSession;
 
-  final http.Client _http;
+  Future<void> configureSession(UserSession session) =>
+      _ensureConfigured(session);
 
   Future<List<FileItem>> list(String path, UserSession session) async {
-    final config = _config(session);
+    await _ensureConfigured(session);
     final prefix = _dir(path);
-    final response = await _request(
-      method: 'GET',
-      config: config,
-      credentials: session.credentials!,
-      query: <String, String>{'prefix': prefix, 'delimiter': '/'},
+    final page = await _platform(
+      () => _native.listObjects(prefix: prefix, delimiter: '/'),
     );
-    _log('ListObjects ${response.statusCode} ${response.request?.url}');
-    _check(response);
-    // OSS 的 XML 响应可能不声明 charset，http 默认解码会把中文解析成乱码；
-    // OSS 响应规范使用 UTF-8，因此统一从原始字节按 UTF-8 解码。
-    final xml = utf8.decode(response.bodyBytes, allowMalformed: true);
-    final items = <FileItem>[];
-    for (final value in _tags(xml, 'CommonPrefixes')) {
-      final key = _xmlValue(value, 'Prefix');
-      if (key.isEmpty || key == prefix) continue;
-      final name = key.substring(prefix.length).replaceFirst(RegExp(r'/$'), '');
-      items.add(FileItem(path: key, name: name, isDirectory: true));
-    }
-    for (final value in _tags(xml, 'Contents')) {
-      final key = _xmlValue(value, 'Key');
-      if (key.isEmpty || key == prefix) continue;
-      final name = key.substring(prefix.length);
-      if (name.contains('/')) continue;
-      final size = int.tryParse(_xmlValue(value, 'Size'));
-      // OSS 的 LastModified 使用 UTC（例如带 Z 的 ISO 8601 时间），列表展示应使用
-      // 设备本地时区；当前 macOS 为 Asia/Shanghai 时会显示东八区时间。
-      final modified =
-          DateTime.tryParse(_xmlValue(value, 'LastModified'))?.toLocal();
-      items.add(FileItem(
-          path: key,
-          name: name,
-          isDirectory: false,
-          size: size,
-          updatedAt: modified));
-    }
-    return items;
+    return <FileItem>[
+      for (final key in page.commonPrefixes)
+        if (key != prefix)
+          FileItem(
+            path: key,
+            name: key.substring(prefix.length).replaceFirst(RegExp(r'/$'), ''),
+            isDirectory: true,
+          ),
+      for (final object in page.objects)
+        if (object.key != prefix &&
+            !object.key.substring(prefix.length).contains('/'))
+          FileItem(
+            path: object.key,
+            name: object.key.substring(prefix.length),
+            isDirectory: false,
+            size: object.size,
+            updatedAt: object.lastModifiedMilliseconds == null
+                ? null
+                : DateTime.fromMillisecondsSinceEpoch(
+                    object.lastModifiedMilliseconds!,
+                    isUtc: true,
+                  ).toLocal(),
+          ),
+    ];
   }
 
   Future<void> createFolder(String path, UserSession session) async {
-    final config = _config(session);
-    final response = await _request(
-        method: 'PUT',
-        config: config,
-        credentials: session.credentials!,
-        objectKey: _dir(path),
-        body: const <int>[]);
-    _check(response);
+    await _ensureConfigured(session);
+    await _platform(() => _native.putEmptyObject(_dir(path)));
   }
 
   Future<void> delete(String path, UserSession session) async {
-    final config = _config(session);
-    final response = await _request(
-        method: 'DELETE',
-        config: config,
-        credentials: session.credentials!,
-        objectKey: path);
-    _check(response);
+    await _ensureConfigured(session);
+    await _platform(() => _native.deleteObject(path));
   }
 
-  /// 列出指定前缀下的全部对象键，供目录递归删除使用。
   Future<List<String>> listAllObjectKeys(
     String path,
     UserSession session,
   ) async {
-    final config = _config(session);
-    final prefix = _dir(path);
+    await _ensureConfigured(session);
     final keys = <String>[];
     String? marker;
     do {
-      final query = <String, String>{
-        'prefix': prefix,
-        'max-keys': '1000',
-        if (marker != null) 'marker': marker,
-      };
-      final response = await _request(
-        method: 'GET',
-        config: config,
-        credentials: session.credentials!,
-        query: query,
+      final page = await _platform(
+        () => _native.listObjects(
+          prefix: _dir(path),
+          marker: marker,
+          maxKeys: 1000,
+        ),
       );
-      _check(response);
-      final xml = utf8.decode(response.bodyBytes, allowMalformed: true);
-      keys.addAll(_tags(xml, 'Contents')
-          .map((value) => _xmlValue(value, 'Key'))
-          .where((key) => key.isNotEmpty));
-      final truncated = _xmlValue(xml, 'IsTruncated').toLowerCase() == 'true';
-      marker = truncated ? _xmlValue(xml, 'NextMarker') : null;
-      if (truncated && (marker == null || marker.isEmpty)) {
-        marker = keys.isEmpty ? null : keys.last;
+      keys.addAll(page.objects.map((object) => object.key));
+      marker = page.isTruncated ? page.nextMarker : null;
+      if (page.isTruncated && (marker == null || marker.isEmpty)) {
+        throw AppError('OSS 分页响应缺少下一页标识', code: 'OSS_INVALID_RESPONSE');
       }
     } while (marker != null && marker.isNotEmpty);
     return keys;
@@ -120,363 +92,238 @@ class OssClient {
   ) async {
     final requested = paths.toSet();
     if (requested.isEmpty) return const BatchDeleteResult();
-    final config = _config(session);
-    final body = utf8.encode(
-      '<Delete>'
-      '${requested.map((path) => '<Object><Key>${_escapeXml(path)}</Key></Object>').join()}'
-      '<Quiet>false</Quiet>'
-      '</Delete>',
-    );
-    final response = await _request(
-      method: 'POST',
-      config: config,
-      credentials: session.credentials!,
-      rawQuery: 'delete',
-      body: body,
-    );
-    _check(response);
-    final xml = utf8.decode(response.bodyBytes, allowMalformed: true);
-    final deleted = _tags(xml, 'Deleted')
-        .map((value) => _xmlValue(value, 'Key'))
-        .where((key) => key.isNotEmpty)
-        .toSet();
-    final failed = _tags(xml, 'Error')
-        .map((value) => _xmlValue(value, 'Key'))
-        .where((key) => key.isNotEmpty)
-        .toSet();
-    // 部分 OSS 配置在成功时可能省略 Deleted 明细；此时没有错误即视为全部成功。
-    final success = deleted.isEmpty && failed.isEmpty ? requested : deleted;
+    await _ensureConfigured(session);
+    final result = await _platform(() => _native.deleteObjects(requested));
     return BatchDeleteResult(
-      deletedPaths: success.toList(growable: false),
-      failedPaths: failed.toList(growable: false),
+      deletedPaths: result.deletedKeys,
+      failedPaths: result.failedKeys,
     );
   }
 
-  Future<void> upload(String path, List<int> bytes, UserSession session) async {
-    if (bytes.length >= session.constraints.multipartUploadThresholdBytes) {
-      await _multipartUpload(path, bytes, session);
-      return;
-    }
-
-    final config = _config(session);
-    final response = await _request(
-      method: 'PUT',
-      config: config,
-      credentials: session.credentials!,
-      objectKey: path,
-      body: bytes,
-    );
-    _check(response);
-  }
-
-  Future<void> _multipartUpload(
+  Future<void> uploadFile(
     String path,
-    List<int> bytes,
-    UserSession session,
-  ) async {
-    final config = _config(session);
-    final credentials = session.credentials!;
-    final initiateResponse = await _request(
-      method: 'POST',
-      config: config,
-      credentials: credentials,
-      objectKey: path,
-      rawQuery: 'uploads',
+    String localPath,
+    UserSession session, {
+    required String taskId,
+    void Function(int transferredBytes, int totalBytes)? onProgress,
+  }) async {
+    await _ensureConfigured(session);
+    await _withProgress(
+      taskId: taskId,
+      onProgress: (current, total) => onProgress?.call(current, total),
+      operation: () => _native.uploadFile(
+        taskId: taskId,
+        key: path,
+        localPath: localPath,
+        multipartThresholdBytes:
+            session.constraints.multipartUploadThresholdBytes,
+      ),
     );
-    _check(initiateResponse);
-    final uploadId = _xmlValue(
-      utf8.decode(initiateResponse.bodyBytes, allowMalformed: true),
-      'UploadId',
-    );
-    if (uploadId.isEmpty) {
-      throw AppError('OSS 初始化分片上传失败：缺少 UploadId',
-          code: 'OSS_MULTIPART_INIT_FAILED');
-    }
-
-    final parts = <_MultipartPart>[];
-    try {
-      for (var offset = 0, partNumber = 1;
-          offset < bytes.length;
-          offset += _multipartPartSize, partNumber++) {
-        final end = (offset + _multipartPartSize).clamp(0, bytes.length);
-        final part = bytes.sublist(offset, end);
-        final response = await _request(
-          method: 'PUT',
-          config: config,
-          credentials: credentials,
-          objectKey: path,
-          rawQuery:
-              'partNumber=$partNumber&uploadId=${Uri.encodeQueryComponent(uploadId)}',
-          body: part,
-        );
-        _check(response);
-        final eTag = response.headers['etag'];
-        if (eTag == null || eTag.isEmpty) {
-          throw AppError('OSS 上传分片失败：缺少 ETag',
-              code: 'OSS_MULTIPART_PART_FAILED');
-        }
-        parts.add(_MultipartPart(number: partNumber, eTag: eTag));
-      }
-
-      final completeBody = utf8.encode(
-        '<CompleteMultipartUpload>'
-        '${parts.map((part) => '<Part><PartNumber>${part.number}</PartNumber><ETag>${part.eTag}</ETag></Part>').join()}'
-        '</CompleteMultipartUpload>',
-      );
-      final completeResponse = await _request(
-        method: 'POST',
-        config: config,
-        credentials: credentials,
-        objectKey: path,
-        rawQuery: 'uploadId=${Uri.encodeQueryComponent(uploadId)}',
-        body: completeBody,
-      );
-      _check(completeResponse);
-    } catch (_) {
-      try {
-        final abortResponse = await _request(
-          method: 'DELETE',
-          config: config,
-          credentials: credentials,
-          objectKey: path,
-          rawQuery: 'uploadId=${Uri.encodeQueryComponent(uploadId)}',
-        );
-        _check(abortResponse);
-      } catch (_) {
-        // 保留原始上传错误，避免中止失败掩盖真正的失败原因。
-      }
-      rethrow;
-    }
   }
 
   Future<List<int>> download(String path, UserSession session) async {
-    final config = _config(session);
-    final response = await _request(
-        method: 'GET',
-        config: config,
-        credentials: session.credentials!,
-        objectKey: path);
-    _check(response);
-    return response.bodyBytes;
+    await _ensureConfigured(session);
+    return _platform(
+      () => _native.getObjectBytes(
+        key: path,
+        maxBytes: session.constraints.textPreviewMaxBytes,
+      ),
+    );
   }
 
-  /// 将 OSS 对象直接写入临时文件，避免批量下载时把完整文件保留在内存中。
+  Future<List<int>> downloadThumbnail(
+    String path,
+    UserSession session, {
+    int width = ImageThumbnailSpec.size,
+    int height = ImageThumbnailSpec.size,
+  }) async {
+    if (width <= 0 || height <= 0 || width > 1024 || height > 1024) {
+      throw ArgumentError('缩略图尺寸必须在 1 到 1024 之间');
+    }
+    return _getProcessedObject(
+      path,
+      session,
+      maxBytes: 4 * 1024 * 1024,
+      process: ImageThumbnailSpec.process(width: width, height: height),
+    );
+  }
+
+  /// 读取用于详情页展示的图片预览，仍由 OSS 图片处理压缩原图尺寸。
+  Future<List<int>> downloadImagePreview(
+    String path,
+    UserSession session, {
+    int width = ImageThumbnailSpec.previewSize,
+    int height = ImageThumbnailSpec.previewSize,
+  }) async {
+    if (width <= 0 || height <= 0 || width > 2048 || height > 2048) {
+      throw ArgumentError('图片预览尺寸必须在 1 到 2048 之间');
+    }
+    return _getProcessedObject(
+      path,
+      session,
+      maxBytes: 8 * 1024 * 1024,
+      process: ImageThumbnailSpec.process(width: width, height: height),
+    );
+  }
+
   Future<void> downloadToFile(
     String path,
     UserSession session,
     File target, {
+    required String taskId,
     required void Function(int receivedBytes, int? totalBytes) onProgress,
     required bool Function() isCanceled,
   }) async {
-    final config = _config(session);
-    final request = _streamRequest(
-      method: 'GET',
-      config: config,
-      credentials: session.credentials!,
-      objectKey: path,
+    await _ensureConfigured(session);
+    await _withProgress(
+      taskId: taskId,
+      isCanceled: isCanceled,
+      onProgress: onProgress,
+      operation: () => _native.downloadFile(
+        taskId: taskId,
+        key: path,
+        localPath: target.path,
+      ),
     );
-    final response = await _http.send(request);
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      _check(await http.Response.fromStream(response));
-      return;
-    }
-
-    await target.parent.create(recursive: true);
-    final sink = target.openWrite();
-    var received = 0;
-    final total = response.contentLength;
-    try {
-      await for (final chunk in response.stream) {
-        if (isCanceled()) {
-          throw const TransferCanceledException();
-        }
-        sink.add(chunk);
-        received += chunk.length;
-        onProgress(received, total);
-      }
-      if (isCanceled()) {
-        throw const TransferCanceledException();
-      }
-    } finally {
-      await sink.close();
-    }
   }
 
   Future<void> copy(String from, String to, UserSession session) async {
-    final config = _config(session);
-    // OSS 要求 x-oss-copy-source 的对象路径进行 URL 编码；逐段编码可保留
-    // 路径分隔符，否则中文、空格等文件名会在请求发出前被 HTTP 客户端拒绝。
-    final encodedSource = from.split('/').map(Uri.encodeComponent).join('/');
-    final response = await _request(
-      method: 'PUT',
-      config: config,
-      credentials: session.credentials!,
-      objectKey: to,
-      extraHeaders: <String, String>{
-        'x-oss-copy-source': '/${config.bucket}/$encodedSource',
-      },
+    await _ensureConfigured(session);
+    await _platform(() => _native.copyObject(from: from, to: to));
+  }
+
+  Future<void> cancelTransfer(String taskId) =>
+      _platform(() => _native.cancelTransfer(taskId));
+
+  Future<void> clearConfiguration() async {
+    _configuredSession = null;
+    await _platform(_native.clearConfiguration);
+  }
+
+  Future<void> _ensureConfigured(UserSession session,
+      {bool force = false}) async {
+    final config = session.ossConfig ??
+        (throw AppError('会话缺少 OSS 配置', code: 'OSS_CONFIG_MISSING'));
+    final credentials = session.credentials ??
+        (throw AppError('会话缺少 OSS 临时凭证', code: 'OSS_CREDENTIALS_MISSING'));
+    final fingerprint = <Object>[
+      config.endpoint,
+      config.region,
+      config.bucket,
+      credentials.accessKeyId,
+      credentials.securityToken,
+      credentials.expiration.toUtc().millisecondsSinceEpoch,
+    ].join('|');
+    if (!force && _configuredSession == fingerprint) return;
+    await _platform(
+      () => _native.configure(
+        endpoint: config.endpoint,
+        region: config.region,
+        bucket: config.bucket,
+        accessKeyId: credentials.accessKeyId,
+        accessKeySecret: credentials.accessKeySecret,
+        securityToken: credentials.securityToken,
+        expirationMilliseconds:
+            credentials.expiration.toUtc().millisecondsSinceEpoch,
+      ),
     );
-    _check(response);
+    _configuredSession = fingerprint;
   }
 
-  Uri _uri(
-    OssConfig config, {
-    String? objectKey,
-    Map<String, String>? query,
-    String? rawQuery,
-  }) {
-    final endpoint = config.endpoint.replaceFirst(RegExp(r'^https?://'), '');
-    // Uri.https 会对 path 自动进行一次编码，这里不能提前 encodeComponent，
-    // 否则中文路径中的 '%' 会被再次编码成 '%25'。
-    final path = objectKey == null ? '/' : '/$objectKey';
-    if (rawQuery != null) {
-      return Uri(
-        scheme: 'https',
-        host: '${config.bucket}.$endpoint',
-        path: path,
-        query: rawQuery,
+  Future<List<int>> _getProcessedObject(
+    String path,
+    UserSession session, {
+    required int maxBytes,
+    required String process,
+  }) async {
+    Future<List<int>> request() => _platform(
+          () => _native.getObjectBytes(
+            key: path,
+            maxBytes: maxBytes,
+            process: process,
+          ),
+        );
+
+    await _ensureConfigured(session, force: true);
+    try {
+      return await request();
+    } on AppError catch (error) {
+      if (error.code != 'OSS_INVALIDREQUEST') rethrow;
+      _configuredSession = null;
+      await _ensureConfigured(session);
+      return request();
+    }
+  }
+
+  Future<void> _withProgress({
+    required String taskId,
+    required Future<void> Function() operation,
+    required void Function(int transferredBytes, int totalBytes) onProgress,
+    bool Function()? isCanceled,
+  }) async {
+    var cancelRequested = false;
+    var lastTransferred = 0;
+    final subscription = _native.progressEvents
+        .where((event) => event.taskId == taskId)
+        .listen((event) {
+      if (isCanceled?.call() == true) {
+        if (!cancelRequested) {
+          cancelRequested = true;
+          unawaited(_native.cancelTransfer(taskId));
+        }
+        return;
+      }
+      if (event.transferredBytes < lastTransferred) return;
+      lastTransferred = event.transferredBytes;
+      onProgress(lastTransferred, event.totalBytes);
+    });
+    try {
+      if (isCanceled?.call() == true) throw const TransferCanceledException();
+      await _platform(operation);
+      if (isCanceled?.call() == true) throw const TransferCanceledException();
+    } finally {
+      await subscription.cancel();
+    }
+  }
+
+  Future<T> _platform<T>(Future<T> Function() operation) async {
+    try {
+      return await operation();
+    } on PlatformException catch (error) {
+      if (error.code == OssErrorCode.canceled.name) {
+        throw const TransferCanceledException();
+      }
+      final details = error.details;
+      final ossCode = details is Map ? details['ossCode'] : null;
+      final sdkCode = details is Map ? details['sdkCode'] : null;
+      final bridgeCode = details is Map ? details['bridgeCode'] : null;
+      final nativeErrorType =
+          details is Map ? details['nativeErrorType'] : null;
+      final statusCode = details is Map ? details['statusCode'] : null;
+      debugPrint(
+        'OSS 请求失败：${error.code}（ossCode: ${ossCode ?? '-'}，sdkCode: ${sdkCode ?? '-'}，bridgeCode: ${bridgeCode ?? '-'}，nativeType: ${nativeErrorType ?? '-'}，状态码: ${statusCode ?? '-'}）',
       );
-    }
-    return Uri.https('${config.bucket}.$endpoint', path, query);
-  }
-
-  Future<http.Response> _request(
-      {required String method,
-      required OssConfig config,
-      required StsCredentials credentials,
-      String? objectKey,
-      Map<String, String>? query,
-      String? rawQuery,
-      List<int>? body,
-      Map<String, String>? extraHeaders}) {
-    final uri =
-        _uri(config, objectKey: objectKey, query: query, rawQuery: rawQuery);
-    _log('$method $uri');
-    final date = HttpDate.format(DateTime.now().toUtc());
-    // OSS 虚拟主机请求的签名资源仍需包含 Bucket 名称。
-    // prefix/delimiter 是 ListObjects 参数，不属于 OSS 签名子资源。
-    final objectPath = objectKey == null ? '' : '/$objectKey';
-    final canonicalResource = objectKey == null
-        ? '/${config.bucket}/'
-        : '/${config.bucket}$objectPath';
-    final signedResource =
-        rawQuery == null ? canonicalResource : '$canonicalResource?$rawQuery';
-    final contentMd5 =
-        body == null ? '' : base64Encode(md5.convert(body).bytes);
-    final canonicalHeaders = <String, String>{
-      'x-oss-security-token': credentials.securityToken,
-      ...?extraHeaders?.entries
-          .where((entry) => entry.key.toLowerCase().startsWith('x-oss-'))
-          .fold<Map<String, String>>(<String, String>{}, (map, entry) {
-        map[entry.key.toLowerCase()] = entry.value.trim();
-        return map;
-      }),
-    };
-    final canonicalHeaderText = (canonicalHeaders.keys.toList()..sort())
-        .map((key) => '$key:${canonicalHeaders[key]}')
-        .join('\n');
-    final stringToSign =
-        '$method\n$contentMd5\n\n$date\n$canonicalHeaderText\n$signedResource';
-    final digest = Hmac(sha1, utf8.encode(credentials.accessKeySecret))
-        .convert(utf8.encode(stringToSign));
-    final headers = <String, String>{
-      'Date': date,
-      'x-oss-security-token': credentials.securityToken,
-      'Authorization':
-          'OSS ${credentials.accessKeyId}:${base64Encode(digest.bytes)}'
-    };
-    if (body != null) headers['Content-MD5'] = contentMd5;
-    if (body != null) headers['Content-Length'] = '${body.length}';
-    headers.addAll(extraHeaders ?? const <String, String>{});
-    return switch (method) {
-      'GET' => _http.get(uri, headers: headers),
-      'POST' => _http.post(uri, headers: headers, body: body),
-      'PUT' => _http.put(uri, headers: headers, body: body),
-      'DELETE' => _http.delete(uri, headers: headers),
-      _ => throw AppError('不支持的 OSS 请求', code: 'OSS_METHOD_UNSUPPORTED'),
-    };
-  }
-
-  http.Request _streamRequest({
-    required String method,
-    required OssConfig config,
-    required StsCredentials credentials,
-    required String objectKey,
-  }) {
-    final uri = _uri(config, objectKey: objectKey);
-    final date = HttpDate.format(DateTime.now().toUtc());
-    final canonicalHeaders =
-        'x-oss-security-token:${credentials.securityToken}';
-    final stringToSign = '$method\n\n\n$date\n$canonicalHeaders\n'
-        '/${config.bucket}/$objectKey';
-    final digest = Hmac(sha1, utf8.encode(credentials.accessKeySecret))
-        .convert(utf8.encode(stringToSign));
-    return http.Request(method, uri)
-      ..headers.addAll(<String, String>{
-        'Date': date,
-        'x-oss-security-token': credentials.securityToken,
-        'Authorization':
-            'OSS ${credentials.accessKeyId}:${base64Encode(digest.bytes)}',
-      });
-  }
-
-  OssConfig _config(UserSession session) =>
-      session.ossConfig ??
-      (throw AppError('会话缺少 OSS 配置', code: 'OSS_CONFIG_MISSING'));
-  String _dir(String value) => value.endsWith('/') ? value : '$value/';
-  void _check(http.Response response) {
-    _log('response ${response.statusCode} ${response.request?.url}');
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      final code =
-          RegExp(r'<Code>([^<]+)</Code>').firstMatch(response.body)?.group(1);
-      final requestId = RegExp(r'<RequestId>([^<]+)</RequestId>')
-          .firstMatch(response.body)
-          ?.group(1);
-      _log(
-          'error status=${response.statusCode} code=${code ?? 'UNKNOWN'} requestId=${requestId ?? 'UNKNOWN'}');
-      final serverString = RegExp(r'<StringToSign>([\s\S]*?)</StringToSign>')
-          .firstMatch(response.body)
-          ?.group(1)
-          ?.replaceFirst(RegExp(r'x-oss-security-token:[^\\n]*'),
-              'x-oss-security-token:<redacted>');
-      if (serverString != null) _log('server StringToSign=$serverString');
+      const messages = <String, String>{
+        'credentialExpired': 'OSS 临时凭证已过期',
+        'accessDenied': '没有权限执行该 OSS 操作',
+        'notFound': 'OSS 对象不存在',
+        'networkUnavailable': '网络连接不可用',
+        'invalidRequest': 'OSS 请求参数无效',
+        'serviceError': 'OSS 服务请求失败',
+        'unknown': 'OSS 操作失败',
+      };
       throw AppError(
-          'OSS 请求失败 (${response.statusCode}${code == null ? '' : ' $code'})',
-          code: 'OSS_REQUEST_FAILED');
+        messages[error.code] ?? 'OSS 操作失败',
+        code: 'OSS_${error.code.toUpperCase()}',
+      );
+    } on TransferCanceledException {
+      rethrow;
+    } on AppError {
+      rethrow;
     }
   }
 
-  void _log(String message) {
-    if (kDebugMode) debugPrint('[OSS] $message');
-  }
-
-  List<String> _tags(String xml, String tag) =>
-      RegExp('<$tag>([\\s\\S]*?)</$tag>')
-          .allMatches(xml)
-          .map((m) => m.group(1)!)
-          .toList();
-  String _xmlValue(String xml, String tag) =>
-      RegExp('<$tag>([\\s\\S]*?)</$tag>')
-          .firstMatch(xml)
-          ?.group(1)
-          ?.replaceAll('&amp;', '&')
-          .replaceAll('&lt;', '<')
-          .replaceAll('&gt;', '>') ??
-      '';
-
-  String _escapeXml(String value) => value
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&apos;');
-}
-
-class _MultipartPart {
-  const _MultipartPart({required this.number, required this.eTag});
-
-  final int number;
-  final String eTag;
+  String _dir(String value) => value.endsWith('/') ? value : '$value/';
 }
 
 class TransferCanceledException implements Exception {

@@ -18,7 +18,23 @@ enum BrowseMode { list, grid }
 
 enum FileKind { folder, image, pdf, text, file }
 
+class ImageThumbnailSpec {
+  const ImageThumbnailSpec._();
+
+  static const size = 320;
+  static const previewSize = 1600;
+
+  static String process({int width = size, int height = size}) =>
+      'image/resize,m_lfit,w_$width,h_$height';
+}
+
 extension FileItemX on FileItem {
+  /// 用于区分同一路径对象的不同版本，避免对象更新后复用旧缩略图。
+  String get objectVersionToken {
+    final modified = updatedAt?.toUtc().toIso8601String() ?? '';
+    return '${size ?? ''}|$modified';
+  }
+
   FileKind get kind {
     if (isDirectory) {
       return FileKind.folder;

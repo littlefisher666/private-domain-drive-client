@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -53,20 +53,19 @@ class PreviewPage extends StatelessWidget {
               tooltip: '下载',
               onPressed: () async {
                 try {
-                  final bytes = await controller.downloadBytes(
+                  final directory =
+                      await FilePicker.getDirectoryPath();
+                  if (directory == null) return;
+                  controller.enqueueDownload(
                     FileItem(
                       path: args.filePath,
                       name: args.fileName,
                       isDirectory: false,
                     ),
+                    targetDirectory: directory,
                   );
-                  final path = await FilePicker.platform.saveFile(
-                    fileName: args.fileName,
-                  );
-                  if (path == null) return;
-                  await File(path).writeAsBytes(bytes, flush: true);
                   if (context.mounted) {
-                    AppFeedback.showSnack(context, '已保存 ${args.fileName}');
+                    AppFeedback.showSnack(context, '已加入下载队列：${args.fileName}');
                   }
                 } catch (error) {
                   if (context.mounted) {
@@ -90,6 +89,8 @@ class PreviewPage extends StatelessWidget {
               child: _PreviewBody(
                 previewType: previewType,
                 fileName: args.fileName,
+                filePath: args.filePath,
+                imageLoader: controller.loadImagePreview,
                 textContent: '暂不支持在线读取此文件内容，请下载后查看。',
               ),
             ),
@@ -104,11 +105,15 @@ class _PreviewBody extends StatelessWidget {
   const _PreviewBody({
     required this.previewType,
     required this.fileName,
+    required this.filePath,
+    required this.imageLoader,
     required this.textContent,
   });
 
   final PreviewType previewType;
   final String fileName;
+  final String filePath;
+  final Future<List<int>> Function(FileItem item) imageLoader;
   final String textContent;
 
   @override
@@ -118,31 +123,13 @@ class _PreviewBody extends StatelessWidget {
 
     switch (previewType) {
       case PreviewType.image:
-        return Column(
-          children: <Widget>[
-            Expanded(
-              child: Container(
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(22),
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: <Color>[Color(0xFF99F6E4), Color(0xFF38BDF8), Color(0xFF818CF8)],
-                  ),
-                ),
-                child: const Center(
-                  child: Icon(Icons.image_outlined, size: 72, color: Color(0xFF0F172A)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text('图片预览', style: theme.textTheme.titleMedium),
-            Text(
-              '文件：$fileName',
-              style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-          ],
+        return _ImagePreviewBody(
+          item: FileItem(
+            path: filePath,
+            name: fileName,
+            isDirectory: false,
+          ),
+          loader: imageLoader,
         );
       case PreviewType.pdf:
         return Column(
@@ -211,5 +198,99 @@ class _PreviewBody extends StatelessWidget {
           ),
         );
     }
+  }
+}
+
+class _ImagePreviewBody extends StatefulWidget {
+  const _ImagePreviewBody({required this.item, required this.loader});
+
+  final FileItem item;
+  final Future<List<int>> Function(FileItem item) loader;
+
+  @override
+  State<_ImagePreviewBody> createState() => _ImagePreviewBodyState();
+}
+
+class _ImagePreviewBodyState extends State<_ImagePreviewBody> {
+  late Future<List<int>> _imageFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _imageFuture = widget.loader(widget.item);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ImagePreviewBody oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.path != widget.item.path) {
+      _imageFuture = widget.loader(widget.item);
+    }
+  }
+
+  void _retry() {
+    setState(() => _imageFuture = widget.loader(widget.item));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Column(
+      children: <Widget>[
+        Expanded(
+          child: Container(
+            width: double.infinity,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(22),
+              color: scheme.surfaceContainerHighest,
+            ),
+            child: FutureBuilder<List<int>>(
+              future: _imageFuture,
+              builder: (context, snapshot) {
+                final bytes = snapshot.data;
+                if (snapshot.connectionState == ConnectionState.done &&
+                    bytes != null &&
+                    bytes.isNotEmpty) {
+                  return ClipRRect(
+                    borderRadius: BorderRadius.circular(22),
+                    child: Image.memory(
+                      Uint8List.fromList(bytes),
+                      fit: BoxFit.contain,
+                      width: double.infinity,
+                      height: double.infinity,
+                      errorBuilder: (_, __, ___) => _errorState(theme),
+                    ),
+                  );
+                }
+                if (snapshot.hasError) return _errorState(theme);
+                return const CircularProgressIndicator();
+              },
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Text('图片预览', style: theme.textTheme.titleMedium),
+        Text(
+          '文件：${widget.item.name}',
+          style: theme.textTheme.bodyMedium
+              ?.copyWith(color: scheme.onSurfaceVariant),
+        ),
+      ],
+    );
+  }
+
+  Widget _errorState(ThemeData theme) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        const Icon(Icons.broken_image_outlined, size: 72),
+        const SizedBox(height: 12),
+        Text('图片预览加载失败', style: theme.textTheme.titleMedium),
+        const SizedBox(height: 8),
+        OutlinedButton(onPressed: _retry, child: const Text('重试')),
+      ],
+    );
   }
 }

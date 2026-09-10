@@ -129,7 +129,13 @@ void main() {
       final oss = _FakeOssClient()..downloadResult = <int>[1, 2, 3];
       final controller = await _controller(oss: oss);
 
-      await controller.uploadBytes(fileName: '中文 文件.txt', bytes: <int>[7]);
+      final source = File('${Directory.systemTemp.path}/pdd-upload-source.txt');
+      await source.writeAsBytes(<int>[7]);
+      await controller.uploadFile(
+        fileName: '中文 文件.txt',
+        localPath: source.path,
+        fileSize: 1,
+      );
       final bytes = await controller.downloadBytes(
         const FileItem(path: 'shared/a.txt', name: 'a.txt', isDirectory: false),
       );
@@ -141,6 +147,7 @@ void main() {
       );
 
       expect(oss.uploads.single.path, 'shared/中文 文件.txt');
+      expect(controller.tasks.single.sourcePath, source.path);
       expect(bytes, <int>[1, 2, 3]);
     });
 
@@ -237,7 +244,9 @@ void main() {
 
       gate.complete();
       await Future<void>.delayed(const Duration(milliseconds: 100));
-      expect(controller.tasks.where((task) => task.status == TransferTaskStatus.success),
+      expect(
+          controller.tasks
+              .where((task) => task.status == TransferTaskStatus.success),
           hasLength(2));
     });
 
@@ -263,7 +272,8 @@ void main() {
 
       expect(result.fileCount, 2);
       expect(result.directoryCount, 1);
-      expect(controller.tasks.where((task) => task.batchId == result.batchId), hasLength(2));
+      expect(controller.tasks.where((task) => task.batchId == result.batchId),
+          hasLength(2));
       expect(await File('${directory.path}/资料/a.txt').exists(), isTrue);
       expect(await File('${directory.path}/资料/子目录/b.txt').exists(), isTrue);
     });
@@ -345,7 +355,35 @@ void main() {
 
       final task = controller.tasks.single;
       expect(task.status, TransferTaskStatus.canceled);
+      expect(oss.canceledTaskIds, contains(task.id));
       expect(await directory.list().toList(), isEmpty);
+    });
+
+    test('字节完成后等待 OSS 确认并使用时间窗口计算速度', () async {
+      final gate = Completer<void>();
+      final oss = _FakeOssClient()
+        ..downloadGate = gate
+        ..progressReports = <(int, int)>[(25, 100), (100, 100)]
+        ..progressInterval = const Duration(milliseconds: 600);
+      final controller = await _controller(oss: oss);
+      final directory = await Directory.systemTemp.createTemp('pdd-confirm-');
+      addTearDown(() => directory.delete(recursive: true));
+
+      controller.enqueueDownload(
+        const FileItem(path: 'shared/a.bin', name: 'a.bin', isDirectory: false),
+        targetDirectory: directory.path,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 1300));
+
+      final confirming = controller.tasks.single;
+      expect(confirming.status, TransferTaskStatus.running);
+      expect(confirming.message, '正在确认');
+      expect(confirming.progress, 1);
+      expect(confirming.bytesPerSecond, greaterThan(0));
+
+      gate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(controller.tasks.single.status, TransferTaskStatus.success);
     });
   });
 }
@@ -408,18 +446,22 @@ class _FakeOssClient extends OssClient {
   final List<String> createdFolders = <String>[];
   final List<String> deleted = <String>[];
   final List<(String, String)> copies = <(String, String)>[];
-  final List<({String path, List<int> bytes})> uploads =
-      <({String path, List<int> bytes})>[];
+  final List<({String path, String localPath})> uploads =
+      <({String path, String localPath})>[];
   List<int> downloadResult = const <int>[];
   Completer<void>? downloadGate;
   Object? downloadToFileError;
+  List<(int, int)> progressReports = <(int, int)>[];
+  Duration progressInterval = Duration.zero;
+  final List<String> canceledTaskIds = <String>[];
 
   @override
   Future<List<FileItem>> list(String path, UserSession session) async =>
       itemsByPath[path] ?? const <FileItem>[];
 
   @override
-  Future<List<String>> listAllObjectKeys(String path, UserSession session) async =>
+  Future<List<String>> listAllObjectKeys(
+          String path, UserSession session) async =>
       objectKeysByPath[path] ?? const <String>[];
 
   @override
@@ -438,8 +480,16 @@ class _FakeOssClient extends OssClient {
   }
 
   @override
-  Future<void> upload(String path, List<int> bytes, UserSession session) async {
-    uploads.add((path: path, bytes: bytes));
+  Future<void> uploadFile(
+    String path,
+    String localPath,
+    UserSession session, {
+    required String taskId,
+    void Function(int transferredBytes, int totalBytes)? onProgress,
+  }) async {
+    uploads.add((path: path, localPath: localPath));
+    final size = await File(localPath).length();
+    onProgress?.call(size, size);
   }
 
   @override
@@ -451,17 +501,35 @@ class _FakeOssClient extends OssClient {
     String path,
     UserSession session,
     File target, {
+    required String taskId,
     required void Function(int receivedBytes, int? totalBytes) onProgress,
     required bool Function() isCanceled,
   }) async {
     // 先落盘再等待闸门，模拟流式写入中途被取消/失败的场景。
     await target.parent.create(recursive: true);
     await target.writeAsBytes(<int>[1], flush: true);
+    for (final report in progressReports) {
+      onProgress(report.$1, report.$2);
+      if (progressInterval > Duration.zero) {
+        await Future<void>.delayed(progressInterval);
+      }
+    }
     final gate = downloadGate;
     if (gate != null) await gate.future;
     if (isCanceled()) throw const TransferCanceledException();
     onProgress(1, 1);
     final error = downloadToFileError;
     if (error != null) throw error;
+  }
+
+  @override
+  Future<void> configureSession(UserSession session) async {}
+
+  @override
+  Future<void> clearConfiguration() async {}
+
+  @override
+  Future<void> cancelTransfer(String taskId) async {
+    canceledTaskIds.add(taskId);
   }
 }

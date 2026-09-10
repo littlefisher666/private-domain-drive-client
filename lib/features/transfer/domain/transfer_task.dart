@@ -24,6 +24,7 @@ class TransferTask {
     this.batchId,
     this.transferredBytes = 0,
     this.totalBytes,
+    this.bytesPerSecond,
     this.error,
   });
 
@@ -38,6 +39,7 @@ class TransferTask {
   final String? batchId;
   final int transferredBytes;
   final int? totalBytes;
+  final double? bytesPerSecond;
   final String? error;
 
   TransferTask copyWith({
@@ -52,6 +54,7 @@ class TransferTask {
     String? batchId,
     int? transferredBytes,
     int? totalBytes,
+    double? bytesPerSecond,
     String? error,
   }) {
     return TransferTask(
@@ -66,6 +69,7 @@ class TransferTask {
       batchId: batchId ?? this.batchId,
       transferredBytes: transferredBytes ?? this.transferredBytes,
       totalBytes: totalBytes ?? this.totalBytes,
+      bytesPerSecond: bytesPerSecond ?? this.bytesPerSecond,
       error: error ?? this.error,
     );
   }
