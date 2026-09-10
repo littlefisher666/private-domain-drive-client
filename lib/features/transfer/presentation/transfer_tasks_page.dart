@@ -32,9 +32,9 @@ class _TransferHeaderActions extends StatelessWidget {
               ? null
               : () {
                   controller.clearCompletedTasks();
-                  AppFeedback.showSnack(context, '已清除已完成任务');
+                  AppFeedback.showSnack(context, '已清除已完成和已取消任务');
                 },
-          child: const Text('清除已完成'),
+          child: const Text('清除已结束'),
         ),
       ],
     );
@@ -76,6 +76,110 @@ class _TransferHeaderActions extends StatelessWidget {
   }
 }
 
+class _TransferSelectionActions extends StatelessWidget {
+  const _TransferSelectionActions({
+    required this.selectedCount,
+    required this.allVisibleSelected,
+    required this.retryCount,
+    required this.cancelCount,
+    required this.onToggleAll,
+    required this.onRetry,
+    required this.onCancel,
+    required this.onClear,
+  });
+
+  final int selectedCount;
+  final bool allVisibleSelected;
+  final int retryCount;
+  final int cancelCount;
+  final VoidCallback onToggleAll;
+  final VoidCallback onRetry;
+  final VoidCallback onCancel;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: CupertinoDesktopTokens.line)),
+      ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 6,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: <Widget>[
+          TextButton.icon(
+            onPressed: onToggleAll,
+            icon: Icon(
+              allVisibleSelected
+                  ? Icons.check_box_outlined
+                  : Icons.select_all_outlined,
+            ),
+            label: Text(allVisibleSelected ? '取消全选' : '全选当前列表'),
+          ),
+          if (selectedCount > 0) ...<Widget>[
+            Text('已选 $selectedCount 项'),
+            OutlinedButton(
+              onPressed: retryCount == 0 ? null : onRetry,
+              child: Text('批量重试${retryCount == 0 ? '' : ' ($retryCount)'}'),
+            ),
+            OutlinedButton(
+              onPressed: cancelCount == 0 ? null : onCancel,
+              child: Text('批量取消${cancelCount == 0 ? '' : ' ($cancelCount)'}'),
+            ),
+            TextButton(onPressed: onClear, child: const Text('取消选择')),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TransferTypeFilter extends StatelessWidget {
+  const _TransferTypeFilter({
+    required this.selectedType,
+    required this.tasks,
+    required this.onSelected,
+  });
+
+  final TransferTaskType? selectedType;
+  final List<TransferTask> tasks;
+  final ValueChanged<TransferTaskType?> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    int count(TransferTaskType type) =>
+        tasks.where((task) => task.type == type).length;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: CupertinoDesktopTokens.line)),
+      ),
+      child: Wrap(
+        spacing: 8,
+        children: <Widget>[
+          ChoiceChip(
+            label: Text('全部 ${tasks.length}'),
+            selected: selectedType == null,
+            onSelected: (_) => onSelected(null),
+          ),
+          ChoiceChip(
+            label: Text('上传 ${count(TransferTaskType.upload)}'),
+            selected: selectedType == TransferTaskType.upload,
+            onSelected: (_) => onSelected(TransferTaskType.upload),
+          ),
+          ChoiceChip(
+            label: Text('下载 ${count(TransferTaskType.download)}'),
+            selected: selectedType == TransferTaskType.download,
+            onSelected: (_) => onSelected(TransferTaskType.download),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _BatchSummaryStrip extends StatelessWidget {
   const _BatchSummaryStrip({required this.controller});
 
@@ -105,7 +209,7 @@ class _BatchSummaryStrip extends StatelessWidget {
   }
 }
 
-class TransferTasksPage extends StatelessWidget {
+class TransferTasksPage extends StatefulWidget {
   const TransferTasksPage({
     super.key,
     this.embedded = false,
@@ -114,6 +218,69 @@ class TransferTasksPage extends StatelessWidget {
 
   final bool embedded;
   final bool desktopChrome;
+
+  @override
+  State<TransferTasksPage> createState() => _TransferTasksPageState();
+}
+
+class _TransferTasksPageState extends State<TransferTasksPage> {
+  TransferTaskType? _selectedType;
+  final Set<String> _selectedTaskIds = <String>{};
+
+  bool _canRetry(TransferTask task) =>
+      task.status == TransferTaskStatus.failed ||
+      task.status == TransferTaskStatus.canceled;
+
+  bool _canCancel(TransferTask task) =>
+      task.status == TransferTaskStatus.running ||
+      task.status == TransferTaskStatus.pending;
+
+  void _toggleTaskSelection(String taskId, bool selected) {
+    setState(() {
+      if (selected) {
+        _selectedTaskIds.add(taskId);
+      } else {
+        _selectedTaskIds.remove(taskId);
+      }
+    });
+  }
+
+  void _toggleVisibleTaskSelection(List<TransferTask> tasks) {
+    final visibleIds = tasks.map((task) => task.id).toSet();
+    setState(() {
+      if (visibleIds.isNotEmpty &&
+          visibleIds.every(_selectedTaskIds.contains)) {
+        _selectedTaskIds.removeAll(visibleIds);
+      } else {
+        _selectedTaskIds.addAll(visibleIds);
+      }
+    });
+  }
+
+  void _clearTaskSelection() => setState(_selectedTaskIds.clear);
+
+  void _retrySelectedTasks(AppController controller, List<TransferTask> tasks) {
+    final taskIds = tasks
+        .where((task) => _selectedTaskIds.contains(task.id) && _canRetry(task))
+        .map((task) => task.id)
+        .toList(growable: false);
+    if (taskIds.isEmpty) return;
+    controller.retryTasks(taskIds);
+    _clearTaskSelection();
+    AppFeedback.showSnack(context, '已重新开始 ${taskIds.length} 个任务');
+  }
+
+  void _cancelSelectedTasks(
+      AppController controller, List<TransferTask> tasks) {
+    final taskIds = tasks
+        .where((task) => _selectedTaskIds.contains(task.id) && _canCancel(task))
+        .map((task) => task.id)
+        .toList(growable: false);
+    if (taskIds.isEmpty) return;
+    controller.cancelTasks(taskIds);
+    _clearTaskSelection();
+    AppFeedback.showSnack(context, '已取消 ${taskIds.length} 个任务');
+  }
 
   IconData _iconForType(TransferTaskType type) {
     return switch (type) {
@@ -182,7 +349,8 @@ class TransferTasksPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final controller = AppScope.read(context);
     final theme = Theme.of(context);
-    final desktop = desktopChrome || MediaQuery.sizeOf(context).width >= 960;
+    final desktop =
+        widget.desktopChrome || MediaQuery.sizeOf(context).width >= 960;
 
     return ValueListenableBuilder<int>(
       valueListenable: controller.transferConcurrencyListenable,
@@ -208,6 +376,31 @@ class TransferTasksPage extends StatelessWidget {
     required ThemeData theme,
     required bool desktop,
   }) {
+    final visibleTasks = _selectedType == null
+        ? tasks
+        : tasks.where((task) => task.type == _selectedType).toList();
+    final typeFilter = _TransferTypeFilter(
+      selectedType: _selectedType,
+      tasks: tasks,
+      onSelected: (type) => setState(() => _selectedType = type),
+    );
+    final selectedTasks = tasks
+        .where((task) => _selectedTaskIds.contains(task.id))
+        .toList(growable: false);
+    final retryCount = selectedTasks.where(_canRetry).length;
+    final cancelCount = selectedTasks.where(_canCancel).length;
+    final allVisibleSelected = visibleTasks.isNotEmpty &&
+        visibleTasks.every((task) => _selectedTaskIds.contains(task.id));
+    final batchActions = _TransferSelectionActions(
+      selectedCount: selectedTasks.length,
+      allVisibleSelected: allVisibleSelected,
+      retryCount: retryCount,
+      cancelCount: cancelCount,
+      onToggleAll: () => _toggleVisibleTaskSelection(visibleTasks),
+      onRetry: () => _retrySelectedTasks(controller, tasks),
+      onCancel: () => _cancelSelectedTasks(controller, tasks),
+      onClear: _clearTaskSelection,
+    );
     if (desktop) {
       return ColoredBox(
         color: CupertinoDesktopTokens.surface,
@@ -224,7 +417,7 @@ class TransferTasksPage extends StatelessWidget {
               ),
               child: Row(
                 children: <Widget>[
-                  if (!embedded)
+                  if (!widget.embedded)
                     IconButton(
                       onPressed: () => Navigator.of(context).pop(),
                       icon: const Icon(Icons.arrow_back),
@@ -257,23 +450,30 @@ class TransferTasksPage extends StatelessWidget {
                 ],
               ),
             ),
+            typeFilter,
+            batchActions,
             if (controller.transferBatches.isNotEmpty)
               _BatchSummaryStrip(controller: controller),
             Expanded(
-              child: tasks.isEmpty
-                  ? const Center(
+              child: visibleTasks.isEmpty
+                  ? Center(
                       child: Text(
-                        '暂无传输任务',
-                        style:
-                            TextStyle(color: CupertinoDesktopTokens.secondary),
+                        _selectedType == TransferTaskType.upload
+                            ? '暂无上传任务'
+                            : _selectedType == TransferTaskType.download
+                                ? '暂无下载任务'
+                                : '暂无传输任务',
+                        style: const TextStyle(
+                          color: CupertinoDesktopTokens.secondary,
+                        ),
                       ),
                     )
                   : ListView.separated(
                       padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
-                      itemCount: tasks.length,
+                      itemCount: visibleTasks.length,
                       separatorBuilder: (_, __) => const SizedBox(height: 12),
                       itemBuilder: (context, index) {
-                        final task = tasks[index];
+                        final task = visibleTasks[index];
                         final progressLabel =
                             '${(task.progress * 100).round()}%';
                         final transferDetails = _transferDetails(task);
@@ -293,6 +493,14 @@ class TransferTasksPage extends StatelessWidget {
                             children: <Widget>[
                               Row(
                                 children: <Widget>[
+                                  Checkbox(
+                                    value: _selectedTaskIds.contains(task.id),
+                                    onChanged: (selected) =>
+                                        _toggleTaskSelection(
+                                      task.id,
+                                      selected ?? false,
+                                    ),
+                                  ),
                                   Expanded(
                                     child: Text(
                                       '${task.type == TransferTaskType.upload ? '上传' : '下载'} · ${task.name}',
@@ -329,29 +537,15 @@ class TransferTasksPage extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(999),
                                 child: SizedBox(
                                   height: 8,
-                                  child: Stack(
-                                    children: <Widget>[
-                                      Container(
-                                        color: completed
-                                            ? const Color(0x2634C759)
-                                            : const Color(0x29767680),
-                                      ),
-                                      FractionallySizedBox(
-                                        widthFactor:
-                                            task.progress.clamp(0.0, 1.0),
-                                        child: DecoratedBox(
-                                          decoration: BoxDecoration(
-                                            color: completed
-                                                ? const Color(0xFF34C759)
-                                                : null,
-                                            gradient: completed
-                                                ? null
-                                                : LinearGradient(
-                                                    colors: colors),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
+                                  child: LinearProgressIndicator(
+                                    value: task.progress.clamp(0.0, 1.0),
+                                    minHeight: 8,
+                                    color: completed
+                                        ? const Color(0xFF34C759)
+                                        : colors.last,
+                                    backgroundColor: completed
+                                        ? const Color(0x2634C759)
+                                        : const Color(0x29767680),
                                   ),
                                 ),
                               ),
@@ -438,18 +632,18 @@ class TransferTasksPage extends StatelessWidget {
       body: SafeArea(
         child: ListView.separated(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-          itemCount: tasks.length + 2,
+          itemCount: visibleTasks.length + 4,
           separatorBuilder: (_, __) => const SizedBox(height: 12),
           itemBuilder: (context, index) {
             if (index == 0) {
               return Row(
                 children: <Widget>[
-                  if (!embedded)
+                  if (!widget.embedded)
                     IconButton.filledTonal(
                       onPressed: () => Navigator.of(context).pop(),
                       icon: const Icon(Icons.arrow_back),
                     ),
-                  if (!embedded) const SizedBox(width: 12),
+                  if (!widget.embedded) const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -470,12 +664,20 @@ class TransferTasksPage extends StatelessWidget {
             }
 
             if (index == 1) {
+              return typeFilter;
+            }
+
+            if (index == 2) {
+              return batchActions;
+            }
+
+            if (index == 3) {
               return controller.transferBatches.isEmpty
                   ? const SizedBox.shrink()
                   : _BatchSummaryStrip(controller: controller);
             }
 
-            final task = tasks[index - 2];
+            final task = visibleTasks[index - 4];
             final progressLabel = '${(task.progress * 100).round()}%';
             return Card(
               child: Padding(
@@ -485,6 +687,13 @@ class TransferTasksPage extends StatelessWidget {
                   children: <Widget>[
                     Row(
                       children: <Widget>[
+                        Checkbox(
+                          value: _selectedTaskIds.contains(task.id),
+                          onChanged: (selected) => _toggleTaskSelection(
+                            task.id,
+                            selected ?? false,
+                          ),
+                        ),
                         Container(
                           width: 42,
                           height: 42,

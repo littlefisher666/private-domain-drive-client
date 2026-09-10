@@ -4,6 +4,7 @@ class FileItem {
     required this.name,
     required this.isDirectory,
     this.size,
+    this.itemCount,
     this.updatedAt,
     this.takenAt,
   });
@@ -12,6 +13,9 @@ class FileItem {
   final String name;
   final bool isDirectory;
   final int? size;
+
+  /// 文件夹的直接子项数；OSS 无法提供时为空。
+  final int? itemCount;
   final DateTime? updatedAt;
 
   /// 图片 EXIF 中的拍摄时间；非图片或缺少 EXIF 时为空。
@@ -112,6 +116,7 @@ extension FileItemX on FileItem {
     String? name,
     bool? isDirectory,
     int? size,
+    int? itemCount,
     DateTime? updatedAt,
     DateTime? takenAt,
   }) {
@@ -120,6 +125,7 @@ extension FileItemX on FileItem {
       name: name ?? this.name,
       isDirectory: isDirectory ?? this.isDirectory,
       size: size ?? this.size,
+      itemCount: itemCount ?? this.itemCount,
       updatedAt: updatedAt ?? this.updatedAt,
       takenAt: takenAt ?? this.takenAt,
     );

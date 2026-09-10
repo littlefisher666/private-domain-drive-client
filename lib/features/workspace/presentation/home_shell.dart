@@ -76,6 +76,11 @@ class _DesktopShell extends StatelessWidget {
   final int index;
   final ValueChanged<int> onSelect;
 
+  void _selectPage(int value) {
+    FocusManager.instance.primaryFocus?.unfocus();
+    onSelect(value);
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = AppScope.of(context);
@@ -119,13 +124,13 @@ class _DesktopShell extends StatelessWidget {
                               selected: index == 0,
                               icon: Icons.folder_outlined,
                               label: '共享空间',
-                              onTap: () => onSelect(0),
+                              onTap: () => _selectPage(0),
                             ),
                             _SideNavItem(
                               selected: index == 1,
                               icon: Icons.swap_vert,
                               label: '传输中心',
-                              onTap: () => onSelect(1),
+                              onTap: () => _selectPage(1),
                             ),
                             const SizedBox(height: 14),
                             Text('目录', style: theme.textTheme.labelLarge),
@@ -146,7 +151,7 @@ class _DesktopShell extends StatelessWidget {
                                     label: label,
                                     onTap: () {
                                       controller.setCurrentPath(path);
-                                      onSelect(0);
+                                      _selectPage(0);
                                     },
                                   );
                                 }).toList(),
@@ -162,7 +167,7 @@ class _DesktopShell extends StatelessWidget {
                               ),
                               child: InkWell(
                                 borderRadius: BorderRadius.circular(14),
-                                onTap: () => onSelect(2),
+                                onTap: () => _selectPage(2),
                                 child: Padding(
                                   padding: const EdgeInsets.all(12),
                                   child: Column(
@@ -297,13 +302,29 @@ class _BrandHeader extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           const Expanded(
-            child: Text(
-              '私域网盘',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                color: CupertinoDesktopTokens.ink,
-              ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  '私域网盘',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: CupertinoDesktopTokens.ink,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  'PRIVATE DOMAIN DRIVE',
+                  style: TextStyle(
+                    fontSize: 8,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.35,
+                    color: CupertinoDesktopTokens.secondary,
+                  ),
+                ),
+              ],
             ),
           ),
         ],

@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_domain_drive_client/features/auth/domain/user_session.dart';
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
 import 'package:private_domain_drive_client/features/transfer/domain/transfer_task.dart';
@@ -19,6 +21,43 @@ void main() {
 
       expect(result.ok, isFalse);
       expect(result.message, '账号或口令错误');
+    });
+
+    test('启动后会恢复本地传输历史', () async {
+      const completedTask = TransferTask(
+        id: 'download-history-1',
+        name: '已下载文件.jpg',
+        type: TransferTaskType.download,
+        status: TransferTaskStatus.success,
+        progress: 1,
+        target: '/Users/test/Downloads/已下载文件.jpg',
+        totalBytes: 1024,
+      );
+      const failedTask = TransferTask(
+        id: 'upload-failed-1',
+        name: '未完成文件.jpg',
+        type: TransferTaskType.upload,
+        status: TransferTaskStatus.failed,
+        progress: 0.5,
+      );
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'transfer_history:v1': jsonEncode(<Map<String, Object?>>[
+          completedTask.toJson(),
+          failedTask.toJson(),
+        ]),
+      });
+      final controller =
+          AppController(sessionRepository: MemorySessionRepository());
+
+      await controller.bootstrap();
+
+      expect(controller.tasks, hasLength(1));
+      expect(controller.tasks.single.id, completedTask.id);
+      expect(controller.tasks.single.status, TransferTaskStatus.success);
+      expect(controller.tasks.single.target, completedTask.target);
+      controller.dispose();
+      await (await SharedPreferences.getInstance())
+          .remove('transfer_history:v1');
     });
 
     test('目录浏览会记录目录树并支持返回上级', () async {
@@ -88,6 +127,30 @@ void main() {
 
       expect(oss.deleted, <String>['shared/删除我.txt']);
       expect(controller.selectedItem, isNull);
+    });
+
+    test('选中文件夹后会异步统计大小，并复用本次会话缓存', () async {
+      final oss = _FakeOssClient()..directorySizes['shared/资料/'] = 3072;
+      final controller = await _controller(oss: oss);
+      const folder = FileItem(
+        path: 'shared/资料/',
+        name: '资料',
+        isDirectory: true,
+      );
+
+      controller.selectItem(folder);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        controller.directorySizeStatesListenable.value[folder.path]?.size,
+        3072,
+      );
+      expect(oss.directorySizeCalls, 1);
+
+      controller.selectItem(null);
+      controller.selectItem(folder);
+      await Future<void>.delayed(Duration.zero);
+      expect(oss.directorySizeCalls, 1);
     });
 
     test('删除非空文件夹会递归删除子文件与子目录', () async {
@@ -190,6 +253,31 @@ void main() {
 
       controller.clearMultiSelection();
       expect(controller.isMultiSelectionMode, isFalse);
+      expect(controller.multiSelectedPaths, isEmpty);
+    });
+
+    test('键盘方向选择按目录排序移动单个选中项', () async {
+      final controller = await _controller();
+      const items = <FileItem>[
+        FileItem(path: 'shared/a.txt', name: 'a.txt', isDirectory: false),
+        FileItem(path: 'shared/b.txt', name: 'b.txt', isDirectory: false),
+        FileItem(path: 'shared/c.txt', name: 'c.txt', isDirectory: false),
+      ];
+
+      controller.selectItem(items.first);
+      expect(
+        controller.moveSelection(items, offset: 1),
+        isTrue,
+      );
+      expect(controller.selectedItem?.path, 'shared/b.txt');
+      expect(controller.multiSelectedPaths, isEmpty);
+
+      controller.moveSelection(items, offset: 1);
+      expect(controller.selectedItem?.path, 'shared/c.txt');
+      expect(controller.multiSelectedPaths, isEmpty);
+
+      controller.moveSelection(items, offset: -1);
+      expect(controller.selectedItem?.path, 'shared/b.txt');
       expect(controller.multiSelectedPaths, isEmpty);
     });
 
@@ -389,6 +477,7 @@ void main() {
 }
 
 Future<AppController> _controller({_FakeOssClient? oss}) async {
+  SharedPreferences.setMockInitialValues(<String, Object>{});
   final controller = AppController(
     sessionRepository: _FakeSessionRepository(_remoteSession()),
     ossClient: oss ?? _FakeOssClient(),
@@ -443,6 +532,8 @@ class _FakeSessionRepository implements SessionRepository {
 class _FakeOssClient extends OssClient {
   final Map<String, List<FileItem>> itemsByPath = <String, List<FileItem>>{};
   final Map<String, List<String>> objectKeysByPath = <String, List<String>>{};
+  final Map<String, int> directorySizes = <String, int>{};
+  int directorySizeCalls = 0;
   final List<String> createdFolders = <String>[];
   final List<String> deleted = <String>[];
   final List<(String, String)> copies = <(String, String)>[];
@@ -463,6 +554,12 @@ class _FakeOssClient extends OssClient {
   Future<List<String>> listAllObjectKeys(
           String path, UserSession session) async =>
       objectKeysByPath[path] ?? const <String>[];
+
+  @override
+  Future<int> calculateDirectorySize(String path, UserSession session) async {
+    directorySizeCalls++;
+    return directorySizes[path] ?? 0;
+  }
 
   @override
   Future<void> createFolder(String path, UserSession session) async {

@@ -179,7 +179,9 @@ class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         val path = call.requiredString("localPath")
         val file = File(path)
         require(file.isFile && file.canRead()) { "Local upload file is not readable" }
-        val threshold = call.argument<Number>("multipartThresholdBytes")?.toLong() ?: 16L * 1024 * 1024
+        val configuredThreshold = call.argument<Number>("multipartThresholdBytes")?.toLong() ?: 16L * 1024 * 1024
+        // 小分片完成时可稳定得到真实进度，避免 SDK 单次上传只回调完成状态。
+        val threshold = minOf(configuredThreshold, 1L * 1024 * 1024)
         val transfer = NativeTransfer()
         transfers.put(taskId, transfer)?.cancel()
 
@@ -218,14 +220,13 @@ class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         val transfer = NativeTransfer()
         transfers.put(taskId, transfer)?.cancel()
         val request = GetObjectRequest(bucketName, call.requiredString("key"))
-        request.setProgressListener(com.alibaba.sdk.android.oss.callback.OSSProgressCallback<GetObjectRequest> { _, current, total ->
-            emitProgress(taskId, "download", current, total)
-        })
         transfer.task = oss.asyncGetObject(request,
             object : OSSCompletedCallback<GetObjectRequest, GetObjectResult> {
                 override fun onSuccess(request: GetObjectRequest, response: GetObjectResult) {
                     transfer.stream = response.objectContent
                     try {
+                        val total = response.contentLength.coerceAtLeast(0)
+                        emitProgress(taskId, "download", 0, total)
                         FileOutputStream(target).use { output ->
                             response.objectContent.use { input ->
                                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -236,6 +237,7 @@ class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                                     if (count < 0) break
                                     output.write(buffer, 0, count)
                                     written += count
+                                    emitProgress(taskId, "download", written, total)
                                 }
                             }
                         }

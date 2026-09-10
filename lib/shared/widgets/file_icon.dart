@@ -142,6 +142,9 @@ class _FileTypeThumbnailState extends State<FileTypeThumbnail> {
   static var _activeRequests = 0;
 
   late String _cacheKey;
+  Future<List<int>>? _thumbnailFuture;
+  MemoryImage? _imageProvider;
+  String? _imageProviderKey;
 
   @override
   void initState() {
@@ -153,8 +156,11 @@ class _FileTypeThumbnailState extends State<FileTypeThumbnail> {
   void didUpdateWidget(covariant FileTypeThumbnail oldWidget) {
     super.didUpdateWidget(oldWidget);
     final nextKey = _keyFor(widget.item, widget.cacheNamespace);
-    if (nextKey != _cacheKey) {
+    if (nextKey != _cacheKey || oldWidget.item.kind != widget.item.kind) {
       _cacheKey = nextKey;
+      _thumbnailFuture = null;
+      _imageProvider = null;
+      _imageProviderKey = null;
     }
   }
 
@@ -166,13 +172,7 @@ class _FileTypeThumbnailState extends State<FileTypeThumbnail> {
     }
 
     final key = _cacheKey;
-    final cached = _cache[key];
-    final future = cached == null
-        ? _inFlight.putIfAbsent(
-            key,
-            () => _load(key, widget.item, widget.loader),
-          )
-        : Future<List<int>>.value(cached);
+    final future = _thumbnailFuture ??= _futureForCurrentItem();
 
     final content = FutureBuilder<List<int>>(
       future: future,
@@ -183,11 +183,12 @@ class _FileTypeThumbnailState extends State<FileTypeThumbnail> {
             bytes.isNotEmpty) {
           return ClipRRect(
             borderRadius: BorderRadius.circular(14),
-            child: Image.memory(
-              Uint8List.fromList(bytes),
+            child: Image(
+              image: _imageProviderFor(key, bytes),
               fit: BoxFit.cover,
               width: double.infinity,
               height: double.infinity,
+              gaplessPlayback: true,
               errorBuilder: (_, __, ___) {
                 _cache.remove(key);
                 return fallback;
@@ -201,6 +202,26 @@ class _FileTypeThumbnailState extends State<FileTypeThumbnail> {
     return widget.height == double.infinity
         ? SizedBox.expand(child: content)
         : SizedBox(height: widget.height, child: content);
+  }
+
+  Future<List<int>> _futureForCurrentItem() {
+    final key = _cacheKey;
+    final cached = _cache[key];
+    if (cached != null) {
+      return SynchronousFuture<List<int>>(cached);
+    }
+    return _inFlight.putIfAbsent(
+      key,
+      () => _load(key, widget.item, widget.loader),
+    );
+  }
+
+  MemoryImage _imageProviderFor(String key, List<int> bytes) {
+    if (_imageProvider == null || _imageProviderKey != key) {
+      _imageProvider = MemoryImage(Uint8List.fromList(bytes));
+      _imageProviderKey = key;
+    }
+    return _imageProvider!;
   }
 
   Widget _fallback(BuildContext context) {
