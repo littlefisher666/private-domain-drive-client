@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/theme/cupertino_desktop.dart';
@@ -137,6 +137,7 @@ class _FileTypeThumbnailState extends State<FileTypeThumbnail> {
   static final Map<String, List<int>> _cache = <String, List<int>>{};
   static final Map<String, Future<List<int>>> _inFlight =
       <String, Future<List<int>>>{};
+  static final Set<String> _reportedFailures = <String>{};
   static final Queue<Completer<void>> _requestQueue = Queue<Completer<void>>();
   static var _activeRequests = 0;
 
@@ -240,7 +241,13 @@ class _FileTypeThumbnailState extends State<FileTypeThumbnail> {
         return bytes;
       } catch (error) {
         final code = error is AppError ? error.code : error.runtimeType;
-        debugPrint('缩略图加载失败：${item.path}（$code）');
+        final failureKey = '$key|$code';
+        if (kDebugMode && _reportedFailures.add(failureKey)) {
+          if (_reportedFailures.length > _maxEntries) {
+            _reportedFailures.remove(_reportedFailures.first);
+          }
+          debugPrint('缩略图加载失败：${item.path}（$code）');
+        }
         rethrow;
       } finally {
         _inFlight.remove(key);
@@ -251,6 +258,7 @@ class _FileTypeThumbnailState extends State<FileTypeThumbnail> {
   static void clearMemoryCache() {
     _cache.clear();
     _inFlight.clear();
+    _reportedFailures.clear();
   }
 
   static Future<T> _withRequestPermit<T>(Future<T> Function() action) async {

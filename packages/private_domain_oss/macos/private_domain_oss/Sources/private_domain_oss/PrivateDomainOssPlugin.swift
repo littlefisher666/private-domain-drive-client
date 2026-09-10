@@ -89,11 +89,9 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
             .withEndpoint(values.endpoint)
         client = Client(configuration)
         bucket = values.bucket
-        NSLog("PDD OSS configure completed")
     }
 
     private func clearConfiguration() {
-        NSLog("PDD OSS configuration cleared")
         transfers.values.forEach { $0.cancel() }
         transfers.removeAll()
         client = nil
@@ -276,7 +274,6 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
     }
 
     private func getObjectBytes(_ arguments: [String: Any]) async throws -> Data {
-        NSLog("PDD OSS getObjectBytes configured=\(client != nil && bucket != nil)")
         let maxBytes = (arguments["maxBytes"] as? NSNumber)?.int64Value ?? 0
         guard maxBytes > 0 && maxBytes <= Int64(Int.max) else {
             throw OssBridgeContract.BridgeError.invalidMaxBytes
