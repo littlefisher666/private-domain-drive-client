@@ -96,6 +96,11 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
+          cache-dependency-path: |
+            android/**/*.gradle.kts
+            android/gradle/wrapper/gradle-wrapper.properties
+            android/settings.gradle.kts
 
       - name: 配置 Flutter
         uses: subosito/flutter-action@v2
