@@ -20,14 +20,17 @@ class PrivateDomainDriveApp extends StatelessWidget {
     final isMacOS = defaultTargetPlatform == TargetPlatform.macOS;
     return AppScope(
       controller: controller,
-      child: MaterialApp(
-        title: '私域网盘',
-        debugShowCheckedModeBanner: false,
-        theme: isMacOS ? CupertinoDesktopTheme.light() : AppTheme.light(),
-        darkTheme: isMacOS ? CupertinoDesktopTheme.light() : AppTheme.dark(),
-        themeMode: isMacOS ? ThemeMode.light : ThemeMode.system,
-        initialRoute: AppRouter.initialRoute,
-        onGenerateRoute: AppRouter.onGenerateRoute,
+      child: AnimatedBuilder(
+        animation: controller,
+        builder: (context, _) => MaterialApp(
+          title: '私域网盘',
+          debugShowCheckedModeBanner: false,
+          theme: isMacOS ? CupertinoDesktopTheme.light() : AppTheme.light(),
+          darkTheme: isMacOS ? CupertinoDesktopTheme.dark() : AppTheme.dark(),
+          themeMode: controller.themeMode,
+          initialRoute: AppRouter.initialRoute,
+          onGenerateRoute: AppRouter.onGenerateRoute,
+        ),
       ),
     );
   }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_domain_drive_client/features/auth/domain/user_session.dart';
@@ -58,6 +59,24 @@ void main() {
       controller.dispose();
       await (await SharedPreferences.getInstance())
           .remove('transfer_history:v1');
+    });
+
+    test('启动后恢复显示模式，并保存新的选择', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'theme_mode': 'dark',
+      });
+      final controller =
+          AppController(sessionRepository: MemorySessionRepository());
+
+      await controller.bootstrap();
+      expect(controller.themeMode, ThemeMode.dark);
+
+      await controller.setThemeMode(ThemeMode.light);
+      expect(
+        (await SharedPreferences.getInstance()).getString('theme_mode'),
+        'light',
+      );
+      controller.dispose();
     });
 
     test('目录浏览会记录目录树并支持返回上级', () async {

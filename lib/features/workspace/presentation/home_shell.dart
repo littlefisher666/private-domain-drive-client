@@ -24,12 +24,9 @@ class _HomeShellState extends State<HomeShell> {
     final desktop = width >= 960;
 
     if (desktop) {
-      return Theme(
-        data: CupertinoDesktopTheme.light(),
-        child: _DesktopShell(
-          index: _index,
-          onSelect: (value) => setState(() => _index = value),
-        ),
+      return _DesktopShell(
+        index: _index,
+        onSelect: (value) => setState(() => _index = value),
       );
     }
 
@@ -86,6 +83,7 @@ class _DesktopShell extends StatelessWidget {
     final controller = AppScope.of(context);
     final session = controller.session;
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     final title = switch (index) {
       1 => '传输中心',
       2 => '我的',
@@ -93,7 +91,7 @@ class _DesktopShell extends StatelessWidget {
     };
 
     return Scaffold(
-      backgroundColor: CupertinoDesktopTokens.background,
+      backgroundColor: theme.scaffoldBackgroundColor,
       body: Column(
         children: <Widget>[
           _DesktopTitleBar(title: title),
@@ -103,10 +101,10 @@ class _DesktopShell extends StatelessWidget {
                 SizedBox(
                   width: CupertinoDesktopTokens.sidebarWidth,
                   child: DecoratedBox(
-                    decoration: const BoxDecoration(
-                      color: CupertinoDesktopTokens.sidebar,
+                    decoration: BoxDecoration(
+                      color: scheme.surfaceContainerHighest,
                       border: Border(
-                        right: BorderSide(color: CupertinoDesktopTokens.line),
+                        right: BorderSide(color: scheme.outlineVariant),
                       ),
                     ),
                     child: SafeArea(
@@ -158,12 +156,10 @@ class _DesktopShell extends StatelessWidget {
                               ),
                             ),
                             Material(
-                              color: Colors.white.withValues(alpha: 0.7),
+                              color: scheme.surface,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(14),
-                                side: const BorderSide(
-                                  color: CupertinoDesktopTokens.line,
-                                ),
+                                side: BorderSide(color: scheme.outlineVariant),
                               ),
                               child: InkWell(
                                 borderRadius: BorderRadius.circular(14),
@@ -183,8 +179,7 @@ class _DesktopShell extends StatelessWidget {
                                         '共享空间成员',
                                         style:
                                             theme.textTheme.bodySmall?.copyWith(
-                                          color:
-                                              CupertinoDesktopTokens.secondary,
+                                          color: scheme.onSurfaceVariant,
                                           fontSize: 12,
                                         ),
                                       ),
@@ -201,7 +196,7 @@ class _DesktopShell extends StatelessWidget {
                 ),
                 Expanded(
                   child: ColoredBox(
-                    color: CupertinoDesktopTokens.surface,
+                    color: scheme.surface,
                     child: IndexedStack(
                       index: index,
                       children: const <Widget>[
@@ -238,10 +233,11 @@ class _DesktopTitleBar extends StatelessWidget {
     return Container(
       height: CupertinoDesktopTokens.titleBarHeight,
       padding: const EdgeInsets.fromLTRB(86, 0, 14, 0),
-      decoration: const BoxDecoration(
-        color: Color(0xB8FFFFFF),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.88),
         border: Border(
-          bottom: BorderSide(color: CupertinoDesktopTokens.line),
+          bottom:
+              BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
         ),
       ),
       child: Row(
@@ -250,10 +246,10 @@ class _DesktopTitleBar extends StatelessWidget {
             child: Text(
               title,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF3A3A3C),
+                color: Theme.of(context).colorScheme.onSurface,
               ),
             ),
           ),
@@ -301,7 +297,7 @@ class _BrandHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 10),
-          const Expanded(
+          Expanded(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -311,17 +307,17 @@ class _BrandHeader extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
-                    color: CupertinoDesktopTokens.ink,
+                    color: Theme.of(context).colorScheme.onSurface,
                   ),
                 ),
-                SizedBox(height: 2),
+                const SizedBox(height: 2),
                 Text(
                   'PRIVATE DOMAIN DRIVE',
                   style: TextStyle(
                     fontSize: 8,
                     fontWeight: FontWeight.w600,
                     letterSpacing: 0.35,
-                    color: CupertinoDesktopTokens.secondary,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
               ],
@@ -354,13 +350,14 @@ class _SideNavItem extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Material(
         color: selected
-            ? CupertinoDesktopTokens.blue.withValues(alpha: 0.14)
+            ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.14)
             : Colors.transparent,
         borderRadius: BorderRadius.circular(10),
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: onTap,
-          hoverColor: const Color(0x143C3C43),
+          hoverColor:
+              Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.08),
           child: SizedBox(
             height: 34,
             child: Padding(
@@ -373,8 +370,8 @@ class _SideNavItem extends StatelessWidget {
                       icon,
                       size: iconSize,
                       color: selected
-                          ? CupertinoDesktopTokens.blue
-                          : CupertinoDesktopTokens.ink,
+                          ? Theme.of(context).colorScheme.primary
+                          : Theme.of(context).colorScheme.onSurface,
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -387,8 +384,8 @@ class _SideNavItem extends StatelessWidget {
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
                         color: selected
-                            ? CupertinoDesktopTokens.blue
-                            : CupertinoDesktopTokens.ink,
+                            ? Theme.of(context).colorScheme.primary
+                            : Theme.of(context).colorScheme.onSurface,
                       ),
                     ),
                   ),

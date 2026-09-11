@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/errors/app_error.dart';
@@ -120,6 +120,7 @@ class AppController extends ChangeNotifier {
   static const _fileSortOptionKey = 'file_sort_option';
   static const _fileSortOptionsByDirectoryKey =
       'file_sort_options_by_directory';
+  static const _themeModeKey = 'theme_mode';
   static const _takenAtCachePrefix = 'image_taken_at:v5:';
   static const _minTransferConcurrency = 1;
   static const _maxTransferConcurrency = 5;
@@ -157,6 +158,7 @@ class AppController extends ChangeNotifier {
   List<ShareImportItem> _pendingShareItems = const <ShareImportItem>[];
   String _shareTargetPath = 'shared/photos/';
   bool _bootstrapped = false;
+  ThemeMode _themeMode = ThemeMode.light;
   int _treeRevision = 0;
   bool _isMultiSelectionMode = false;
   String? _selectionAnchorPath;
@@ -228,6 +230,7 @@ class AppController extends ChangeNotifier {
   int get multiSelectedCount => multiSelectedPathsListenable.value.length;
   Set<String> get multiSelectedPaths => multiSelectedPathsListenable.value;
   bool get bootstrapped => _bootstrapped;
+  ThemeMode get themeMode => _themeMode;
   int get treeRevision => _treeRevision;
   Capabilities get capabilities =>
       _session?.capabilities ?? const Capabilities.member();
@@ -244,6 +247,7 @@ class AppController extends ChangeNotifier {
       }
       _restoreSortPreferences(preferences);
       _restoreTransferHistory(preferences);
+      _restoreThemeMode(preferences);
       _transferHistoryReady = true;
     } catch (_) {
       // 偏好读取失败不应阻断会话恢复。
@@ -263,6 +267,22 @@ class AppController extends ChangeNotifier {
     }
     _bootstrapped = true;
     notifyListeners();
+  }
+
+  /// 更新显示模式；偏好会在下次启动时恢复。
+  Future<void> setThemeMode(ThemeMode mode) async {
+    if (_themeMode == mode) {
+      return;
+    }
+    _themeMode = mode;
+    notifyListeners();
+    try {
+      final preferences = _preferences ?? await SharedPreferences.getInstance();
+      _preferences = preferences;
+      await preferences.setString(_themeModeKey, mode.name);
+    } catch (_) {
+      // 偏好写入失败时仍保留本次会话的选择。
+    }
   }
 
   Future<LoginResult> login({
@@ -471,6 +491,13 @@ class AppController extends ChangeNotifier {
     } catch (_) {
       // 本地偏好损坏时使用默认排序，不阻断会话恢复。
     }
+  }
+
+  void _restoreThemeMode(SharedPreferences preferences) {
+    _themeMode = switch (preferences.getString(_themeModeKey)) {
+      'dark' => ThemeMode.dark,
+      _ => ThemeMode.light,
+    };
   }
 
   FileSortOption _fileSortOptionForPath(String path) =>

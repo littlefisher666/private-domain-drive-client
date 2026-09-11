@@ -976,9 +976,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
     final canDownload = controller.capabilities.download;
 
     return Scaffold(
-      backgroundColor: desktop
-          ? CupertinoDesktopTokens.surface
-          : theme.scaffoldBackgroundColor,
+      backgroundColor: desktop ? scheme.surface : theme.scaffoldBackgroundColor,
       floatingActionButton: desktop || !canUpload
           ? null
           : FloatingActionButton(
@@ -1197,10 +1195,12 @@ class _DesktopWorkspaceBody extends StatelessWidget {
       children: <Widget>[
         Container(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-          decoration: const BoxDecoration(
-            color: Color(0xE6FFFFFF),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.9),
             border: Border(
-              bottom: BorderSide(color: CupertinoDesktopTokens.line),
+              bottom: BorderSide(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
             ),
           ),
           child: Column(
@@ -1223,11 +1223,11 @@ class _DesktopWorkspaceBody extends StatelessWidget {
                           path,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 22,
                             fontWeight: FontWeight.w700,
                             letterSpacing: -0.4,
-                            color: CupertinoDesktopTokens.ink,
+                            color: Theme.of(context).colorScheme.onSurface,
                           ),
                         ),
                       ],
@@ -1304,7 +1304,7 @@ class _DesktopWorkspaceBody extends StatelessWidget {
             children: <Widget>[
               Expanded(
                 child: Container(
-                  color: const Color(0xFFFBFBFD),
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
                   padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1375,7 +1375,7 @@ class _CupertinoSegmented extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(2),
       decoration: BoxDecoration(
-        color: CupertinoDesktopTokens.controlFill,
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(9),
       ),
       child: Row(
@@ -1411,7 +1411,8 @@ class _SegButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: selected ? Colors.white : Colors.transparent,
+      color:
+          selected ? Theme.of(context).colorScheme.surface : Colors.transparent,
       borderRadius: BorderRadius.circular(7),
       elevation: selected ? 1 : 0,
       shadowColor: const Color(0x1F000000),
@@ -1424,10 +1425,10 @@ class _SegButton extends StatelessWidget {
           alignment: Alignment.center,
           child: Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: CupertinoDesktopTokens.ink,
+              color: Theme.of(context).colorScheme.onSurface,
             ),
           ),
         ),
@@ -1530,34 +1531,35 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 36),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.7),
+        color: scheme.surface,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: CupertinoDesktopTokens.line,
+          color: scheme.outlineVariant,
           style: BorderStyle.solid,
         ),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          const Text(
+          Text(
             '当前目录为空',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w700,
-              color: CupertinoDesktopTokens.ink,
+              color: scheme.onSurface,
             ),
           ),
           const SizedBox(height: 6),
           Text(
             canUpload ? '可以新建文件夹或上传文件。' : '当前目录暂无内容。',
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 13,
               height: 1.55,
-              color: CupertinoDesktopTokens.secondary,
+              color: scheme.onSurfaceVariant,
             ),
           ),
           if (canUpload && onAction != null) ...<Widget>[
@@ -1676,9 +1678,10 @@ class _ListView extends StatelessWidget {
       childBuilder: (context, itemKeys, marqueeSelecting, onItemPointerDown) =>
           Container(
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).colorScheme.surface,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: CupertinoDesktopTokens.line),
+          border:
+              Border.all(color: Theme.of(context).colorScheme.outlineVariant),
         ),
         clipBehavior: Clip.antiAlias,
         child: ListView.separated(
@@ -1748,10 +1751,12 @@ class _ListView extends StatelessWidget {
                                     item.name,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontSize: 14,
                                       fontWeight: FontWeight.w600,
-                                      color: CupertinoDesktopTokens.ink,
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurface,
                                     ),
                                   ),
                                 const SizedBox(height: 2),
@@ -1761,9 +1766,11 @@ class _ListView extends StatelessWidget {
                                           ? item.typeLabel
                                           : '${item.itemCount} 项'
                                       : '${item.typeLabel} · ${FileSizeFormatter.format(item.size ?? 0)}',
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 12,
-                                    color: CupertinoDesktopTokens.secondary,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
                                   ),
                                 ),
                               ],
@@ -1771,9 +1778,11 @@ class _ListView extends StatelessWidget {
                           ),
                           Text(
                             metaTimeBuilder(item),
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 12,
-                              color: CupertinoDesktopTokens.secondary,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
                             ),
                           ),
                         ],
@@ -1940,7 +1949,7 @@ class _GridView extends StatelessWidget {
             onPointerDown: (event) => onItemPointerDown(event.pointer),
             child: Material(
               key: itemKeys[index],
-              color: Colors.white,
+              color: Theme.of(context).colorScheme.surface,
               borderRadius: BorderRadius.circular(16),
               child: GestureDetector(
                 onSecondaryTapDown: (details) => _showDesktopItemMenu(
@@ -1968,8 +1977,10 @@ class _GridView extends StatelessWidget {
                           borderRadius: BorderRadius.circular(16),
                           border: Border.all(
                               color: selected
-                                  ? CupertinoDesktopTokens.blue
-                                  : CupertinoDesktopTokens.line),
+                                  ? Theme.of(context).colorScheme.primary
+                                  : Theme.of(context)
+                                      .colorScheme
+                                      .outlineVariant),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1991,10 +2002,12 @@ class _GridView extends StatelessWidget {
                               Text(item.name,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                       fontSize: 13,
                                       fontWeight: FontWeight.w600,
-                                      color: CupertinoDesktopTokens.ink)),
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurface)),
                           ],
                         ),
                       ),
@@ -2048,7 +2061,8 @@ class _DesktopMarqueeSelection extends StatefulWidget {
 
 class _DesktopMarqueeSelectionState extends State<_DesktopMarqueeSelection> {
   final GlobalKey _selectionAreaKey = GlobalKey();
-  final Map<String, GlobalKey> _itemKeysByPath = <String, GlobalKey>{};
+  List<GlobalKey> _itemKeys = <GlobalKey>[];
+  List<String> _itemKeyPaths = <String>[];
   Offset? _startPosition;
   Offset? _currentPosition;
   int? _activePointer;
@@ -2056,9 +2070,16 @@ class _DesktopMarqueeSelectionState extends State<_DesktopMarqueeSelection> {
   final Set<int> _itemPointers = <int>{};
   Set<String> _initialPaths = <String>{};
 
-  List<GlobalKey> get _itemKeys => widget.items
-      .map((item) => _itemKeysByPath.putIfAbsent(item.path, GlobalKey.new))
-      .toList(growable: false);
+  void _syncItemKeys() {
+    final paths = widget.items.map((item) => item.path).toList(growable: false);
+    if (_itemKeyPaths.length == paths.length &&
+        _itemKeyPaths.indexed.every((entry) => entry.$2 == paths[entry.$1])) {
+      return;
+    }
+    _itemKeyPaths = paths;
+    // 同一路径的异常重复条目也必须拥有各自独立的 GlobalKey。
+    _itemKeys = List<GlobalKey>.generate(paths.length, (_) => GlobalKey());
+  }
 
   void _onPointerDown(PointerDownEvent event) {
     if (!widget.enabled ||
@@ -2112,10 +2133,10 @@ class _DesktopMarqueeSelectionState extends State<_DesktopMarqueeSelection> {
       globalOrigin + current,
     );
     final paths = <String>{..._initialPaths};
-    for (final item in widget.items) {
-      final itemBox = _itemKeysByPath[item.path]
-          ?.currentContext
-          ?.findRenderObject() as RenderBox?;
+    for (var index = 0; index < widget.items.length; index++) {
+      final item = widget.items[index];
+      final itemBox =
+          _itemKeys[index].currentContext?.findRenderObject() as RenderBox?;
       if (itemBox == null || !itemBox.attached) continue;
       final itemOrigin = itemBox.localToGlobal(Offset.zero);
       if (selection.overlaps(itemOrigin & itemBox.size)) {
@@ -2147,6 +2168,7 @@ class _DesktopMarqueeSelectionState extends State<_DesktopMarqueeSelection> {
 
   @override
   Widget build(BuildContext context) {
+    _syncItemKeys();
     final start = _startPosition;
     final current = _currentPosition;
     if (!widget.enabled) {
@@ -2224,11 +2246,12 @@ class _DetailPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final controller = AppScope.of(context);
+    final scheme = Theme.of(context).colorScheme;
     return DecoratedBox(
-      decoration: const BoxDecoration(
-        color: CupertinoDesktopTokens.previewBg,
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
         border: Border(
-          left: BorderSide(color: CupertinoDesktopTokens.line),
+          left: BorderSide(color: scheme.outlineVariant),
         ),
       ),
       child: Column(
@@ -2236,12 +2259,12 @@ class _DetailPanel extends StatelessWidget {
         children: <Widget>[
           Container(
             padding: const EdgeInsets.all(16),
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               border: Border(
-                bottom: BorderSide(color: CupertinoDesktopTokens.line),
+                bottom: BorderSide(color: scheme.outlineVariant),
               ),
             ),
-            child: const Column(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
@@ -2249,7 +2272,7 @@ class _DetailPanel extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
-                    color: CupertinoDesktopTokens.ink,
+                    color: scheme.onSurface,
                   ),
                 ),
               ],
@@ -2257,11 +2280,11 @@ class _DetailPanel extends StatelessWidget {
           ),
           Expanded(
             child: item == null
-                ? const Center(
+                ? Center(
                     child: Text(
                       '选中文件后展示详情',
                       style: TextStyle(
-                        color: CupertinoDesktopTokens.secondary,
+                        color: scheme.onSurfaceVariant,
                         fontSize: 13,
                       ),
                     ),
@@ -2273,22 +2296,24 @@ class _DetailPanel extends StatelessWidget {
                       const SizedBox(height: 14),
                       Text(
                         item!.name,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
-                          color: CupertinoDesktopTokens.ink,
+                          color: scheme.onSurface,
                         ),
                       ),
                       const SizedBox(height: 12),
-                      _kv('类型', item!.typeLabel),
+                      _kv(context, '类型', item!.typeLabel),
                       _kv(
+                        context,
                         '大小',
                         item!.isDirectory
                             ? _directorySizeLabel(directorySize)
                             : FileSizeFormatter.format(item!.size ?? 0),
                       ),
-                      _kv('路径', controller.displayPath(item!.path)),
+                      _kv(context, '路径', controller.displayPath(item!.path)),
                       _kv(
+                        context,
                         '更新',
                         item!.updatedAt == null
                             ? '—'
@@ -2296,6 +2321,7 @@ class _DetailPanel extends StatelessWidget {
                       ),
                       if (item!.kind == FileKind.image)
                         _kv(
+                          context,
                           '拍摄',
                           item!.takenAt == null
                               ? ''
@@ -2309,7 +2335,8 @@ class _DetailPanel extends StatelessWidget {
     );
   }
 
-  Widget _kv(String label, String value) {
+  Widget _kv(BuildContext context, String label, String value) {
+    final scheme = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
@@ -2318,9 +2345,9 @@ class _DetailPanel extends StatelessWidget {
             width: 40,
             child: Text(
               label,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
-                color: CupertinoDesktopTokens.secondary,
+                color: scheme.onSurfaceVariant,
               ),
             ),
           ),
@@ -2330,10 +2357,10 @@ class _DetailPanel extends StatelessWidget {
               textAlign: TextAlign.right,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
-                color: CupertinoDesktopTokens.ink,
+                color: scheme.onSurface,
               ),
             ),
           ),
@@ -2463,7 +2490,7 @@ class _InlineRenameFieldState extends State<_InlineRenameField> {
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
           filled: true,
-          fillColor: Colors.white,
+          fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(6),
             borderSide: const BorderSide(color: CupertinoDesktopTokens.blue),
@@ -2480,10 +2507,10 @@ class _InlineRenameFieldState extends State<_InlineRenameField> {
             ),
           ),
         ),
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 13,
           fontWeight: FontWeight.w500,
-          color: CupertinoDesktopTokens.ink,
+          color: Theme.of(context).colorScheme.onSurface,
         ),
       ),
     );
@@ -2508,14 +2535,14 @@ Future<void> _showDesktopItemMenu({
   final overlay = Overlay.of(context).context.findRenderObject()! as RenderBox;
   final action = await showMenu<_DesktopItemAction>(
     context: context,
-    color: CupertinoDesktopTokens.surface,
+    color: Theme.of(context).colorScheme.surface,
     surfaceTintColor: Colors.transparent,
     elevation: 10,
-    shadowColor: const Color(0x330F172A),
+    shadowColor: Theme.of(context).colorScheme.shadow,
     popUpAnimationStyle: AnimationStyle.noAnimation,
     shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(10),
-      side: const BorderSide(color: Color(0x4D3C3C43)),
+      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
     ),
     position: RelativeRect.fromRect(
       Rect.fromPoints(position, position),
@@ -2523,24 +2550,28 @@ Future<void> _showDesktopItemMenu({
     ),
     items: <PopupMenuEntry<_DesktopItemAction>>[
       _desktopContextMenuItem(
+        context: context,
         value: _DesktopItemAction.openOrPreview,
         icon: item.isDirectory ? Icons.folder_open_outlined : Icons.open_in_new,
         label: item.isDirectory ? '打开' : '预览 / 打开',
       ),
       if (canDownload)
         _desktopContextMenuItem(
+          context: context,
           value: _DesktopItemAction.download,
           icon: Icons.download_outlined,
           label: '下载',
         ),
       if (canRename)
         _desktopContextMenuItem(
+          context: context,
           value: _DesktopItemAction.rename,
           icon: Icons.drive_file_rename_outline,
           label: '重命名',
         ),
       if (canDelete)
         _desktopContextMenuItem(
+          context: context,
           value: _DesktopItemAction.delete,
           icon: Icons.delete_outline,
           label: '删除',
@@ -2567,14 +2598,14 @@ Future<void> _showDesktopItemMenu({
 }
 
 PopupMenuItem<_DesktopItemAction> _desktopContextMenuItem({
+  required BuildContext context,
   required _DesktopItemAction value,
   required IconData icon,
   required String label,
   bool isDestructive = false,
 }) {
-  final color = isDestructive
-      ? CupertinoDesktopTokens.danger
-      : CupertinoDesktopTokens.ink;
+  final scheme = Theme.of(context).colorScheme;
+  final color = isDestructive ? scheme.error : scheme.onSurface;
   return PopupMenuItem<_DesktopItemAction>(
     value: value,
     height: 40,
