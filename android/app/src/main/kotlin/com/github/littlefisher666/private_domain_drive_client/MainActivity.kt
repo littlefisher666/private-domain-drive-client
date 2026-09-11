@@ -1,4 +1,4 @@
-package com.privatedomain.drive.private_domain_drive_client
+package com.github.littlefisher666.private_domain_drive_client
 
 import android.content.Intent
 import android.content.pm.PackageManager
