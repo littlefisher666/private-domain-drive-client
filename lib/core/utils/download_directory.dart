@@ -8,6 +8,9 @@ const _downloadDirectoryPicker =
 
 /// 打开下载目录选择器；macOS 默认定位到系统“下载”目录。
 Future<String?> selectDownloadDirectory() async {
+  if (Platform.isAndroid) {
+    return _downloadDirectoryPicker.invokeMethod<String>('select');
+  }
   if (!Platform.isMacOS) return FilePicker.getDirectoryPath();
   try {
     return await _downloadDirectoryPicker.invokeMethod<String>('select');

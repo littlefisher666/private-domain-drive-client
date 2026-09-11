@@ -1,3 +1,6 @@
+import org.gradle.api.artifacts.dsl.RepositoryHandler
+import org.gradle.api.artifacts.repositories.MavenArtifactRepository
+
 pluginManagement {
     val flutterSdkPath =
         run {
@@ -11,15 +14,41 @@ pluginManagement {
     includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
 
     repositories {
-        // From Maven settings-zkwlzz.xml mirror: zkwlzz maven (mirrorOf central)
         maven {
-            name = "zkwlzz-maven-public"
-            url = uri("https://nexus.zkwlzz.com/repository/maven-public/")
+            name = "aliyun-gradle-plugin"
+            url = uri("https://maven.aliyun.com/repository/gradle-plugin")
         }
-        google()
-        mavenCentral()
-        gradlePluginPortal()
+        maven {
+            name = "aliyun-google"
+            url = uri("https://maven.aliyun.com/repository/google")
+        }
+        maven {
+            name = "aliyun-public"
+            url = uri("https://maven.aliyun.com/repository/public")
+        }
     }
+}
+
+private fun RepositoryHandler.useAliyunMavenMirrors() {
+    withType(MavenArtifactRepository::class.java).configureEach {
+        val source = url.toString().removeSuffix("/")
+        url = when (source) {
+            "https://dl.google.com/dl/android/maven2" ->
+                uri("https://maven.aliyun.com/repository/google")
+            "https://repo.maven.apache.org/maven2" ->
+                uri("https://maven.aliyun.com/repository/public")
+            "https://plugins.gradle.org/m2" ->
+                uri("https://maven.aliyun.com/repository/gradle-plugin")
+            else -> url
+        }
+    }
+}
+
+// Flutter 插件会在各自的 build.gradle 中声明 google()/mavenCentral()。
+// 在项目求值前重写这些仓库，避免插件绕过根项目的镜像配置。
+gradle.beforeProject {
+    buildscript.repositories.useAliyunMavenMirrors()
+    repositories.useAliyunMavenMirrors()
 }
 
 plugins {

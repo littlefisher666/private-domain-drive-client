@@ -689,13 +689,17 @@ class _WorkspacePageState extends State<WorkspacePage> {
     }
     final controller = AppScope.of(context);
     try {
-      final directory = await selectDownloadDirectory();
+      final mediaFile = _isAndroidMediaFile(item.name);
+      final directory = mediaFile ? '系统相册' : await selectDownloadDirectory();
       if (directory == null) {
         return;
       }
       controller.enqueueDownload(item, targetDirectory: directory);
       if (mounted) {
-        AppFeedback.showSnack(context, '已加入下载队列：${item.name}');
+        AppFeedback.showSnack(
+          context,
+          mediaFile ? '已加入相册下载队列：${item.name}' : '已加入下载队列：${item.name}',
+        );
       }
     } catch (error) {
       if (mounted) {
@@ -705,6 +709,25 @@ class _WorkspacePageState extends State<WorkspacePage> {
         );
       }
     }
+  }
+
+  bool _isAndroidMediaFile(String name) {
+    if (!Platform.isAndroid) return false;
+    final extension = name.split('.').last.toLowerCase();
+    return const <String>{
+      'jpg',
+      'jpeg',
+      'png',
+      'gif',
+      'webp',
+      'heic',
+      'mp4',
+      'mov',
+      'mkv',
+      'avi',
+      'webm',
+      '3gp',
+    }.contains(extension);
   }
 
   Future<void> _downloadSelected(List<FileItem> items) async {
@@ -862,70 +885,79 @@ class _WorkspacePageState extends State<WorkspacePage> {
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
       builder: (context) {
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              ListTile(
-                title: Text(item.name,
-                    style: Theme.of(context).textTheme.titleMedium),
-                subtitle: Text(controller.displayPath(item.path)),
-              ),
-              ListTile(
-                leading: const Icon(Icons.open_in_new),
-                title: Text(item.isDirectory ? '打开' : '打开/预览'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _handleOpen(item);
-                },
-              ),
-              if (!item.isDirectory)
-                ListTile(
-                  leading: const Icon(Icons.visibility_outlined),
-                  title: const Text('预览'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _openPreview(item);
-                  },
-                ),
-              if (controller.capabilities.download)
-                ListTile(
-                  leading: const Icon(Icons.download_outlined),
-                  title: const Text('下载'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _download(item);
-                  },
-                ),
-              if (controller.capabilities.upload ||
-                  controller.capabilities.delete)
-                ListTile(
-                  leading: const Icon(Icons.edit_outlined),
-                  title: const Text('重命名'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _rename(item);
-                  },
-                ),
-              if (controller.capabilities.delete)
-                ListTile(
-                  leading: Icon(
-                    Icons.delete_outline,
-                    color: Theme.of(context).colorScheme.error,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(context).height * 0.82,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  ListTile(
+                    title: Text(
+                      item.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    subtitle: Text(
+                      controller.displayPath(item.path),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                  title: Text(
-                    '删除',
-                    style:
-                        TextStyle(color: Theme.of(context).colorScheme.error),
+                  ListTile(
+                    leading: Icon(item.isDirectory
+                        ? Icons.open_in_new
+                        : Icons.visibility_outlined),
+                    title: Text(item.isDirectory ? '打开' : '预览'),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _handleOpen(item);
+                    },
                   ),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _delete(item);
-                  },
-                ),
-              const SizedBox(height: 8),
-            ],
+                  if (controller.capabilities.download)
+                    ListTile(
+                      leading: const Icon(Icons.download_outlined),
+                      title: const Text('下载'),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _download(item);
+                      },
+                    ),
+                  if (controller.capabilities.upload ||
+                      controller.capabilities.delete)
+                    ListTile(
+                      leading: const Icon(Icons.edit_outlined),
+                      title: const Text('重命名'),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _rename(item);
+                      },
+                    ),
+                  if (controller.capabilities.delete)
+                    ListTile(
+                      leading: Icon(
+                        Icons.delete_outline,
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                      title: Text(
+                        '删除',
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error),
+                      ),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _delete(item);
+                      },
+                    ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            ),
           ),
         );
       },
@@ -1632,12 +1664,23 @@ class _ListView extends StatelessWidget {
           itemBuilder: (context, index) {
             final item = items[index];
             return ListTile(
+              dense: true,
+              visualDensity: const VisualDensity(vertical: -2),
+              contentPadding: const EdgeInsets.only(left: 12, right: 4),
+              horizontalTitleGap: 10,
+              minLeadingWidth: 28,
+              minVerticalPadding: 5,
               leading: multiSelecting
-                  ? Checkbox(
-                      value: selectedPaths.contains(item.path),
-                      onChanged: (_) => onToggle(item),
+                  ? SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: Checkbox(
+                        value: selectedPaths.contains(item.path),
+                        visualDensity: VisualDensity.compact,
+                        onChanged: (_) => onToggle(item),
+                      ),
                     )
-                  : FileTypeIcon(item: item),
+                  : FileTypeIcon(item: item, size: 24),
               title: renamingPath == item.path
                   ? _InlineRenameField(
                       item: item,
@@ -1648,11 +1691,15 @@ class _ListView extends StatelessWidget {
                       item.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
                     ),
               subtitle: Text(
                 subtitleBuilder(item),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
               ),
               onTap: () {
                 onSelect(item);
@@ -1661,8 +1708,11 @@ class _ListView extends StatelessWidget {
               onLongPress: () => onToggle(item),
               trailing: IconButton(
                 tooltip: '更多',
+                visualDensity: VisualDensity.compact,
+                constraints:
+                    const BoxConstraints.tightFor(width: 40, height: 40),
                 onPressed: () => onMore(item),
-                icon: const Icon(Icons.more_vert),
+                icon: const Icon(Icons.more_vert, size: 20),
               ),
             );
           },
@@ -1861,7 +1911,9 @@ class _GridView extends StatelessWidget {
           maxCrossAxisExtent: desktop ? 190 : 180,
           mainAxisSpacing: 12,
           crossAxisSpacing: 12,
-          childAspectRatio: desktop ? 0.92 : 0.86,
+          // 移动端多选会额外显示复选框；预留纵向空间，避免真机字体
+          // 或系统缩放下缩略图卡片底部溢出。
+          childAspectRatio: desktop ? 0.92 : 0.76,
         ),
         itemCount: items.length,
         itemBuilder: (context, index) {

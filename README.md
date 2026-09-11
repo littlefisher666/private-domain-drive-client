@@ -10,7 +10,7 @@
 - 文件浏览（列表 / 缩略图、进出目录、新建 / 重命名 / 删除）
 - 上传 / 下载任务与重试取消
 - 图片 / PDF / 文本预览
-- Android 分享确认上传（应用内模拟入口）
+- Android 系统分享导入：从相册、文件管理器等应用分享一个或多个文件后，选择目录并确认上传
 - 我的页：会话信息与退出登录
 - 自适应布局：窄屏底栏导航，宽屏侧栏三栏信息结构
 
@@ -27,17 +27,15 @@
 cd private-domain-drive-client
 flutter pub get
 
-# macOS
-flutter run -d macos
+# macOS（本地环境配置不提交）
+flutter run -d macos --dart-define-from-file=env/local.json
 
 # Android（需模拟器或真机）
-flutter run -d android
+flutter run -d android --dart-define-from-file=env/local.json
 
-# 指定 FC 地址
-flutter run -d macos \
-  --dart-define=FC_BASE_URL=https://your-fc-trigger.example.com \
-  --dart-define=FC_ACCESS_KEY_ID=your-access-key-id \
-  --dart-define=FC_ACCESS_KEY_SECRET=your-access-key-secret
+# Android 分享导入
+# 在相册或文件管理器中选择文件，使用系统“分享”并选择“私域网盘”。
+# 应用会复制源文件至私有缓存，展示确认上传页；请在缓存清理前完成上传。
 ```
 
 FC HTTP 触发器默认启用签名校验，客户端必须通过 `FC_ACCESS_KEY_ID` 和
