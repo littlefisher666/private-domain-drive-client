@@ -125,6 +125,7 @@ jobs:
       - name: 构建正式 APK
         run: |
           flutter build apk --release \
+            --target-platform android-arm64 \
             --build-name "${{ needs.prepare.outputs.version_name }}" \
             --build-number "${{ needs.prepare.outputs.build_number }}" \
             --dart-define=FC_BASE_URL="${{ vars.FC_BASE_URL }}" \
@@ -210,6 +211,27 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: 生成更新清单
+        env:
+          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+          VERSION_NAME: ${{ needs.prepare.outputs.version_name }}
+        run: |
+          android_name="private-domain-drive-android-${TAG_NAME}.apk"
+          macos_name="private-domain-drive-macos-${TAG_NAME}.dmg"
+          android_digest="sha256:$(sha256sum "dist/$android_name" | awk '{print $1}')"
+          macos_digest="sha256:$(sha256sum "dist/$macos_name" | awk '{print $1}')"
+          release_url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/${TAG_NAME}"
+          jq -n \
+            --arg version "$VERSION_NAME" \
+            --arg android_name "$android_name" \
+            --arg android_url "$release_url/$android_name" \
+            --arg android_digest "$android_digest" \
+            --arg macos_name "$macos_name" \
+            --arg macos_url "$release_url/$macos_name" \
+            --arg macos_digest "$macos_digest" \
+            '{version: $version, notes: "", assets: {android: {name: $android_name, url: $android_url, digest: $android_digest}, macos: {name: $macos_name, url: $macos_url, digest: $macos_digest}}}' \
+            > dist/private-domain-drive-update.json
+
       - name: 创建发布标签与 Release
         uses: softprops/action-gh-release@v2
         with:
@@ -220,3 +242,4 @@ jobs:
           files: |
             dist/private-domain-drive-android-*.apk
             dist/private-domain-drive-macos-*.dmg
+            dist/private-domain-drive-update.json
