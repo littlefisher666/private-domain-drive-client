@@ -1,10 +1,14 @@
 package com.privatedomain.drive.private_domain_drive_client
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
+import android.os.Build
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import android.provider.Settings
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -18,6 +22,7 @@ class MainActivity : FlutterActivity() {
         private const val METHODS = "private_domain_drive/share_import"
         private const val EVENTS = "private_domain_drive/share_import_events"
         private const val DOWNLOAD_DIRECTORY = "private_domain_drive/download_directory_picker"
+        private const val APP_UPDATE = "private_domain_drive/app_update"
         private const val DOWNLOAD_DIRECTORY_REQUEST = 702
     }
 
@@ -58,6 +63,26 @@ class MainActivity : FlutterActivity() {
                     },
                     DOWNLOAD_DIRECTORY_REQUEST,
                 )
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, APP_UPDATE)
+            .setMethodCallHandler { call, result ->
+                if (call.method != "installApk") return@setMethodCallHandler result.notImplemented()
+                val path = call.argument<String>("path")
+                    ?: return@setMethodCallHandler result.error("INVALID_ARGUMENT", "缺少 APK 路径", null)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+                    startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                        data = Uri.parse("package:$packageName")
+                    })
+                    return@setMethodCallHandler result.success(false)
+                }
+                val apk = File(path)
+                if (!apk.isFile) return@setMethodCallHandler result.error("APK_MISSING", "更新包不存在", null)
+                val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", apk)
+                startActivity(Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                })
+                result.success(true)
             }
         receiveShareIntent(intent, emit = false)
     }

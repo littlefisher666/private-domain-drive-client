@@ -1,14 +1,11 @@
-name: Flutter Scheduled Release
+name: Flutter Release
 
 on:
-  # GitHub Actions 的 cron 使用 UTC；每天北京时间 02:00 对应前一天 18:00 UTC。
-  schedule:
-    - cron: "0 18 * * *"
   workflow_dispatch:
     inputs:
       version:
-        description: "可选发布版本，例如 1.1.2 或 v1.1.2；留空则自动递增补丁版本"
-        required: false
+        description: "必填发布版本，例如 1.1.2 或 v1.1.2"
+        required: true
         type: string
 
 permissions:
@@ -20,65 +17,30 @@ concurrency:
 
 jobs:
   prepare:
-    name: Check for changes
+    name: Prepare release
     runs-on: ubuntu-latest
     outputs:
-      should_build: ${{ steps.check.outputs.should_build }}
       version_name: ${{ steps.version.outputs.version_name }}
       build_number: ${{ steps.version.outputs.build_number }}
       tag_name: ${{ steps.version.outputs.tag_name }}
 
     steps:
-      - name: Checkout full history
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Check whether code changed since the latest release tag
-        id: check
-        shell: bash
-        run: |
-          latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)"
-
-          if [[ -z "$latest_tag" ]]; then
-            echo "No previous release tag found; building the first release."
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-          elif git diff --quiet "$latest_tag" HEAD -- . ':!.github/workflows/release.yml'; then
-            echo "No code changes since $latest_tag; skipping the build."
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Changes found since $latest_tag; starting the build."
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Generate version
-        if: steps.check.outputs.should_build == 'true'
+      - name: Validate release version
         id: version
         shell: bash
         run: |
-          latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)"
-
-          # 手动触发可以指定版本；定时触发或手动留空时，自动递增 PATCH。
           requested_version="${{ inputs.version }}"
           requested_version="${requested_version#v}"
-          if [[ -n "$requested_version" ]]; then
-            if [[ ! "$requested_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "版本号格式错误：${{ inputs.version }}，应为 1.1.2 或 v1.1.2"
-              exit 1
-            fi
-            version_name="$requested_version"
-          elif [[ -z "$latest_tag" ]]; then
-            version_name="1.0.1"
-          elif [[ "$latest_tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            major="${BASH_REMATCH[1]}"
-            minor="${BASH_REMATCH[2]}"
-            patch="${BASH_REMATCH[3]}"
-            version_name="${major}.${minor}.$((patch + 1))"
-          else
-            echo "Latest release tag has an invalid format: $latest_tag"
+          if [[ ! "$requested_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "版本号格式错误：${{ inputs.version }}，应为 1.1.2 或 v1.1.2"
             exit 1
           fi
-
+          version_name="$requested_version"
           build_number="${GITHUB_RUN_NUMBER}"
           tag_name="v${version_name}"
 
@@ -95,7 +57,6 @@ jobs:
   android:
     name: Build Android APK
     needs: prepare
-    if: needs.prepare.outputs.should_build == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -121,6 +82,17 @@ jobs:
       - name: Run tests
         run: flutter test
 
+      - name: Restore Android signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_BASE64" && test -n "$KEY_ALIAS" && test -n "$KEYSTORE_PASSWORD" && test -n "$KEY_PASSWORD"
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/upload-keystore.jks
+          printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=upload-keystore.jks\n' "$KEYSTORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > android/key.properties
+
       - name: Build release APK
         run: |
           flutter build apk --release \
@@ -143,7 +115,6 @@ jobs:
   macos:
     name: Build macOS app
     needs: prepare
-    if: needs.prepare.outputs.should_build == 'true'
     runs-on: macos-latest
 
     steps:
@@ -194,7 +165,6 @@ jobs:
   release:
     name: Create GitHub Release and tag
     needs: [prepare, android, macos]
-    if: needs.prepare.outputs.should_build == 'true'
     runs-on: ubuntu-latest
 
     steps:

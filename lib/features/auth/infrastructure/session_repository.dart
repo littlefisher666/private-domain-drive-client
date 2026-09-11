@@ -9,7 +9,8 @@ import 'secure_session_store.dart';
 
 abstract class SessionRepository {
   Future<UserSession?> restore();
-  Future<UserSession> login({required String account, required String password});
+  Future<UserSession> login(
+      {required String account, required String password});
   Future<UserSession> refreshCredentials(UserSession session);
   Future<void> logout();
 }
@@ -19,13 +20,16 @@ class PersistentSessionRepository implements SessionRepository {
     required SecureSessionStore store,
     required ApiClient apiClient,
     required AliyunStsClient stsClient,
+    required String appVersion,
   })  : _store = store,
         _apiClient = apiClient,
-        _stsClient = stsClient;
+        _stsClient = stsClient,
+        _appVersion = appVersion;
 
   final SecureSessionStore _store;
   final ApiClient _apiClient;
   final AliyunStsClient _stsClient;
+  final String _appVersion;
 
   @override
   Future<UserSession?> restore() async {
@@ -67,7 +71,7 @@ class PersistentSessionRepository implements SessionRepository {
         account: trimmed,
         password: password,
         platform: _platformName(),
-        appVersion: AppConstants.appVersion,
+        appVersion: _appVersion,
       );
       await _store.write(session);
       return session;
@@ -106,7 +110,6 @@ class PersistentSessionRepository implements SessionRepository {
         return defaultTargetPlatform.name;
     }
   }
-
 }
 
 /// Test-only in-memory repository.
