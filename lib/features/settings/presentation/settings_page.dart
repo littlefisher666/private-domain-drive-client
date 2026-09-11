@@ -218,7 +218,9 @@ class _SettingsPageState extends State<SettingsPage> {
           ],
         ),
       );
-    } catch (_) {
+    } catch (error, stackTrace) {
+      debugPrint('[更新检查] 页面处理失败：$error');
+      debugPrintStack(stackTrace: stackTrace, label: '[更新检查] 页面异常堆栈');
       if (mounted)
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('检查更新失败，请稍后重试')));

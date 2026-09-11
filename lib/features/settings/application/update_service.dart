@@ -23,20 +23,27 @@ class UpdateService {
 
   Future<AvailableUpdate?> check() async {
     final current = await _versionReader.read();
+    debugPrint('[更新检查] 当前版本：${current.name}');
     final release = await _releaseClient.latest();
-    if (compareVersions(release.version, current.name) <= 0) return null;
+    final comparison = compareVersions(release.version, current.name);
+    debugPrint('[更新检查] 远端版本：${release.version}，比较结果：$comparison');
+    if (comparison <= 0) return null;
     final prefix = defaultTargetPlatform == TargetPlatform.android
         ? 'private-domain-drive-android-v'
         : 'private-domain-drive-macos-v';
     final suffix =
         defaultTargetPlatform == TargetPlatform.android ? '.apk' : '.dmg';
+    debugPrint('[更新检查] 查找资产：$prefix*$suffix');
     final asset = release.assets
         .where((item) =>
             item.name.startsWith(prefix) && item.name.endsWith(suffix))
         .firstOrNull;
-    return asset == null
-        ? null
-        : AvailableUpdate(release: release, asset: asset);
+    if (asset == null) {
+      debugPrint('[更新检查] 未找到当前平台的发布资产');
+      return null;
+    }
+    debugPrint('[更新检查] 找到发布资产：${asset.name}');
+    return AvailableUpdate(release: release, asset: asset);
   }
 
   Future<void> openDownload(AvailableUpdate update) =>
