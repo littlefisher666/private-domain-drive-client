@@ -4,9 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "必填发布版本，例如 1.1.2 或 v1.1.2"
-        required: true
+        description: "可选；留空时按当前最新版本自动递增 PATCH，例如 1.0.1 → 1.0.2"
+        required: false
         type: string
+      run_tests:
+        description: "是否运行 Flutter 单元测试"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -21,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version_name: ${{ steps.version.outputs.version_name }}
+      current_version: ${{ steps.version.outputs.current_version }}
       build_number: ${{ steps.version.outputs.build_number }}
       tag_name: ${{ steps.version.outputs.tag_name }}
 
@@ -30,17 +36,31 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate release version
+      - name: Resolve release version
         id: version
         shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
-          requested_version="${{ inputs.version }}"
+          latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)"
+          current_version="${latest_tag#v}"
+          requested_version="$REQUESTED_VERSION"
           requested_version="${requested_version#v}"
-          if [[ ! "$requested_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "版本号格式错误：${{ inputs.version }}，应为 1.1.2 或 v1.1.2"
+          if [[ -z "$requested_version" ]]; then
+            if [[ -z "$current_version" ]]; then
+              version_name="1.0.0"
+            elif [[ "$current_version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              version_name="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
+            else
+              echo "当前最新 Tag 格式错误：$latest_tag"
+              exit 1
+            fi
+          elif [[ "$requested_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            version_name="$requested_version"
+          else
+            echo "版本号格式错误：$REQUESTED_VERSION，应为 1.1.2 或 v1.1.2"
             exit 1
           fi
-          version_name="$requested_version"
           build_number="${GITHUB_RUN_NUMBER}"
           tag_name="v${version_name}"
 
@@ -50,9 +70,17 @@ jobs:
           fi
 
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "current_version=${current_version:-无发布版本}" >> "$GITHUB_OUTPUT"
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
           echo "tag_name=$tag_name" >> "$GITHUB_OUTPUT"
           echo "Release version: $tag_name (build $build_number)"
+          {
+            echo "## 发布版本"
+            echo "- 当前最新版本：\`${current_version:-无发布版本}\`"
+            echo "- 本次发布版本：\`$tag_name\`"
+            echo "- Android 构建号：\`$build_number\`"
+            echo "- 运行单元测试：\`${{ inputs.run_tests }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   android:
     name: Build Android APK
@@ -80,6 +108,7 @@ jobs:
         run: flutter pub get
 
       - name: Run tests
+        if: ${{ inputs.run_tests }}
         run: flutter test
 
       - name: Restore Android signing keystore
@@ -132,6 +161,7 @@ jobs:
         run: flutter pub get
 
       - name: Run tests
+        if: ${{ inputs.run_tests }}
         run: flutter test
 
       - name: Build unsigned macOS app
