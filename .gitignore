@@ -24,6 +24,8 @@ build/
 # Android / IntelliJ
 *.iml
 local.properties
+android/key.properties
+android/upload-keystore.jks
 captures/
 
 # iOS / macOS Flutter
