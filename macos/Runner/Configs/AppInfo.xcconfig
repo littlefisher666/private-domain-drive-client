@@ -10,7 +10,7 @@ PRODUCT_NAME = 私域网盘
 // PRODUCT_NAME controls the .app bundle name shown in Dock / Finder.
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.github.littlefisher666.private_domain_drive_client
+PRODUCT_BUNDLE_IDENTIFIER = com.github.littlefisher666.private-domain-drive
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2026 com.example. All rights reserved.
