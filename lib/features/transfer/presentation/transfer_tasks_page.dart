@@ -101,8 +101,11 @@ class _TransferSelectionActions extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: CupertinoDesktopTokens.line)),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom:
+              BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+        ),
       ),
       child: Wrap(
         spacing: 8,
@@ -153,8 +156,11 @@ class _TransferTypeFilter extends StatelessWidget {
         tasks.where((task) => task.type == type).length;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: CupertinoDesktopTokens.line)),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom:
+              BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+        ),
       ),
       child: Wrap(
         spacing: 8,
@@ -188,7 +194,7 @@ class _BatchSummaryStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: const Color(0xFFF7F9FC),
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       child: Wrap(
         spacing: 8,
@@ -403,16 +409,16 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
     );
     if (desktop) {
       return ColoredBox(
-        color: CupertinoDesktopTokens.surface,
+        color: theme.colorScheme.surface,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
             Container(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-              decoration: const BoxDecoration(
-                color: Color(0xE6FFFFFF),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surface.withValues(alpha: 0.9),
                 border: Border(
-                  bottom: BorderSide(color: CupertinoDesktopTokens.line),
+                  bottom: BorderSide(color: theme.colorScheme.outlineVariant),
                 ),
               ),
               child: Row(
@@ -422,7 +428,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                       onPressed: () => Navigator.of(context).pop(),
                       icon: const Icon(Icons.arrow_back),
                     ),
-                  const Expanded(
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
@@ -432,15 +438,15 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                             fontSize: 22,
                             fontWeight: FontWeight.w700,
                             letterSpacing: -0.4,
-                            color: CupertinoDesktopTokens.ink,
+                            color: theme.colorScheme.onSurface,
                           ),
                         ),
-                        SizedBox(height: 3),
+                        const SizedBox(height: 3),
                         Text(
                           '上传 / 下载进度展示，失败可重试，进行中可取消',
                           style: TextStyle(
                             fontSize: 12,
-                            color: CupertinoDesktopTokens.secondary,
+                            color: theme.colorScheme.onSurfaceVariant,
                           ),
                         ),
                       ],
@@ -463,8 +469,8 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                             : _selectedType == TransferTaskType.download
                                 ? '暂无下载任务'
                                 : '暂无传输任务',
-                        style: const TextStyle(
-                          color: CupertinoDesktopTokens.secondary,
+                        style: TextStyle(
+                          color: theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
                     )
@@ -483,10 +489,11 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                         return Container(
                           padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
                           decoration: BoxDecoration(
-                            color: Colors.white,
+                            color: theme.colorScheme.surface,
                             borderRadius: BorderRadius.circular(16),
-                            border:
-                                Border.all(color: CupertinoDesktopTokens.line),
+                            border: Border.all(
+                              color: theme.colorScheme.outlineVariant,
+                            ),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -504,10 +511,10 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                                   Expanded(
                                     child: Text(
                                       '${task.type == TransferTaskType.upload ? '上传' : '下载'} · ${task.name}',
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w700,
-                                        color: CupertinoDesktopTokens.ink,
+                                        color: theme.colorScheme.onSurface,
                                       ),
                                     ),
                                   ),
@@ -526,9 +533,9 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                                 const SizedBox(height: 4),
                                 Text(
                                   task.target!,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 12,
-                                    color: CupertinoDesktopTokens.secondary,
+                                    color: theme.colorScheme.onSurfaceVariant,
                                   ),
                                 ),
                               ],
@@ -554,18 +561,19 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                                 children: <Widget>[
                                   Text(
                                     progressLabel,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontSize: 12,
-                                      color: CupertinoDesktopTokens.secondary,
+                                      color: theme.colorScheme.onSurfaceVariant,
                                     ),
                                   ),
                                   const Spacer(),
                                   if (transferDetails != null)
                                     Text(
                                       transferDetails,
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontSize: 12,
-                                        color: CupertinoDesktopTokens.secondary,
+                                        color:
+                                            theme.colorScheme.onSurfaceVariant,
                                       ),
                                     ),
                                   if (transferDetails != null &&
@@ -574,9 +582,10 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                                   if (task.message != null)
                                     Text(
                                       task.message!,
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontSize: 12,
-                                        color: CupertinoDesktopTokens.secondary,
+                                        color:
+                                            theme.colorScheme.onSurfaceVariant,
                                       ),
                                     ),
                                 ],

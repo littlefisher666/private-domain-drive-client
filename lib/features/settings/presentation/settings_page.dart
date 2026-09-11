@@ -94,6 +94,50 @@ class SettingsPage extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
+            Text('显示', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Card(
+              child: Column(
+                children: <Widget>[
+                  ListTile(
+                    leading: Icon(
+                      controller.themeMode == ThemeMode.light
+                          ? Icons.light_mode_outlined
+                          : Icons.dark_mode_outlined,
+                    ),
+                    title: const Text('外观模式'),
+                    subtitle: Text(
+                      controller.themeMode == ThemeMode.dark ? '深色模式' : '浅色模式',
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: SegmentedButton<ThemeMode>(
+                        segments: const <ButtonSegment<ThemeMode>>[
+                          ButtonSegment<ThemeMode>(
+                            value: ThemeMode.light,
+                            icon: Icon(Icons.light_mode_outlined),
+                            label: Text('浅色模式'),
+                          ),
+                          ButtonSegment<ThemeMode>(
+                            value: ThemeMode.dark,
+                            icon: Icon(Icons.dark_mode_outlined),
+                            label: Text('深色模式'),
+                          ),
+                        ],
+                        selected: <ThemeMode>{controller.themeMode},
+                        onSelectionChanged: (modes) =>
+                            controller.setThemeMode(modes.first),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
             FilledButton.tonal(
               onPressed: () async {
                 await controller.logout();

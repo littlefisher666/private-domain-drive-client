@@ -41,6 +41,144 @@ class CupertinoDesktopTokens {
 class CupertinoDesktopTheme {
   CupertinoDesktopTheme._();
 
+  static ThemeData dark() {
+    const scheme = ColorScheme(
+      brightness: Brightness.dark,
+      primary: Color(0xFF5AA7FF),
+      onPrimary: Color(0xFF061A33),
+      secondary: Color(0xFF8ED0FF),
+      onSecondary: Color(0xFF06223A),
+      error: Color(0xFFFF6961),
+      onError: Color(0xFF3A0805),
+      surface: Color(0xFF15171B),
+      onSurface: Color(0xFFF2F4F7),
+      surfaceContainerHighest: Color(0xFF25282E),
+      onSurfaceVariant: Color(0xFFAEB4BE),
+      outline: Color(0xFF3A3E46),
+      outlineVariant: Color(0xFF2D3138),
+      shadow: Color(0x99000000),
+      scrim: Color(0xB3000000),
+      inverseSurface: Color(0xFFF2F4F7),
+      onInverseSurface: Color(0xFF15171B),
+      inversePrimary: Color(0xFF0063D1),
+    );
+    final base = ThemeData(
+      useMaterial3: true,
+      brightness: Brightness.dark,
+      colorScheme: scheme,
+    );
+
+    return base.copyWith(
+      scaffoldBackgroundColor: const Color(0xFF1C1E22),
+      dividerColor: scheme.outlineVariant,
+      textTheme: base.textTheme
+          .apply(
+            bodyColor: scheme.onSurface,
+            displayColor: scheme.onSurface,
+          )
+          .copyWith(
+            headlineSmall: base.textTheme.headlineSmall?.copyWith(
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.4,
+            ),
+            titleLarge: base.textTheme.titleLarge
+                ?.copyWith(fontWeight: FontWeight.w600),
+            titleMedium: base.textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.w600),
+            titleSmall: base.textTheme.titleSmall
+                ?.copyWith(fontWeight: FontWeight.w600),
+            bodySmall: base.textTheme.bodySmall
+                ?.copyWith(color: scheme.onSurfaceVariant),
+            labelLarge: base.textTheme.labelLarge?.copyWith(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.4,
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+      appBarTheme: AppBarTheme(
+        backgroundColor: Colors.transparent,
+        foregroundColor: scheme.onSurface,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+      ),
+      cardTheme: CardThemeData(
+        color: scheme.surface,
+        elevation: 0,
+        margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+      ),
+      dividerTheme: DividerThemeData(
+          color: scheme.outlineVariant, thickness: 1, space: 1),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: scheme.primary,
+          foregroundColor: scheme.onPrimary,
+          minimumSize: const Size(0, 30),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: scheme.onSurface,
+          backgroundColor: scheme.surfaceContainerHighest,
+          side: BorderSide.none,
+          minimumSize: const Size(0, 30),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(foregroundColor: scheme.primary),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: scheme.surfaceContainerHighest,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: scheme.outline),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: scheme.outline),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: scheme.primary),
+        ),
+      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(color: scheme.primary),
+      snackBarTheme: SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: const Color(0xFFF2F4F7),
+        contentTextStyle:
+            const TextStyle(color: Color(0xFF15171B), fontSize: 13),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: scheme.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+      ),
+      listTileTheme: ListTileThemeData(
+        iconColor: scheme.onSurfaceVariant,
+        textColor: scheme.onSurface,
+        dense: true,
+      ),
+    );
+  }
+
   static ThemeData light() {
     const colorScheme = ColorScheme(
       brightness: Brightness.light,
@@ -133,7 +271,8 @@ class CupertinoDesktopTheme {
         style: FilledButton.styleFrom(
           backgroundColor: CupertinoDesktopTokens.blue,
           foregroundColor: Colors.white,
-          disabledBackgroundColor: CupertinoDesktopTokens.blue.withValues(alpha: 0.4),
+          disabledBackgroundColor:
+              CupertinoDesktopTokens.blue.withValues(alpha: 0.4),
           elevation: 0,
           minimumSize: const Size(0, 30),
           padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -161,7 +300,8 @@ class CupertinoDesktopTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: Colors.white,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
           borderSide: const BorderSide(color: CupertinoDesktopTokens.line),
@@ -172,7 +312,8 @@ class CupertinoDesktopTheme {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(color: CupertinoDesktopTokens.blue.withValues(alpha: 0.55)),
+          borderSide: BorderSide(
+              color: CupertinoDesktopTokens.blue.withValues(alpha: 0.55)),
         ),
       ),
       progressIndicatorTheme: const ProgressIndicatorThemeData(
