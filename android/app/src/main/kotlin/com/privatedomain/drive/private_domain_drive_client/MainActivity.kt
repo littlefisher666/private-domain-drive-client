@@ -29,6 +29,7 @@ class MainActivity : FlutterActivity() {
     private val pendingItems = mutableListOf<Map<String, Any>>()
     private var eventSink: EventChannel.EventSink? = null
     private var directoryResult: MethodChannel.Result? = null
+    private var pendingApkInstallPath: String? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -70,21 +71,24 @@ class MainActivity : FlutterActivity() {
                 val path = call.argument<String>("path")
                     ?: return@setMethodCallHandler result.error("INVALID_ARGUMENT", "缺少 APK 路径", null)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+                    pendingApkInstallPath = path
                     startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
                         data = Uri.parse("package:$packageName")
                     })
                     return@setMethodCallHandler result.success(false)
                 }
-                val apk = File(path)
-                if (!apk.isFile) return@setMethodCallHandler result.error("APK_MISSING", "更新包不存在", null)
-                val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", apk)
-                startActivity(Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(uri, "application/vnd.android.package-archive")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                })
-                result.success(true)
+                result.success(openApkInstaller(path))
             }
         receiveShareIntent(intent, emit = false)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val path = pendingApkInstallPath ?: return
+        pendingApkInstallPath = null
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
+            openApkInstaller(path)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -113,6 +117,17 @@ class MainActivity : FlutterActivity() {
         } else {
             pendingItems += imported
         }
+    }
+
+    private fun openApkInstaller(path: String): Boolean {
+        val apk = File(path)
+        if (!apk.isFile) return false
+        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", apk)
+        startActivity(Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        })
+        return true
     }
 
     private fun copySharedFiles(intent: Intent): List<Map<String, Any>> {

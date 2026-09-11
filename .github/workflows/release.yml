@@ -1,4 +1,4 @@
-name: Flutter Release
+name: 私域网盘发布
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   prepare:
-    name: Prepare release
+    name: 准备发布版本
     runs-on: ubuntu-latest
     outputs:
       version_name: ${{ steps.version.outputs.version_name }}
@@ -31,12 +31,12 @@ jobs:
       tag_name: ${{ steps.version.outputs.tag_name }}
 
     steps:
-      - name: Checkout
+      - name: 检出发布代码
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Resolve release version
+      - name: 解析发布版本
         id: version
         shell: bash
         env:
@@ -73,7 +73,7 @@ jobs:
           echo "current_version=${current_version:-无发布版本}" >> "$GITHUB_OUTPUT"
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
           echo "tag_name=$tag_name" >> "$GITHUB_OUTPUT"
-          echo "Release version: $tag_name (build $build_number)"
+          echo "发布版本：$tag_name（构建号：$build_number）"
           {
             echo "## 发布版本"
             echo "- 当前最新版本：\`${current_version:-无发布版本}\`"
@@ -83,35 +83,35 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   android:
-    name: Build Android APK
+    name: 构建 Android 安装包
     needs: prepare
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: 检出构建代码
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: 配置 Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Flutter
+      - name: 配置 Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: "3.44.1"
           cache: true
 
-      - name: Install dependencies
+      - name: 安装 Flutter 依赖
         run: flutter pub get
 
-      - name: Run tests
+      - name: 运行单元测试
         if: ${{ inputs.run_tests }}
         run: flutter test
 
-      - name: Restore Android signing keystore
+      - name: 还原 Android 签名证书
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -122,7 +122,7 @@ jobs:
           echo "$KEYSTORE_BASE64" | base64 --decode > android/upload-keystore.jks
           printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=upload-keystore.jks\n' "$KEYSTORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > android/key.properties
 
-      - name: Build release APK
+      - name: 构建正式 APK
         run: |
           flutter build apk --release \
             --build-name "${{ needs.prepare.outputs.version_name }}" \
@@ -131,10 +131,10 @@ jobs:
             --dart-define=FC_ACCESS_KEY_ID="${{ secrets.FC_ACCESS_KEY_ID }}" \
             --dart-define=FC_ACCESS_KEY_SECRET="${{ secrets.FC_ACCESS_KEY_SECRET }}"
 
-      - name: Prepare APK artifact
+      - name: 整理 APK 发布文件
         run: cp build/app/outputs/flutter-apk/app-release.apk "private-domain-drive-android-${{ needs.prepare.outputs.tag_name }}.apk"
 
-      - name: Upload APK artifact
+      - name: 上传 APK 构建产物
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
@@ -142,29 +142,29 @@ jobs:
           if-no-files-found: error
 
   macos:
-    name: Build macOS app
+    name: 构建 macOS 应用
     needs: prepare
     runs-on: macos-latest
 
     steps:
-      - name: Checkout
+      - name: 检出构建代码
         uses: actions/checkout@v4
 
-      - name: Set up Flutter
+      - name: 配置 Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: "3.44.1"
           cache: true
 
-      - name: Install dependencies
+      - name: 安装 Flutter 依赖
         run: flutter pub get
 
-      - name: Run tests
+      - name: 运行单元测试
         if: ${{ inputs.run_tests }}
         run: flutter test
 
-      - name: Build unsigned macOS app
+      - name: 构建未签名 macOS 应用
         run: |
           flutter build macos --release \
             --build-name "${{ needs.prepare.outputs.version_name }}" \
@@ -173,38 +173,44 @@ jobs:
             --dart-define=FC_ACCESS_KEY_ID="${{ secrets.FC_ACCESS_KEY_ID }}" \
             --dart-define=FC_ACCESS_KEY_SECRET="${{ secrets.FC_ACCESS_KEY_SECRET }}"
 
-      - name: Package macOS app
+      - name: 打包 macOS 应用
         run: |
-          cd build/macos/Build/Products/Release
-          app_path="$(find . -maxdepth 1 -type d -name '*.app' -print -quit)"
+          app_path="$(find build/macos/Build/Products/Release -maxdepth 1 -type d -name '*.app' -print -quit)"
           if [[ -z "$app_path" ]]; then
             echo "未找到 macOS 应用包（*.app）"
             exit 1
           fi
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$app_path" \
-            "$GITHUB_WORKSPACE/private-domain-drive-macos-${{ needs.prepare.outputs.tag_name }}.zip"
+          staging_directory="$(mktemp -d)"
+          trap 'rm -rf "$staging_directory"' EXIT
+          ditto "$app_path" "$staging_directory/$(basename "$app_path")"
+          ln -s /Applications "$staging_directory/Applications"
+          hdiutil create \
+            -volname "私域网盘" \
+            -srcfolder "$staging_directory" \
+            -ov \
+            -format UDZO \
+            "$GITHUB_WORKSPACE/private-domain-drive-macos-${{ needs.prepare.outputs.tag_name }}.dmg"
 
-      - name: Upload macOS artifact
+      - name: 上传 macOS 构建产物
         uses: actions/upload-artifact@v4
         with:
           name: macos-app
-          path: private-domain-drive-macos-*.zip
+          path: private-domain-drive-macos-*.dmg
           if-no-files-found: error
 
   release:
-    name: Create GitHub Release and tag
+    name: 创建 GitHub Release 与标签
     needs: [prepare, android, macos]
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download build artifacts
+      - name: 下载构建产物
         uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      - name: Create tag and release
+      - name: 创建发布标签与 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag_name }}
@@ -213,4 +219,4 @@ jobs:
           generate_release_notes: true
           files: |
             dist/private-domain-drive-android-*.apk
-            dist/private-domain-drive-macos-*.zip
+            dist/private-domain-drive-macos-*.dmg
