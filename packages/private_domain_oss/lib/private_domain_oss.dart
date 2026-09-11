@@ -209,11 +209,18 @@ class PrivateDomainOss {
     required String taskId,
     required String key,
     required String localPath,
+    String? mediaStoreCollection,
+    String? displayName,
+    String? directoryUri,
   }) =>
       _methods.invokeMethod<void>('downloadFile', <String, Object>{
         'taskId': taskId,
         'key': key,
         'localPath': localPath,
+        if (mediaStoreCollection != null)
+          'mediaStoreCollection': mediaStoreCollection,
+        if (displayName != null) 'displayName': displayName,
+        if (directoryUri != null) 'directoryUri': directoryUri,
       });
 
   Future<Uint8List> getObjectBytes({

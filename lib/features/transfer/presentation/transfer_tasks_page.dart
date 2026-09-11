@@ -645,29 +645,71 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
           separatorBuilder: (_, __) => const SizedBox(height: 12),
           itemBuilder: (context, index) {
             if (index == 0) {
-              return Row(
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  if (!widget.embedded)
-                    IconButton.filledTonal(
-                      onPressed: () => Navigator.of(context).pop(),
-                      icon: const Icon(Icons.arrow_back),
+                  Row(
+                    children: <Widget>[
+                      if (!widget.embedded)
+                        IconButton.filledTonal(
+                          onPressed: () => Navigator.of(context).pop(),
+                          icon: const Icon(Icons.arrow_back),
+                        ),
+                      if (!widget.embedded) const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Text('传输', style: theme.textTheme.headlineSmall),
+                            Text(
+                              '上传、下载、重试与取消',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      PopupMenuButton<String>(
+                        tooltip: '传输设置',
+                        onSelected: (value) {
+                          if (value == 'clear') {
+                            controller.clearCompletedTasks();
+                            AppFeedback.showSnack(context, '已清除已结束任务');
+                          }
+                        },
+                        itemBuilder: (_) => <PopupMenuEntry<String>>[
+                          const PopupMenuItem(
+                            value: 'clear',
+                            child: Text('清除已结束任务'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(16),
                     ),
-                  if (!widget.embedded) const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    child: Row(
                       children: <Widget>[
-                        Text('传输', style: theme.textTheme.headlineSmall),
-                        Text(
-                          '上传、下载、重试与取消',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
+                        const Icon(Icons.sync_outlined),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            '${controller.runningTransferCount} 个进行中 · ${controller.pendingTransferCount} 个等待',
+                            style: theme.textTheme.titleSmall,
                           ),
                         ),
+                        Text('${tasks.length} 项',
+                            style: theme.textTheme.bodySmall),
                       ],
                     ),
                   ),
-                  _TransferHeaderActions(controller: controller, tasks: tasks),
                 ],
               );
             }
@@ -677,7 +719,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
             }
 
             if (index == 2) {
-              return batchActions;
+              return const SizedBox.shrink();
             }
 
             if (index == 3) {
@@ -688,26 +730,23 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
 
             final task = visibleTasks[index - 4];
             final progressLabel = '${(task.progress * 100).round()}%';
+            final canRetry = task.status == TransferTaskStatus.failed ||
+                task.status == TransferTaskStatus.canceled;
+            final canCancel = task.status == TransferTaskStatus.running ||
+                task.status == TransferTaskStatus.pending;
             return Card(
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Row(
                       children: <Widget>[
-                        Checkbox(
-                          value: _selectedTaskIds.contains(task.id),
-                          onChanged: (selected) => _toggleTaskSelection(
-                            task.id,
-                            selected ?? false,
-                          ),
-                        ),
                         Container(
-                          width: 42,
-                          height: 42,
+                          width: 36,
+                          height: 36,
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(14),
+                            borderRadius: BorderRadius.circular(11),
                             gradient: LinearGradient(
                               colors: task.type == TransferTaskType.upload
                                   ? const <Color>[
@@ -721,20 +760,24 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                             ),
                           ),
                           child: Icon(_iconForType(task.type),
-                              color: const Color(0xFF031B1A)),
+                              size: 19, color: const Color(0xFF031B1A)),
                         ),
-                        const SizedBox(width: 12),
+                        const SizedBox(width: 10),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: <Widget>[
                               Text(
-                                '${task.type == TransferTaskType.upload ? '上传' : '下载'} · ${task.name}',
-                                style: theme.textTheme.titleMedium,
+                                task.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.titleSmall,
                               ),
                               if (task.target != null)
                                 Text(
                                   task.target!,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     color: theme.colorScheme.onSurfaceVariant,
                                   ),
@@ -742,19 +785,29 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                             ],
                           ),
                         ),
-                        Text(
-                          _labelForStatus(task.status),
-                          style: TextStyle(
-                            color: _colorForStatus(context, task.status),
-                            fontWeight: FontWeight.w700,
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: _colorForStatus(context, task.status)
+                                .withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            _labelForStatus(task.status),
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: _colorForStatus(context, task.status),
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 10),
                     LinearProgressIndicator(
                       value: task.progress.clamp(0.0, 1.0),
-                      minHeight: 8,
+                      minHeight: 6,
                       borderRadius: BorderRadius.circular(999),
                       color: task.status == TransferTaskStatus.success
                           ? CupertinoDesktopTokens.success
@@ -764,36 +817,47 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                               .withValues(alpha: 0.16)
                           : null,
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                        '$progressLabel${task.message == null ? '' : ' · ${task.message}'}'),
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 8,
+                    const SizedBox(height: 6),
+                    Row(
                       children: <Widget>[
-                        OutlinedButton(
-                          onPressed: task.status == TransferTaskStatus.failed ||
-                                  task.status == TransferTaskStatus.canceled
-                              ? () {
-                                  controller.retryTask(task.id);
-                                  AppFeedback.showSnack(
-                                      context, '已重新开始 ${task.name}');
-                                }
-                              : null,
-                          child: const Text('重试'),
+                        Expanded(
+                          child: Text(
+                            '$progressLabel${task.message == null ? '' : ' · ${task.message}'}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
                         ),
-                        OutlinedButton(
-                          onPressed:
-                              task.status == TransferTaskStatus.running ||
-                                      task.status == TransferTaskStatus.pending
-                                  ? () {
-                                      controller.cancelTask(task.id);
-                                      AppFeedback.showSnack(
-                                          context, '已取消 ${task.name}');
-                                    }
-                                  : null,
-                          child: const Text('取消'),
-                        ),
+                        if (canRetry)
+                          IconButton(
+                            tooltip: '重试',
+                            visualDensity: VisualDensity.compact,
+                            constraints: const BoxConstraints.tightFor(
+                                width: 32, height: 32),
+                            padding: EdgeInsets.zero,
+                            onPressed: () {
+                              controller.retryTask(task.id);
+                              AppFeedback.showSnack(
+                                  context, '已重新开始 ${task.name}');
+                            },
+                            icon: const Icon(Icons.refresh_rounded, size: 19),
+                          ),
+                        if (canCancel)
+                          IconButton(
+                            tooltip: '取消传输',
+                            visualDensity: VisualDensity.compact,
+                            constraints: const BoxConstraints.tightFor(
+                                width: 32, height: 32),
+                            padding: EdgeInsets.zero,
+                            onPressed: () {
+                              controller.cancelTask(task.id);
+                              AppFeedback.showSnack(
+                                  context, '已取消 ${task.name}');
+                            },
+                            icon: const Icon(Icons.close_rounded, size: 19),
+                          ),
                       ],
                     ),
                   ],

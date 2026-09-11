@@ -1,8 +1,12 @@
 package com.privatedomain.drive.oss
 
 import android.content.Context
+import android.content.ContentValues
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
+import android.provider.DocumentsContract
+import android.webkit.MimeTypeMap
 import com.alibaba.sdk.android.oss.ClientException
 import com.alibaba.sdk.android.oss.OSSClient
 import com.alibaba.sdk.android.oss.ServiceException
@@ -18,6 +22,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.io.OutputStream
 import java.util.concurrent.ConcurrentHashMap
 
 class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
@@ -215,8 +220,14 @@ class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     private fun downloadFile(call: MethodCall, result: MethodChannel.Result) {
         val (oss, bucketName) = requireSession()
         val taskId = call.requiredString("taskId")
-        val target = File(call.requiredString("localPath"))
-        target.parentFile?.mkdirs()
+        val mediaCollection = call.argument<String>("mediaStoreCollection")
+        val directoryUri = call.argument<String>("directoryUri")
+        val target: File? = if (mediaCollection == null && directoryUri == null) {
+            File(call.requiredString("localPath"))
+        } else {
+            null
+        }
+        target?.parentFile?.mkdirs()
         val transfer = NativeTransfer()
         transfers.put(taskId, transfer)?.cancel()
         val request = GetObjectRequest(bucketName, call.requiredString("key"))
@@ -227,7 +238,29 @@ class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                     try {
                         val total = response.contentLength.coerceAtLeast(0)
                         emitProgress(taskId, "download", 0, total)
-                        FileOutputStream(target).use { output ->
+                        val mediaUri = mediaCollection?.let {
+                            createMediaStoreEntry(
+                                collection = it,
+                                displayName = call.argument<String>("displayName") ?: "download",
+                            )
+                        }
+                        val documentUri = directoryUri?.let {
+                            DocumentsContract.createDocument(
+                                applicationContext.contentResolver,
+                                android.net.Uri.parse(it),
+                                MimeTypeMap.getSingleton().getMimeTypeFromExtension(
+                                    (call.argument<String>("displayName") ?: "").substringAfterLast('.', "").lowercase(),
+                                ) ?: "application/octet-stream",
+                                call.argument<String>("displayName") ?: "download",
+                            ) ?: throw IllegalStateException("无法在所选目录创建文件")
+                        }
+                        val output: OutputStream = if (mediaUri != null || documentUri != null) {
+                            applicationContext.contentResolver.openOutputStream(mediaUri ?: documentUri!!)
+                                ?: throw IllegalStateException("无法写入系统媒体库")
+                        } else {
+                            FileOutputStream(requireNotNull(target))
+                        }
+                        output.use {
                             response.objectContent.use { input ->
                                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                                 var written = 0L
@@ -241,9 +274,17 @@ class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                                 }
                             }
                         }
+                        if (mediaUri != null) {
+                            applicationContext.contentResolver.update(
+                                mediaUri,
+                                ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
+                                null,
+                                null,
+                            )
+                        }
                         finishTransfer(taskId, result, null)
                     } catch (error: Throwable) {
-                        target.delete()
+                        target?.delete()
                         finishTransfer(taskId, result, error)
                     }
                 }
@@ -259,7 +300,12 @@ class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         val request = GetObjectRequest(bucketName, call.requiredString("key"))
         call.argument<String>("range")?.let { range ->
             Regex("^bytes=(\\d+)-(\\d+)$").matchEntire(range)?.let { match ->
-                request.setRange(match.groupValues[1].toLong(), match.groupValues[2].toLong())
+                request.setRange(
+                    Range(
+                        match.groupValues[1].toLong(),
+                        match.groupValues[2].toLong(),
+                    ),
+                )
             }
         }
         call.argument<String>("process")?.takeIf { it.isNotBlank() }?.let { request.setxOssProcess(it) }
@@ -285,6 +331,26 @@ class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
             override fun onFailure(request: GetObjectRequest, clientError: ClientException?, serviceError: ServiceException?) =
                 fail(result, serviceError ?: clientError ?: IllegalStateException("OSS read failed"))
         })
+    }
+
+    private fun createMediaStoreEntry(collection: String, displayName: String): android.net.Uri {
+        val extension = displayName.substringAfterLast('.', "").lowercase()
+        val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+            ?: if (collection == "images") "image/*" else "video/*"
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+            put(MediaStore.MediaColumns.RELATIVE_PATH,
+                if (collection == "images") "Pictures/私域网盘" else "Movies/私域网盘")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = if (collection == "images") {
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        } else {
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        }
+        return applicationContext.contentResolver.insert(uri, values)
+            ?: throw IllegalStateException("无法创建系统媒体文件")
     }
 
     private fun cancelTransfer(call: MethodCall, result: MethodChannel.Result) {

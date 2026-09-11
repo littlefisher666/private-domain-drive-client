@@ -334,6 +334,54 @@ class OssClient {
     );
   }
 
+  Future<void> downloadToMediaStore(
+    String path,
+    UserSession session, {
+    required String displayName,
+    required String collection,
+    required String taskId,
+    required void Function(int receivedBytes, int? totalBytes) onProgress,
+    required bool Function() isCanceled,
+  }) async {
+    await _ensureConfigured(session);
+    await _withProgress(
+      taskId: taskId,
+      isCanceled: isCanceled,
+      onProgress: onProgress,
+      operation: () => _native.downloadFile(
+        taskId: taskId,
+        key: path,
+        localPath: '',
+        mediaStoreCollection: collection,
+        displayName: displayName,
+      ),
+    );
+  }
+
+  Future<void> downloadToDirectoryUri(
+    String path,
+    UserSession session, {
+    required String directoryUri,
+    required String displayName,
+    required String taskId,
+    required void Function(int receivedBytes, int? totalBytes) onProgress,
+    required bool Function() isCanceled,
+  }) async {
+    await _ensureConfigured(session);
+    await _withProgress(
+      taskId: taskId,
+      isCanceled: isCanceled,
+      onProgress: onProgress,
+      operation: () => _native.downloadFile(
+        taskId: taskId,
+        key: path,
+        localPath: '',
+        directoryUri: directoryUri,
+        displayName: displayName,
+      ),
+    );
+  }
+
   Future<void> copy(String from, String to, UserSession session) async {
     await _ensureConfigured(session);
     await _platform(() => _native.copyObject(from: from, to: to));

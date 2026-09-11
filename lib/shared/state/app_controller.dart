@@ -16,11 +16,15 @@ class ShareImportItem {
     required this.id,
     required this.name,
     required this.size,
+    required this.localPath,
   });
 
   final String id;
   final String name;
   final int size;
+
+  /// Android 系统分享时复制到应用缓存目录的本地文件路径。
+  final String localPath;
 }
 
 class LoginResult {
@@ -970,6 +974,33 @@ class AppController extends ChangeNotifier {
       _QueuedTransfer((report, isCanceled) async {
         await ensureFreshCredentials();
         if (isCanceled()) throw const TransferCanceledException();
+        final mediaCollection = _androidMediaCollection(item.name);
+        if (mediaCollection != null) {
+          await _ossClient.downloadToMediaStore(
+            item.path,
+            _requireSession(),
+            displayName: item.name,
+            collection: mediaCollection,
+            taskId: taskId,
+            onProgress: report,
+            isCanceled: isCanceled,
+          );
+          _replaceTask(taskId, (task) => task.copyWith(target: '系统相册'));
+          return;
+        }
+        if (targetDirectory.startsWith('content://')) {
+          await _ossClient.downloadToDirectoryUri(
+            item.path,
+            _requireSession(),
+            directoryUri: targetDirectory,
+            displayName: item.name,
+            taskId: taskId,
+            onProgress: report,
+            isCanceled: isCanceled,
+          );
+          _replaceTask(taskId, (task) => task.copyWith(target: '已选目录'));
+          return;
+        }
         final destination =
             await _availableDownloadFile(targetDirectory, item.name);
         final temporary = File('${destination.path}.$taskId.part');
@@ -1184,10 +1215,22 @@ class AppController extends ChangeNotifier {
     if (_pendingShareItems.isEmpty) {
       throw StateError('没有待上传内容');
     }
+    final items = _pendingShareItems;
+    for (final item in items) {
+      if (item.localPath.isEmpty || !await File(item.localPath).exists()) {
+        throw StateError('分享文件“${item.name}”已不可用，请重新分享');
+      }
+    }
     _pendingShareItems = const <ShareImportItem>[];
     notifyListeners();
-
-    throw StateError('分享导入缺少原始文件内容，无法直接上传 OSS');
+    for (final item in items) {
+      await uploadFile(
+        fileName: item.name,
+        localPath: item.localPath,
+        fileSize: item.size,
+        targetPath: _shareTargetPath,
+      );
+    }
   }
 
   List<String> get sidebarDirectories {
@@ -1335,6 +1378,20 @@ class AppController extends ChangeNotifier {
       targetDirectory,
       ...segments.take(segments.length - 1),
     ].join(Platform.pathSeparator);
+  }
+
+  String? _androidMediaCollection(String fileName) {
+    if (!Platform.isAndroid) return null;
+    final extension = fileName.split('.').last.toLowerCase();
+    if (const <String>{'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic'}
+        .contains(extension)) {
+      return 'images';
+    }
+    if (const <String>{'mp4', 'mov', 'mkv', 'avi', 'webm', '3gp'}
+        .contains(extension)) {
+      return 'video';
+    }
+    return null;
   }
 
   String _fileName(String path) {
