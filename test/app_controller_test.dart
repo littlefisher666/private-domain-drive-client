@@ -435,7 +435,10 @@ void main() {
         const FileItem(path: 'shared/a.txt', name: 'a.txt', isDirectory: false),
         targetDirectory: directory.path,
       );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await _waitForTaskStatus(
+        controller,
+        TransferTaskStatus.failed,
+      );
 
       final task = controller.tasks.single;
       expect(task.status, TransferTaskStatus.failed);
@@ -503,6 +506,19 @@ Future<AppController> _controller({_FakeOssClient? oss}) async {
   );
   await controller.bootstrap();
   return controller;
+}
+
+Future<void> _waitForTaskStatus(
+  AppController controller,
+  TransferTaskStatus status,
+) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 5));
+  while (controller.tasks.single.status != status) {
+    if (DateTime.now().isAfter(deadline)) {
+      throw TimeoutException('传输任务未在限定时间内进入 $status 状态');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
 }
 
 UserSession _remoteSession() {
