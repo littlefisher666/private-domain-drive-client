@@ -32,12 +32,12 @@ jobs:
 
     steps:
       - name: 检出发布代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: 配置 Node.js 24
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "24"
 
@@ -94,15 +94,15 @@ jobs:
 
     steps:
       - name: 检出构建代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 配置 Node.js 24
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "24"
 
       - name: 配置 Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -151,7 +151,7 @@ jobs:
         run: cp build/app/outputs/flutter-apk/app-release.apk "private-domain-drive-android-${{ needs.prepare.outputs.tag_name }}.apk"
 
       - name: 上传 APK 构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: android-apk
           path: private-domain-drive-android-*.apk
@@ -164,10 +164,10 @@ jobs:
 
     steps:
       - name: 检出构建代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 配置 Node.js 24
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "24"
 
@@ -213,7 +213,7 @@ jobs:
             "$GITHUB_WORKSPACE/private-domain-drive-macos-${{ needs.prepare.outputs.tag_name }}.dmg"
 
       - name: 上传 macOS 构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: macos-app
           path: private-domain-drive-macos-*.dmg
@@ -226,13 +226,13 @@ jobs:
 
     steps:
       - name: 下载构建产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: dist
           merge-multiple: true
 
       - name: 配置 Node.js 24
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "24"
 
