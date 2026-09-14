@@ -151,7 +151,7 @@ jobs:
         run: cp build/app/outputs/flutter-apk/app-release.apk "private-domain-drive-android-${{ needs.prepare.outputs.tag_name }}.apk"
 
       - name: 上传 APK 构建产物
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: android-apk
           path: private-domain-drive-android-*.apk
@@ -213,7 +213,7 @@ jobs:
             "$GITHUB_WORKSPACE/private-domain-drive-macos-${{ needs.prepare.outputs.tag_name }}.dmg"
 
       - name: 上传 macOS 构建产物
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: macos-app
           path: private-domain-drive-macos-*.dmg
@@ -226,7 +226,7 @@ jobs:
 
     steps:
       - name: 下载构建产物
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           path: dist
           merge-multiple: true
