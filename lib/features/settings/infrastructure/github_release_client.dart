@@ -41,10 +41,10 @@ class GithubReleaseClient {
       : _client = client ?? http.Client();
   final http.Client _client;
   static const _endpoint =
-      'https://github.com/littlefisher666/private-domain-drive-client/releases/latest/download/private-domain-drive-update.json';
+      'https://gitee.com/litttlefisher/private-domain-drive-client/releases/latest/download/private-domain-drive-update.json';
 
   Future<GithubRelease> latest() async {
-    debugPrint('[更新检查] 请求 GitHub 更新清单');
+    debugPrint('[更新检查] 请求 Gitee 更新清单');
     try {
       final response = await _client.get(Uri.parse(_endpoint));
       debugPrint('[更新检查] 更新清单响应状态：${response.statusCode}');
@@ -60,7 +60,7 @@ class GithubReleaseClient {
       debugPrint('[更新检查] 最新版本：${release.version}，资产数：${release.assets.length}');
       return release;
     } catch (error, stackTrace) {
-      debugPrint('[更新检查] GitHub 请求或解析失败：$error');
+      debugPrint('[更新检查] Gitee 请求或解析失败：$error');
       debugPrintStack(stackTrace: stackTrace, label: '[更新检查] 异常堆栈');
       Error.throwWithStackTrace(error, stackTrace);
     }
