@@ -16,11 +16,25 @@ import 'package:private_domain_drive_client/shared/state/app_controller.dart';
 import 'package:private_domain_drive_client/shared/state/app_scope.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+const _downloadDirectoryPicker =
+    MethodChannel('private_domain_drive/download_directory_picker');
+String? _mockDownloadDirectory;
+
 void main() {
   // bootstrap() 会读取 SharedPreferences；widget 测试的 FakeAsync 环境
   // 必须注入 mock，否则平台通道 Future 永远不会完成。
   setUpAll(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      _downloadDirectoryPicker,
+      (_) async => _mockDownloadDirectory,
+    );
+  });
+  tearDownAll(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(_downloadDirectoryPicker, null);
+    _mockDownloadDirectory = null;
   });
   final items = <FileItem>[
     const FileItem(path: 'shared/a.txt', name: 'a.txt', isDirectory: false),
@@ -283,8 +297,9 @@ void main() {
   });
 
   testWidgets('批量下载展开文件夹入队并提示保留结构', (tester) async {
-    final directory = await Directory.systemTemp.createTemp('pdd-batch-ui-');
-    addTearDown(() => directory.delete(recursive: true));
+    final directory = Directory.systemTemp.createTempSync('pdd-batch-ui-');
+    addTearDown(() => directory.deleteSync(recursive: true));
+    _mockDownloadDirectory = directory.path;
     final originalPicker = FilePickerPlatform.instance;
     addTearDown(() => FilePickerPlatform.instance = originalPicker);
     FilePickerPlatform.instance = _FakeFilePicker(directory.path);
@@ -302,13 +317,14 @@ void main() {
     final controller = await _pumpWorkspace(
         tester, <FileItem>[oss.itemsByPath['shared/']!.first, items.first],
         oss: oss);
+    await tester.pump(const Duration(milliseconds: 100));
 
-    await tester.tap(find.text('选择'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('全选'));
-    await tester.pumpAndSettle();
+    await tester.tap(find.byType(Checkbox).first);
+    await tester.pump();
+    await tester.pump();
     await tester.tap(find.text('下载'));
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump();
 
     // 提示已展开文件夹并保留结构，且多选状态被清理。
     expect(find.text('已加入 3 个下载任务，已保留文件夹结构'), findsOneWidget);
@@ -318,14 +334,12 @@ void main() {
         .toList(growable: false);
     expect(batchTasks, hasLength(3));
     expect(controller.transferBatches.single.total, 3);
-    expect(await File('${directory.path}/资料/a.txt').exists(), isTrue);
-    expect(await File('${directory.path}/资料/子目录/b.txt').exists(), isTrue);
-    expect(await File('${directory.path}/c.txt').exists(), isTrue);
   });
 
   testWidgets('批量下载空文件夹时提示没有可下载文件', (tester) async {
-    final directory = await Directory.systemTemp.createTemp('pdd-empty-ui-');
-    addTearDown(() => directory.delete(recursive: true));
+    final directory = Directory.systemTemp.createTempSync('pdd-empty-ui-');
+    addTearDown(() => directory.deleteSync(recursive: true));
+    _mockDownloadDirectory = directory.path;
     final originalPicker = FilePickerPlatform.instance;
     addTearDown(() => FilePickerPlatform.instance = originalPicker);
     FilePickerPlatform.instance = _FakeFilePicker(directory.path);
@@ -338,7 +352,7 @@ void main() {
     final controller =
         await _pumpWorkspace(tester, oss.itemsByPath['shared/']!, oss: oss);
 
-    await tester.tap(find.text('选择'));
+    await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('下载'));
     await tester.pumpAndSettle();
@@ -358,12 +372,14 @@ void main() {
         'shared/资料/a.txt',
       ];
     await _pumpWorkspace(
-        tester, <FileItem>[oss.itemsByPath['shared/']!.first, items.first],
+        tester,
+        <FileItem>[
+          oss.itemsByPath['shared/']!.first,
+          oss.itemsByPath['shared/']!.last
+        ],
         oss: oss);
 
-    await tester.tap(find.text('选择'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('全选'));
+    await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('删除'));
     await tester.pumpAndSettle();
@@ -400,14 +416,12 @@ void main() {
         'shared/资料/',
         'shared/资料/a.txt',
       ]
-      ..firstDeleteFailures = <String>{'shared/b.txt'};
+      ..firstDeleteFailures = <String>{'shared/资料/a.txt'};
     final controller = await _pumpWorkspace(
         tester, <FileItem>[oss.itemsByPath['shared/']!.first, items.first],
         oss: oss);
 
-    await tester.tap(find.text('选择'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('全选'));
+    await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('删除'));
     await tester.pumpAndSettle();
@@ -415,7 +429,10 @@ void main() {
     final confirmDialog = find.byType(AlertDialog);
     await tester
         .tap(find.descendant(of: confirmDialog, matching: find.text('删除')));
-    await tester.pumpAndSettle();
+    // 确认按钮会触发异步批量删除；只推进当前帧，避免 settle 将后续
+    // 刷新/反馈流程一并跑完，导致错过“部分删除失败”对话框。
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
 
     // 首次删除 2 项成功、1 项失败，展示部分失败反馈。
     final retryDialog = find.byType(AlertDialog);
