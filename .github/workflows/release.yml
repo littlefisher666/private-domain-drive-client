@@ -246,10 +246,18 @@ jobs:
           release_id="$(jq -r '.id // empty' <<< "$release")"
           test -n "$release_id"
           for asset in "$android_name" "$macos_name"; do
-            curl --fail-with-body --silent --show-error \
+            asset_path="dist/$asset"
+            printf '开始上传 Gitee 附件：%s（%s）\n' "$asset" "$(du -h "$asset_path" | cut -f1)"
+            curl --fail-with-body --show-error --progress-bar \
+              --connect-timeout 20 \
+              --max-time 300 \
+              --retry 3 \
+              --retry-delay 5 \
+              --retry-connrefused \
+              --write-out '\nGitee 附件上传完成：HTTP %{response_code}，耗时 %{time_total}s，平均上传速率 %{speed_upload} B/s\n' \
               --request POST "$api_url/$release_id/attach_files" \
               --form "access_token=$GITEE_TOKEN" \
-              --form "file=@dist/$asset"
+              --form "file=@$asset_path"
           done
           echo "gitee_release_id=$release_id" >> "$GITHUB_ENV"
 
@@ -277,10 +285,18 @@ jobs:
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
-          curl --fail-with-body --silent --show-error \
+          update_manifest="dist/private-domain-drive-update.json"
+          printf '开始上传 Gitee 更新清单：%s\n' "$(du -h "$update_manifest" | cut -f1)"
+          curl --fail-with-body --show-error --progress-bar \
+            --connect-timeout 20 \
+            --max-time 60 \
+            --retry 3 \
+            --retry-delay 5 \
+            --retry-connrefused \
+            --write-out '\nGitee 更新清单上传完成：HTTP %{response_code}，耗时 %{time_total}s\n' \
             --request POST "https://gitee.com/api/v5/repos/litttlefisher/private-domain-drive-client/releases/${gitee_release_id}/attach_files" \
             --form "access_token=$GITEE_TOKEN" \
-            --form "file=@dist/private-domain-drive-update.json"
+            --form "file=@$update_manifest"
 
       - name: 生成 GitHub 更新清单
         env:
