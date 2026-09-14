@@ -36,6 +36,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: 配置 Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
       - name: 解析发布版本
         id: version
         shell: bash
@@ -90,6 +95,11 @@ jobs:
     steps:
       - name: 检出构建代码
         uses: actions/checkout@v4
+
+      - name: 配置 Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
 
       - name: 配置 Java 17
         uses: actions/setup-java@v4
@@ -156,6 +166,11 @@ jobs:
       - name: 检出构建代码
         uses: actions/checkout@v4
 
+      - name: 配置 Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
       - name: 配置 Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -215,6 +230,11 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      - name: 配置 Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
 
       - name: 计算发布文件摘要
         env:
