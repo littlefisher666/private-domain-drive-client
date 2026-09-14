@@ -263,7 +263,7 @@ jobs:
             > dist/private-domain-drive-update.json
 
       - name: 创建发布标签与 Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           target_commitish: ${{ github.sha }}
