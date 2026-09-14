@@ -220,7 +220,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: 创建 GitHub 与 Gitee Release
+    name: 创建 GitHub Release
     needs: [prepare, android, macos]
     runs-on: ubuntu-latest
 
