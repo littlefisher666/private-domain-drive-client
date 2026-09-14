@@ -205,7 +205,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: 创建 GitHub Release 与标签
+    name: 创建 GitHub 与 Gitee Release
     needs: [prepare, android, macos]
     runs-on: ubuntu-latest
 
@@ -216,24 +216,82 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: 生成更新清单
+      - name: 计算发布文件摘要
         env:
           TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
-          VERSION_NAME: ${{ needs.prepare.outputs.version_name }}
         run: |
           android_name="private-domain-drive-android-${TAG_NAME}.apk"
           macos_name="private-domain-drive-macos-${TAG_NAME}.dmg"
           android_digest="sha256:$(sha256sum "dist/$android_name" | awk '{print $1}')"
           macos_digest="sha256:$(sha256sum "dist/$macos_name" | awk '{print $1}')"
+          echo "android_name=$android_name" >> "$GITHUB_ENV"
+          echo "macos_name=$macos_name" >> "$GITHUB_ENV"
+          echo "android_digest=$android_digest" >> "$GITHUB_ENV"
+          echo "macos_digest=$macos_digest" >> "$GITHUB_ENV"
+
+      - name: 创建 Gitee Release 并上传安装包
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+        run: |
+          test -n "$GITEE_TOKEN"
+          api_url="https://gitee.com/api/v5/repos/litttlefisher/private-domain-drive-client/releases"
+          release="$(curl --fail-with-body --silent --show-error \
+            --request POST "$api_url" \
+            --form "access_token=$GITEE_TOKEN" \
+            --form "tag_name=$TAG_NAME" \
+            --form "target_commitish=master" \
+            --form "name=$TAG_NAME" \
+            --form "body=由 GitHub Actions 自动发布")"
+          release_id="$(jq -r '.id // empty' <<< "$release")"
+          test -n "$release_id"
+          for asset in "$android_name" "$macos_name"; do
+            curl --fail-with-body --silent --show-error \
+              --request POST "$api_url/$release_id/attach_files" \
+              --form "access_token=$GITEE_TOKEN" \
+              --form "file=@dist/$asset"
+          done
+          echo "gitee_release_id=$release_id" >> "$GITHUB_ENV"
+
+      - name: 生成 Gitee 更新清单
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          VERSION_NAME: ${{ needs.prepare.outputs.version_name }}
+        run: |
+          api_url="https://gitee.com/api/v5/repos/litttlefisher/private-domain-drive-client/releases/${gitee_release_id}"
+          release="$(curl --fail-with-body --silent --show-error \
+            --get "$api_url" \
+            --data-urlencode "access_token=$GITEE_TOKEN")"
+          android_url="$(jq -r --arg name "$android_name" '.assets[] | select(.name == $name) | (.browser_download_url // .download_url // .url)' <<< "$release")"
+          macos_url="$(jq -r --arg name "$macos_name" '.assets[] | select(.name == $name) | (.browser_download_url // .download_url // .url)' <<< "$release")"
+          test -n "$android_url" && test "$android_url" != "null"
+          test -n "$macos_url" && test "$macos_url" != "null"
+          jq -n \
+            --arg version "$VERSION_NAME" \
+            --arg android_name "$android_name" --arg android_url "$android_url" --arg android_digest "$android_digest" \
+            --arg macos_name "$macos_name" --arg macos_url "$macos_url" --arg macos_digest "$macos_digest" \
+            '{version: $version, notes: "", assets: {android: {name: $android_name, url: $android_url, digest: $android_digest}, macos: {name: $macos_name, url: $macos_url, digest: $macos_digest}}}' \
+            > dist/private-domain-drive-update.json
+
+      - name: 上传 Gitee 更新清单
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          curl --fail-with-body --silent --show-error \
+            --request POST "https://gitee.com/api/v5/repos/litttlefisher/private-domain-drive-client/releases/${gitee_release_id}/attach_files" \
+            --form "access_token=$GITEE_TOKEN" \
+            --form "file=@dist/private-domain-drive-update.json"
+
+      - name: 生成 GitHub 更新清单
+        env:
+          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+          VERSION_NAME: ${{ needs.prepare.outputs.version_name }}
+        run: |
           release_url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/${TAG_NAME}"
           jq -n \
             --arg version "$VERSION_NAME" \
-            --arg android_name "$android_name" \
-            --arg android_url "$release_url/$android_name" \
-            --arg android_digest "$android_digest" \
-            --arg macos_name "$macos_name" \
-            --arg macos_url "$release_url/$macos_name" \
-            --arg macos_digest "$macos_digest" \
+            --arg android_name "$android_name" --arg android_url "$release_url/$android_name" --arg android_digest "$android_digest" \
+            --arg macos_name "$macos_name" --arg macos_url "$release_url/$macos_name" --arg macos_digest "$macos_digest" \
             '{version: $version, notes: "", assets: {android: {name: $android_name, url: $android_url, digest: $android_digest}, macos: {name: $macos_name, url: $macos_url, digest: $macos_digest}}}' \
             > dist/private-domain-drive-update.json
 
