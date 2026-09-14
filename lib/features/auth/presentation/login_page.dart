@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../../app/router/route_names.dart';
+import '../../../core/constants/app_constants.dart';
 import '../../../shared/state/app_scope.dart';
 
 class LoginPage extends StatefulWidget {
@@ -11,8 +13,12 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final _accountController = TextEditingController(text: 'admin');
-  final _passwordController = TextEditingController(text: '123456');
+  final _accountController = TextEditingController(
+    text: kDebugMode ? AppConstants.debugDefaultAccount : '',
+  );
+  final _passwordController = TextEditingController(
+    text: kDebugMode ? AppConstants.debugDefaultPassword : '',
+  );
   String? _error;
   bool _loading = false;
 

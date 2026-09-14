@@ -17,6 +17,12 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   late int _index = widget.initialIndex.clamp(0, 2);
+  int _settingsVisit = 0;
+
+  void _select(int value) {
+    if (value == 2) _settingsVisit++;
+    setState(() => _index = value);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -26,22 +32,23 @@ class _HomeShellState extends State<HomeShell> {
     if (desktop) {
       return _DesktopShell(
         index: _index,
-        onSelect: (value) => setState(() => _index = value),
+        settingsVisit: _settingsVisit,
+        onSelect: _select,
       );
     }
 
     return Scaffold(
       body: IndexedStack(
         index: _index,
-        children: const <Widget>[
-          WorkspacePage(),
-          TransferTasksPage(embedded: true),
-          SettingsPage(embedded: true),
+        children: <Widget>[
+          const WorkspacePage(),
+          const TransferTasksPage(embedded: true),
+          SettingsPage(embedded: true, visitToken: _settingsVisit),
         ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (value) => setState(() => _index = value),
+        onDestinationSelected: _select,
         destinations: const <NavigationDestination>[
           NavigationDestination(
             icon: Icon(Icons.folder_outlined),
@@ -67,10 +74,12 @@ class _HomeShellState extends State<HomeShell> {
 class _DesktopShell extends StatelessWidget {
   const _DesktopShell({
     required this.index,
+    required this.settingsVisit,
     required this.onSelect,
   });
 
   final int index;
+  final int settingsVisit;
   final ValueChanged<int> onSelect;
 
   void _selectPage(int value) {
@@ -199,15 +208,16 @@ class _DesktopShell extends StatelessWidget {
                     color: scheme.surface,
                     child: IndexedStack(
                       index: index,
-                      children: const <Widget>[
-                        WorkspacePage(desktopChrome: true),
-                        TransferTasksPage(
+                      children: <Widget>[
+                        const WorkspacePage(desktopChrome: true),
+                        const TransferTasksPage(
                           embedded: true,
                           desktopChrome: true,
                         ),
                         SettingsPage(
                           embedded: true,
                           desktopChrome: true,
+                          visitToken: settingsVisit,
                         ),
                       ],
                     ),

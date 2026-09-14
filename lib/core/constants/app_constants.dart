@@ -22,6 +22,12 @@ class AppConstants {
   static const fcSignRequests =
       bool.fromEnvironment('FC_SIGN_REQUESTS', defaultValue: true);
 
+  /// 仅供本地 Debug 联调预填登录表单；不得在源码中保存账号或口令。
+  static const debugDefaultAccount =
+      String.fromEnvironment('DEBUG_DEFAULT_ACCOUNT');
+  static const debugDefaultPassword =
+      String.fromEnvironment('DEBUG_DEFAULT_PASSWORD');
+
   /// Refresh STS this many minutes before expiration.
   static const stsRefreshSkew = Duration(minutes: 8);
 }
