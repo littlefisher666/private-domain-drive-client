@@ -12,6 +12,21 @@ class AvailableUpdate {
   final ReleaseAsset asset;
 }
 
+class UpdateCheckResult {
+  const UpdateCheckResult({
+    required this.currentVersion,
+    required this.latestVersion,
+    this.availableUpdate,
+  });
+
+  final String currentVersion;
+  final String latestVersion;
+  final AvailableUpdate? availableUpdate;
+
+  bool get hasUpdate =>
+      UpdateService.compareVersions(latestVersion, currentVersion) > 0;
+}
+
 class UpdateService {
   UpdateService(
       {required AppVersionReader versionReader,
@@ -22,12 +37,22 @@ class UpdateService {
   final GithubReleaseClient _releaseClient;
 
   Future<AvailableUpdate?> check() async {
+    final result = await checkLatest();
+    return result.availableUpdate;
+  }
+
+  Future<UpdateCheckResult> checkLatest() async {
     final current = await _versionReader.read();
     debugPrint('[更新检查] 当前版本：${current.name}');
     final release = await _releaseClient.latest();
     final comparison = compareVersions(release.version, current.name);
     debugPrint('[更新检查] 远端版本：${release.version}，比较结果：$comparison');
-    if (comparison <= 0) return null;
+    if (comparison <= 0) {
+      return UpdateCheckResult(
+        currentVersion: current.name,
+        latestVersion: release.version,
+      );
+    }
     final prefix = defaultTargetPlatform == TargetPlatform.android
         ? 'private-domain-drive-android-v'
         : 'private-domain-drive-macos-v';
@@ -40,10 +65,17 @@ class UpdateService {
         .firstOrNull;
     if (asset == null) {
       debugPrint('[更新检查] 未找到当前平台的发布资产');
-      return null;
+      return UpdateCheckResult(
+        currentVersion: current.name,
+        latestVersion: release.version,
+      );
     }
     debugPrint('[更新检查] 找到发布资产：${asset.name}');
-    return AvailableUpdate(release: release, asset: asset);
+    return UpdateCheckResult(
+      currentVersion: current.name,
+      latestVersion: release.version,
+      availableUpdate: AvailableUpdate(release: release, asset: asset),
+    );
   }
 
   Future<void> openDownload(AvailableUpdate update) =>
@@ -56,12 +88,24 @@ class UpdateService {
       throw StateError('当前更新包不支持应用内安装');
     }
     final downloader = ApkDownloader();
-    await for (final progress in downloader.download(
-      url: Uri.parse(update.asset.url),
+    if (await downloader.hasValidDownload(
       sha256Digest: update.asset.digest!,
       fileName: update.asset.name,
     )) {
-      yield progress;
+      final size = await downloader.downloadedFileSize(update.asset.name);
+      if (size != null) {
+        debugPrint('[更新检查] 使用已缓存的更新包：${update.asset.name}');
+        yield ApkDownloadProgress(received: size, total: size);
+      }
+    } else {
+      debugPrint('[更新检查] 未找到有效缓存，开始下载：${update.asset.name}');
+      await for (final progress in downloader.download(
+        url: Uri.parse(update.asset.url),
+        sha256Digest: update.asset.digest!,
+        fileName: update.asset.name,
+      )) {
+        yield progress;
+      }
     }
     final apk = await downloader.downloadedFile(update.asset.name);
     final started = await AndroidUpdateInstaller.install(apk);

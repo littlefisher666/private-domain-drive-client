@@ -38,6 +38,17 @@ flutter run -d android --dart-define-from-file=env/local.json
 # 应用会复制源文件至私有缓存，展示确认上传页；请在缓存清理前完成上传。
 ```
 
+本地 Debug 联调如需预填登录表单，可在不提交的 `env/local.json` 中增加：
+
+```json
+{
+  "DEBUG_DEFAULT_ACCOUNT": "本地测试账号",
+  "DEBUG_DEFAULT_PASSWORD": "本地测试口令"
+}
+```
+
+这两个值只会在 Debug 构建中生效；Profile 和 Release 构建始终显示空登录输入框。
+
 FC HTTP 触发器默认启用签名校验，客户端必须通过 `FC_ACCESS_KEY_ID` 和
 `FC_ACCESS_KEY_SECRET` 注入签名凭证；不要将真实凭证写入源码或提交到仓库。
 

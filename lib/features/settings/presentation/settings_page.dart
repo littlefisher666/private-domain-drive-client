@@ -7,12 +7,75 @@ import '../../../shared/state/app_scope.dart';
 import '../application/update_service.dart';
 import '../infrastructure/github_release_client.dart';
 
+RoundedRectangleBorder _mobileCardShape(ColorScheme scheme) {
+  return RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(16),
+    side: BorderSide(color: scheme.outlineVariant),
+  );
+}
+
+EdgeInsetsGeometry _mobileTilePadding(bool desktop) {
+  return EdgeInsets.symmetric(horizontal: desktop ? 16 : 18);
+}
+
+double _mobileTileVerticalPadding(bool desktop) => desktop ? 4 : 10;
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
+      ),
+    );
+  }
+}
+
+class _SettingsLeadingIcon extends StatelessWidget {
+  const _SettingsLeadingIcon({required this.icon, required this.desktop});
+
+  final IconData icon;
+  final bool desktop;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (desktop) return Icon(icon);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: scheme.primary.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(11),
+      ),
+      child: SizedBox(
+        width: 36,
+        height: 36,
+        child: Icon(icon, color: scheme.primary, size: 20),
+      ),
+    );
+  }
+}
+
 class SettingsPage extends StatefulWidget {
   const SettingsPage(
-      {super.key, this.embedded = false, this.desktopChrome = false});
+      {super.key,
+      this.embedded = false,
+      this.desktopChrome = false,
+      this.visitToken = 0});
 
   final bool embedded;
   final bool desktopChrome;
+  final int visitToken;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -24,6 +87,36 @@ class _SettingsPageState extends State<SettingsPage> {
     versionReader: PackageAppVersionReader(),
     releaseClient: GithubReleaseClient(),
   );
+  UpdateCheckResult? _updateCheck;
+  bool _checkingUpdate = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshUpdateStatus();
+  }
+
+  @override
+  void didUpdateWidget(covariant SettingsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.visitToken != oldWidget.visitToken) {
+      _refreshUpdateStatus();
+    }
+  }
+
+  Future<void> _refreshUpdateStatus() async {
+    if (_checkingUpdate) return;
+    setState(() => _checkingUpdate = true);
+    try {
+      final result = await _updates.checkLatest();
+      if (mounted) setState(() => _updateCheck = result);
+    } catch (error, stackTrace) {
+      debugPrint('[更新检查] 自动检查失败：$error');
+      debugPrintStack(stackTrace: stackTrace, label: '[更新检查] 自动检查异常堆栈');
+    } finally {
+      if (mounted) setState(() => _checkingUpdate = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,8 +134,12 @@ class _SettingsPageState extends State<SettingsPage> {
     return Scaffold(
       body: SafeArea(
         child: ListView(
-          padding:
-              EdgeInsets.fromLTRB(desktop ? 24 : 16, 16, desktop ? 24 : 16, 24),
+          padding: EdgeInsets.fromLTRB(
+            desktop ? 24 : 16,
+            desktop ? 16 : 12,
+            desktop ? 24 : 16,
+            desktop ? 24 : 32,
+          ),
           children: <Widget>[
             Row(
               children: <Widget>[
@@ -56,22 +153,36 @@ class _SettingsPageState extends State<SettingsPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Text('我的', style: theme.textTheme.headlineSmall),
                       Text(
-                        '账户与应用信息',
-                        style: theme.textTheme.bodyMedium
-                            ?.copyWith(color: scheme.onSurfaceVariant),
+                        '我的',
+                        style: desktop
+                            ? theme.textTheme.headlineSmall
+                            : theme.textTheme.headlineMedium,
                       ),
+                      if (desktop)
+                        Text(
+                          '账户与应用信息',
+                          style: theme.textTheme.bodyMedium
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
                     ],
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
+            SizedBox(height: desktop ? 16 : 20),
+            if (!desktop)
+              _SectionLabel(label: '账户', color: scheme.onSurfaceVariant),
+            if (!desktop) const SizedBox(height: 8),
             Card(
+              shape: desktop ? null : _mobileCardShape(scheme),
               child: ListTile(
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: desktop ? 16 : 18,
+                  vertical: desktop ? 0 : 6,
+                ),
                 leading: CircleAvatar(
-                  radius: 26,
+                  radius: desktop ? 26 : 28,
                   backgroundColor:
                       (desktop ? const Color(0xFF007AFF) : scheme.primary)
                           .withValues(alpha: 0.15),
@@ -80,10 +191,14 @@ class _SettingsPageState extends State<SettingsPage> {
                     style: TextStyle(
                       color: desktop ? const Color(0xFF007AFF) : scheme.primary,
                       fontWeight: FontWeight.w700,
+                      fontSize: desktop ? null : 20,
                     ),
                   ),
                 ),
-                title: Text(session?.displayName ?? '未登录'),
+                title: Text(
+                  session?.displayName ?? '未登录',
+                  style: desktop ? null : theme.textTheme.titleMedium,
+                ),
                 subtitle: Text(
                   session == null
                       ? '请先登录'
@@ -91,45 +206,72 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
             ),
-            const SizedBox(height: 12),
+            SizedBox(height: desktop ? 12 : 20),
+            if (!desktop)
+              _SectionLabel(label: '空间与应用', color: scheme.onSurfaceVariant),
+            if (!desktop) const SizedBox(height: 8),
             Card(
+              shape: desktop ? null : _mobileCardShape(scheme),
               child: Column(
                 children: <Widget>[
                   ListTile(
-                    leading: Icon(Icons.folder_shared_outlined),
-                    title: Text('共享空间'),
-                    subtitle: Text('文件与目录'),
+                    contentPadding: _mobileTilePadding(desktop),
+                    minVerticalPadding: _mobileTileVerticalPadding(desktop),
+                    leading: _SettingsLeadingIcon(
+                      icon: Icons.folder_shared_outlined,
+                      desktop: desktop,
+                    ),
+                    title: const Text('共享空间'),
+                    subtitle: const Text('文件与目录'),
                   ),
-                  Divider(height: 1),
+                  const Divider(height: 1),
                   FutureBuilder<AppVersion>(
                     future: _version,
                     builder: (context, snapshot) => ListTile(
-                      leading: const Icon(Icons.info_outline),
+                      contentPadding: _mobileTilePadding(desktop),
+                      minVerticalPadding: _mobileTileVerticalPadding(desktop),
+                      leading: _SettingsLeadingIcon(
+                        icon: Icons.info_outline,
+                        desktop: desktop,
+                      ),
                       title: const Text('应用版本'),
                       subtitle: Text(snapshot.data?.displayValue ?? '读取中…'),
                     ),
                   ),
                   const Divider(height: 1),
                   ListTile(
-                    leading: const Icon(Icons.system_update_outlined),
+                    contentPadding: _mobileTilePadding(desktop),
+                    minVerticalPadding: _mobileTileVerticalPadding(desktop),
+                    leading: _SettingsLeadingIcon(
+                      icon: Icons.system_update_outlined,
+                      desktop: desktop,
+                    ),
                     title: const Text('检查更新'),
-                    subtitle: const Text('从 GitHub Releases 获取稳定版'),
+                    subtitle: Text(_updateSubtitle),
+                    trailing: _updateBadge,
                     onTap: _checkForUpdate,
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 16),
-            Text('显示', style: theme.textTheme.titleMedium),
+            SizedBox(height: desktop ? 16 : 20),
+            if (desktop)
+              Text('显示', style: theme.textTheme.titleMedium)
+            else
+              _SectionLabel(label: '显示', color: scheme.onSurfaceVariant),
             const SizedBox(height: 8),
             Card(
+              shape: desktop ? null : _mobileCardShape(scheme),
               child: Column(
                 children: <Widget>[
                   ListTile(
-                    leading: Icon(
-                      controller.themeMode == ThemeMode.light
+                    contentPadding: _mobileTilePadding(desktop),
+                    minVerticalPadding: _mobileTileVerticalPadding(desktop),
+                    leading: _SettingsLeadingIcon(
+                      icon: controller.themeMode == ThemeMode.light
                           ? Icons.light_mode_outlined
                           : Icons.dark_mode_outlined,
+                      desktop: desktop,
                     ),
                     title: const Text('外观模式'),
                     subtitle: Text(
@@ -138,7 +280,12 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                   const Divider(height: 1),
                   Padding(
-                    padding: const EdgeInsets.all(12),
+                    padding: EdgeInsets.fromLTRB(
+                      desktop ? 12 : 16,
+                      12,
+                      desktop ? 12 : 16,
+                      desktop ? 12 : 16,
+                    ),
                     child: SizedBox(
                       width: double.infinity,
                       child: SegmentedButton<ThemeMode>(
@@ -163,33 +310,67 @@ class _SettingsPageState extends State<SettingsPage> {
                 ],
               ),
             ),
-            const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: () async {
-                await controller.logout();
-                if (!context.mounted) {
-                  return;
-                }
-                Navigator.of(context).pushNamedAndRemoveUntil(
-                  RouteNames.login,
-                  (route) => false,
-                );
-              },
-              child: const Text('退出登录'),
-            ),
+            SizedBox(height: desktop ? 16 : 24),
+            if (desktop)
+              FilledButton.tonal(
+                onPressed: _logout,
+                child: const Text('退出登录'),
+              )
+            else
+              OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: scheme.error,
+                  side: BorderSide(
+                    color: scheme.error.withValues(alpha: 0.35),
+                  ),
+                ),
+                onPressed: _logout,
+                child: const Text('退出登录'),
+              ),
           ],
         ),
       ),
     );
   }
 
+  String get _updateSubtitle {
+    final result = _updateCheck;
+    if (_checkingUpdate && result == null) return '正在检查最新版本…';
+    if (result == null) return '从 GitHub Releases 获取稳定版';
+    return '最新版本 ${result.latestVersion}';
+  }
+
+  Widget? get _updateBadge {
+    if (_updateCheck?.availableUpdate == null) return null;
+    return const Chip(
+      label: Text('有新版本'),
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  Future<void> _logout() async {
+    await AppScope.of(context).logout();
+    if (!mounted) return;
+    Navigator.of(context).pushNamedAndRemoveUntil(
+      RouteNames.login,
+      (route) => false,
+    );
+  }
+
   Future<void> _checkForUpdate() async {
     try {
-      final update = await _updates.check();
+      final result = await _updates.checkLatest();
+      if (mounted) setState(() => _updateCheck = result);
+      final update = result.availableUpdate;
       if (!mounted) return;
       if (update == null) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('当前已是最新版本')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result.hasUpdate ? '发现新版本，但当前平台暂无更新包' : '当前已是最新版本',
+            ),
+          ),
+        );
         return;
       }
       final macos = defaultTargetPlatform == TargetPlatform.macOS;
@@ -221,9 +402,10 @@ class _SettingsPageState extends State<SettingsPage> {
     } catch (error, stackTrace) {
       debugPrint('[更新检查] 页面处理失败：$error');
       debugPrintStack(stackTrace: stackTrace, label: '[更新检查] 页面异常堆栈');
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('检查更新失败，请稍后重试')));
+      }
     }
   }
 

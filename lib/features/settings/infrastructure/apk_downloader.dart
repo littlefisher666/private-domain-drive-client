@@ -18,6 +18,27 @@ class ApkDownloader {
   ApkDownloader({http.Client? client}) : _client = client ?? http.Client();
   final http.Client _client;
 
+  Future<bool> hasValidDownload({
+    required String sha256Digest,
+    required String fileName,
+  }) async {
+    final target = await downloadedFile(fileName);
+    if (!await target.exists()) return false;
+    try {
+      final digest = await sha256.bind(target.openRead()).first;
+      final expected = sha256Digest.replaceFirst('sha256:', '').toLowerCase();
+      return digest.toString().toLowerCase() == expected;
+    } on Object {
+      return false;
+    }
+  }
+
+  Future<int?> downloadedFileSize(String fileName) async {
+    final target = await downloadedFile(fileName);
+    if (!await target.exists()) return null;
+    return target.length();
+  }
+
   Stream<ApkDownloadProgress> download({
     required Uri url,
     required String sha256Digest,
