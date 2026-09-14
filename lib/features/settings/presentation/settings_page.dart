@@ -336,7 +336,7 @@ class _SettingsPageState extends State<SettingsPage> {
   String get _updateSubtitle {
     final result = _updateCheck;
     if (_checkingUpdate && result == null) return '正在检查最新版本…';
-    if (result == null) return '从 Gitee Releases 获取稳定版';
+    if (result == null) return '从 GitHub Releases 获取稳定版';
     return '最新版本 ${result.latestVersion}';
   }
 
