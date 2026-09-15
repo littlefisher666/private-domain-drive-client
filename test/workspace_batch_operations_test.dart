@@ -186,6 +186,56 @@ void main() {
     expect(controller.multiSelectedPaths, isEmpty);
   });
 
+  testWidgets('桌面缩略图模式可切换大小，列表模式隐藏大小选择', (tester) async {
+    final controller = await _pumpWorkspace(tester, items);
+    controller.setBrowseMode(BrowseMode.grid);
+    await tester.pumpAndSettle();
+
+    expect(find.text('小'), findsOneWidget);
+    expect(find.text('中'), findsOneWidget);
+    expect(find.text('大'), findsOneWidget);
+
+    await tester.tap(find.text('大'));
+    await tester.pumpAndSettle();
+    expect(controller.thumbnailSize, ThumbnailSize.large);
+
+    controller.setBrowseMode(BrowseMode.list);
+    await tester.pumpAndSettle();
+    expect(find.text('小'), findsNothing);
+    expect(find.text('中'), findsNothing);
+    expect(find.text('大'), findsNothing);
+
+    await controller.setThumbnailSize(ThumbnailSize.medium);
+  });
+
+  testWidgets('移动端中图与大图使用不同的网格列数', (tester) async {
+    final controller = await _pumpWorkspace(tester, items, desktop: false);
+    controller.setBrowseMode(BrowseMode.grid);
+    await tester.pumpAndSettle();
+
+    var grid = tester.widget<GridView>(find.byType(GridView));
+    expect(
+      (grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount)
+          .crossAxisCount,
+      2,
+    );
+
+    await tester.tap(find.byIcon(Icons.photo_size_select_large_outlined));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.widgetWithText(CheckedPopupMenuItem<ThumbnailSize>, '大图'),
+    );
+    await tester.pumpAndSettle();
+
+    grid = tester.widget<GridView>(find.byType(GridView));
+    expect(
+      (grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount)
+          .crossAxisCount,
+      1,
+    );
+    await controller.setThumbnailSize(ThumbnailSize.medium);
+  });
+
   testWidgets('桌面列表支持拖拽框选多个条目', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     final controller = await _pumpWorkspace(tester, items);

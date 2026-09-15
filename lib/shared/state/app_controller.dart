@@ -125,6 +125,7 @@ class AppController extends ChangeNotifier {
   static const _fileSortOptionsByDirectoryKey =
       'file_sort_options_by_directory';
   static const _themeModeKey = 'theme_mode';
+  static const _thumbnailSizeKey = 'thumbnail_size';
   static const _takenAtCachePrefix = 'image_taken_at:v5:';
   static const _minTransferConcurrency = 1;
   static const _maxTransferConcurrency = 5;
@@ -155,6 +156,7 @@ class AppController extends ChangeNotifier {
   UserSession? _session;
   String _currentPath = rootPrefix;
   BrowseMode _browseMode = BrowseMode.list;
+  ThumbnailSize _thumbnailSize = ThumbnailSize.medium;
   FileSortOption _defaultFileSortOption = FileSortOption.updatedNewest;
   final Map<String, FileSortOption> _fileSortOptionsByDirectory =
       <String, FileSortOption>{};
@@ -200,6 +202,7 @@ class AppController extends ChangeNotifier {
   }
 
   BrowseMode get browseMode => _browseMode;
+  ThumbnailSize get thumbnailSize => _thumbnailSize;
   FileSortOption get fileSortOption => _fileSortOptionForPath(_currentPath);
   List<TransferTask> get tasks => tasksListenable.value;
   int get transferConcurrency => transferConcurrencyListenable.value;
@@ -252,6 +255,7 @@ class AppController extends ChangeNotifier {
       _restoreSortPreferences(preferences);
       _restoreTransferHistory(preferences);
       _restoreThemeMode(preferences);
+      _restoreThumbnailSize(preferences);
       _transferHistoryReady = true;
     } catch (_) {
       // 偏好读取失败不应阻断会话恢复。
@@ -420,6 +424,21 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setThumbnailSize(ThumbnailSize size) async {
+    if (_thumbnailSize == size) {
+      return;
+    }
+    _thumbnailSize = size;
+    notifyListeners();
+    try {
+      final preferences = _preferences ?? await SharedPreferences.getInstance();
+      _preferences = preferences;
+      await preferences.setString(_thumbnailSizeKey, size.name);
+    } catch (_) {
+      // 偏好写入失败时仍保留本次会话的选择。
+    }
+  }
+
   Future<void> setFileSortOption(FileSortOption option) async {
     final key = _directorySortKey(_currentPath);
     if (_fileSortOptionsByDirectory[key] == option) return;
@@ -501,6 +520,14 @@ class AppController extends ChangeNotifier {
     _themeMode = switch (preferences.getString(_themeModeKey)) {
       'dark' => ThemeMode.dark,
       _ => ThemeMode.light,
+    };
+  }
+
+  void _restoreThumbnailSize(SharedPreferences preferences) {
+    _thumbnailSize = switch (preferences.getString(_thumbnailSizeKey)) {
+      'small' => ThumbnailSize.small,
+      'large' => ThumbnailSize.large,
+      _ => ThumbnailSize.medium,
     };
   }
 

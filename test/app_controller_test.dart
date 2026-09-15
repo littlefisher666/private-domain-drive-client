@@ -79,6 +79,37 @@ void main() {
       controller.dispose();
     });
 
+    test('启动后恢复缩略图尺寸，并保存新的选择', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'thumbnail_size': 'large',
+      });
+      final controller =
+          AppController(sessionRepository: MemorySessionRepository());
+
+      await controller.bootstrap();
+      expect(controller.thumbnailSize, ThumbnailSize.large);
+
+      await controller.setThumbnailSize(ThumbnailSize.small);
+      expect(
+        (await SharedPreferences.getInstance()).getString('thumbnail_size'),
+        'small',
+      );
+      controller.dispose();
+    });
+
+    test('无效缩略图尺寸偏好会使用中档', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'thumbnail_size': 'extra-large',
+      });
+      final controller =
+          AppController(sessionRepository: MemorySessionRepository());
+
+      await controller.bootstrap();
+
+      expect(controller.thumbnailSize, ThumbnailSize.medium);
+      controller.dispose();
+    });
+
     test('目录浏览会记录目录树并支持返回上级', () async {
       final oss = _FakeOssClient()
         ..itemsByPath['shared/'] = const <FileItem>[

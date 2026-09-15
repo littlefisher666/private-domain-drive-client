@@ -371,10 +371,20 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 }
                 final isGrid = controller.browseMode == BrowseMode.grid;
                 final offset = switch (event.logicalKey) {
-                  LogicalKeyboardKey.arrowUp =>
-                    isGrid ? -_gridColumnCount(node, items.length) : -1,
-                  LogicalKeyboardKey.arrowDown =>
-                    isGrid ? _gridColumnCount(node, items.length) : 1,
+                  LogicalKeyboardKey.arrowUp => isGrid
+                      ? -_gridColumnCount(
+                          node,
+                          items.length,
+                          controller.thumbnailSize,
+                        )
+                      : -1,
+                  LogicalKeyboardKey.arrowDown => isGrid
+                      ? _gridColumnCount(
+                          node,
+                          items.length,
+                          controller.thumbnailSize,
+                        )
+                      : 1,
                   LogicalKeyboardKey.arrowLeft => isGrid ? -1 : 0,
                   LogicalKeyboardKey.arrowRight => isGrid ? 1 : 0,
                   _ => 0,
@@ -449,6 +459,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                               selectedPaths: selectedPaths,
                               multiSelecting: selecting,
                               desktop: desktop,
+                              thumbnailSize: controller.thumbnailSize,
                               subtitleBuilder: _subtitle,
                               thumbnailLoader: controller.loadThumbnail,
                               thumbnailCacheNamespace:
@@ -510,13 +521,17 @@ class _WorkspacePageState extends State<WorkspacePage> {
     );
   }
 
-  int _gridColumnCount(FocusNode node, int itemCount) {
+  int _gridColumnCount(
+    FocusNode node,
+    int itemCount,
+    ThumbnailSize thumbnailSize,
+  ) {
     final box = node.context?.findRenderObject() as RenderBox?;
     final width = box?.size.width;
     if (width == null || width <= 0) {
       return 1;
     }
-    const maxCrossAxisExtent = 190.0;
+    final maxCrossAxisExtent = thumbnailSize.maxCrossAxisExtent(desktop: true);
     const crossAxisSpacing = 12.0;
     final count =
         ((width + crossAxisSpacing) / (maxCrossAxisExtent + crossAxisSpacing))
@@ -1025,6 +1040,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 canDelete: canDelete,
                 canDownload: canDownload,
                 browseMode: controller.browseMode,
+                thumbnailSize: controller.thumbnailSize,
                 sortOption: controller.fileSortOption,
                 selectedListenable: controller.selectedItemListenable,
                 directorySizeStatesListenable:
@@ -1040,6 +1056,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 onUpload: () => _pickUpload(fromAlbum: false),
                 onUploadDirectory: _pickUploadDirectory,
                 onBrowseModeChanged: controller.setBrowseMode,
+                onThumbnailSizeChanged: controller.setThumbnailSize,
                 onSortChanged: _setSortOption,
                 onOpen: _handleOpen,
                 onPreview: _openPreview,
@@ -1057,10 +1074,12 @@ class _WorkspacePageState extends State<WorkspacePage> {
                       canGoUp:
                           controller.currentPath != AppController.rootPrefix,
                       browseMode: controller.browseMode,
+                      thumbnailSize: controller.thumbnailSize,
                       sortOption: controller.fileSortOption,
                       onGoUp: _goUp,
                       onRefresh: _reload,
                       onBrowseModeChanged: controller.setBrowseMode,
+                      onThumbnailSizeChanged: controller.setThumbnailSize,
                       onChooseSort: _showSortSheet,
                     ),
                     const SizedBox(height: 12),
@@ -1180,6 +1199,7 @@ class _DesktopWorkspaceBody extends StatelessWidget {
     required this.canDelete,
     required this.canDownload,
     required this.browseMode,
+    required this.thumbnailSize,
     required this.sortOption,
     required this.selectedListenable,
     required this.directorySizeStatesListenable,
@@ -1190,6 +1210,7 @@ class _DesktopWorkspaceBody extends StatelessWidget {
     required this.onUpload,
     required this.onUploadDirectory,
     required this.onBrowseModeChanged,
+    required this.onThumbnailSizeChanged,
     required this.onSortChanged,
     required this.onOpen,
     required this.onPreview,
@@ -1203,6 +1224,7 @@ class _DesktopWorkspaceBody extends StatelessWidget {
   final bool canDelete;
   final bool canDownload;
   final BrowseMode browseMode;
+  final ThumbnailSize thumbnailSize;
   final FileSortOption sortOption;
   final ValueNotifier<FileItem?> selectedListenable;
   final ValueNotifier<Map<String, DirectorySizeState>>
@@ -1214,6 +1236,7 @@ class _DesktopWorkspaceBody extends StatelessWidget {
   final VoidCallback onUpload;
   final VoidCallback onUploadDirectory;
   final ValueChanged<BrowseMode> onBrowseModeChanged;
+  final ValueChanged<ThumbnailSize> onThumbnailSizeChanged;
   final ValueChanged<FileSortOption> onSortChanged;
   final ValueChanged<FileItem> onOpen;
   final ValueChanged<FileItem> onPreview;
@@ -1277,6 +1300,11 @@ class _DesktopWorkspaceBody extends StatelessWidget {
                     browseMode: browseMode,
                     onChanged: onBrowseModeChanged,
                   ),
+                  if (browseMode == BrowseMode.grid)
+                    _ThumbnailSizeSegmented(
+                      thumbnailSize: thumbnailSize,
+                      onChanged: onThumbnailSizeChanged,
+                    ),
                   PopupMenuButton<FileSortOption>(
                     tooltip: '排序',
                     onSelected: onSortChanged,
@@ -1469,16 +1497,83 @@ class _SegButton extends StatelessWidget {
   }
 }
 
+class _ThumbnailSizeSegmented extends StatelessWidget {
+  const _ThumbnailSizeSegmented({
+    required this.thumbnailSize,
+    required this.onChanged,
+  });
+
+  final ThumbnailSize thumbnailSize;
+  final ValueChanged<ThumbnailSize> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: ThumbnailSize.values
+            .map(
+              (size) => _SegButton(
+                label: size.label,
+                selected: size == thumbnailSize,
+                onTap: () => onChanged(size),
+              ),
+            )
+            .toList(growable: false),
+      ),
+    );
+  }
+}
+
+class _MobileThumbnailSizeMenu extends StatelessWidget {
+  const _MobileThumbnailSizeMenu({
+    required this.thumbnailSize,
+    required this.onChanged,
+  });
+
+  final ThumbnailSize thumbnailSize;
+  final ValueChanged<ThumbnailSize> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<ThumbnailSize>(
+      tooltip: '缩略图大小：${thumbnailSize.label}',
+      initialValue: thumbnailSize,
+      onSelected: onChanged,
+      itemBuilder: (context) => ThumbnailSize.values
+          .map(
+            (size) => CheckedPopupMenuItem<ThumbnailSize>(
+              value: size,
+              checked: size == thumbnailSize,
+              child: Text('${size.label}图'),
+            ),
+          )
+          .toList(growable: false),
+      child: const Padding(
+        padding: EdgeInsets.all(8),
+        child: Icon(Icons.photo_size_select_large_outlined),
+      ),
+    );
+  }
+}
+
 class _MobileHeader extends StatelessWidget {
   const _MobileHeader({
     required this.path,
     required this.roleLabel,
     required this.canGoUp,
     required this.browseMode,
+    required this.thumbnailSize,
     required this.sortOption,
     required this.onGoUp,
     required this.onRefresh,
     required this.onBrowseModeChanged,
+    required this.onThumbnailSizeChanged,
     required this.onChooseSort,
   });
 
@@ -1486,10 +1581,12 @@ class _MobileHeader extends StatelessWidget {
   final String roleLabel;
   final bool canGoUp;
   final BrowseMode browseMode;
+  final ThumbnailSize thumbnailSize;
   final FileSortOption sortOption;
   final VoidCallback onGoUp;
   final VoidCallback onRefresh;
   final ValueChanged<BrowseMode> onBrowseModeChanged;
+  final ValueChanged<ThumbnailSize> onThumbnailSizeChanged;
   final VoidCallback onChooseSort;
 
   @override
@@ -1534,21 +1631,35 @@ class _MobileHeader extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 10),
-        SegmentedButton<BrowseMode>(
-          segments: const <ButtonSegment<BrowseMode>>[
-            ButtonSegment(
-              value: BrowseMode.list,
-              label: Text('列表'),
-              icon: Icon(Icons.view_list),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: SegmentedButton<BrowseMode>(
+                segments: const <ButtonSegment<BrowseMode>>[
+                  ButtonSegment(
+                    value: BrowseMode.list,
+                    label: Text('列表'),
+                    icon: Icon(Icons.view_list),
+                  ),
+                  ButtonSegment(
+                    value: BrowseMode.grid,
+                    label: Text('缩略图'),
+                    icon: Icon(Icons.grid_view),
+                  ),
+                ],
+                selected: <BrowseMode>{browseMode},
+                onSelectionChanged: (values) =>
+                    onBrowseModeChanged(values.first),
+              ),
             ),
-            ButtonSegment(
-              value: BrowseMode.grid,
-              label: Text('缩略图'),
-              icon: Icon(Icons.grid_view),
-            ),
+            if (browseMode == BrowseMode.grid) ...<Widget>[
+              const SizedBox(width: 8),
+              _MobileThumbnailSizeMenu(
+                thumbnailSize: thumbnailSize,
+                onChanged: onThumbnailSizeChanged,
+              ),
+            ],
           ],
-          selected: <BrowseMode>{browseMode},
-          onSelectionChanged: (values) => onBrowseModeChanged(values.first),
         ),
       ],
     );
@@ -1856,6 +1967,7 @@ class _GridView extends StatelessWidget {
     required this.selectedPaths,
     required this.multiSelecting,
     required this.desktop,
+    required this.thumbnailSize,
     required this.subtitleBuilder,
     required this.thumbnailLoader,
     required this.thumbnailCacheNamespace,
@@ -1880,6 +1992,7 @@ class _GridView extends StatelessWidget {
   final Set<String> selectedPaths;
   final bool multiSelecting;
   final bool desktop;
+  final ThumbnailSize thumbnailSize;
   final String Function(FileItem) subtitleBuilder;
   final Future<List<int>> Function(FileItem item) thumbnailLoader;
   final String thumbnailCacheNamespace;
@@ -1900,6 +2013,21 @@ class _GridView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final gridDelegate = desktop
+        ? SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: thumbnailSize.maxCrossAxisExtent(desktop: true),
+            mainAxisSpacing: 12,
+            crossAxisSpacing: 12,
+            childAspectRatio: thumbnailSize.childAspectRatio(desktop: true),
+          )
+        : SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: thumbnailSize.mobileCrossAxisCount,
+            mainAxisSpacing: 12,
+            crossAxisSpacing: 12,
+            // 移动端多选会额外显示复选框；预留纵向空间，避免真机字体
+            // 或系统缩放下缩略图卡片底部溢出。
+            childAspectRatio: thumbnailSize.childAspectRatio(desktop: false),
+          );
     return _DesktopMarqueeSelection(
       enabled: desktop && defaultTargetPlatform == TargetPlatform.macOS,
       items: items,
@@ -1907,14 +2035,7 @@ class _GridView extends StatelessWidget {
       onSelectionChanged: onMarqueeSelectionChanged,
       childBuilder: (context, itemKeys, marqueeSelecting, onItemPointerDown) =>
           GridView.builder(
-        gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-          maxCrossAxisExtent: desktop ? 190 : 180,
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          // 移动端多选会额外显示复选框；预留纵向空间，避免真机字体
-          // 或系统缩放下缩略图卡片底部溢出。
-          childAspectRatio: desktop ? 0.92 : 0.76,
-        ),
+        gridDelegate: gridDelegate,
         itemCount: items.length,
         itemBuilder: (context, index) {
           final item = items[index];

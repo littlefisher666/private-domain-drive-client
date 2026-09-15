@@ -24,6 +24,34 @@ class FileItem {
 
 enum BrowseMode { list, grid }
 
+enum ThumbnailSize { small, medium, large }
+
+extension ThumbnailSizeX on ThumbnailSize {
+  String get label => switch (this) {
+        ThumbnailSize.small => '小',
+        ThumbnailSize.medium => '中',
+        ThumbnailSize.large => '大',
+      };
+
+  double maxCrossAxisExtent({required bool desktop}) => switch (this) {
+        ThumbnailSize.small => desktop ? 140 : 130,
+        ThumbnailSize.medium => desktop ? 190 : 180,
+        ThumbnailSize.large => desktop ? 270 : 260,
+      };
+
+  double childAspectRatio({required bool desktop}) => switch (this) {
+        ThumbnailSize.small => desktop ? 0.92 : 0.76,
+        ThumbnailSize.medium => desktop ? 0.92 : 0.76,
+        ThumbnailSize.large => desktop ? 0.92 : 0.76,
+      };
+
+  int get mobileCrossAxisCount => switch (this) {
+        ThumbnailSize.small => 3,
+        ThumbnailSize.medium => 2,
+        ThumbnailSize.large => 1,
+      };
+}
+
 enum FileSortOption {
   updatedNewest,
   updatedOldest,
