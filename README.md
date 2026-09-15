@@ -1,69 +1,102 @@
 # private-domain-drive-client
 
-私域网盘 Flutter 客户端仓库。
+私域网盘 Flutter 客户端，面向 Android 和 macOS。应用负责登录、文件管理、上传下载、图片浏览与本地更新；文件数据不经过业务服务端，由客户端持短期 STS 凭证直接访问阿里云 OSS。
 
-## 当前状态
+## 已实现能力
 
-客户端生产入口已切换到已部署的阿里云 FC 会话接口；界面仍保留原型阶段的文件操作实现，OSS 直连正在接入中。
+- 账号口令登录、会话安全存储和退出登录。
+- 冷启动恢复会话；临时凭证在到期前 8 分钟自动通过本地 `stsBroker` 直连阿里云 STS 刷新，不以 FC 刷新接口为日常链路。
+- OSS 目录浏览、列表 / 缩略图视图、目录导航、刷新及按更新时间、拍摄时间或名称排序；图片拍摄时间从 EXIF 读取并缓存。
+- 新建文件夹、重命名、单个或批量删除；桌面端支持框选、Shift 范围选择和详情面板，目录大小按需统计。
+- 文件、图片和文件夹上传；大文件由原生 OSS SDK 按服务端下发阈值使用分片上传。文件夹上传会保留目录层级。
+- 单个或批量下载；批量下载会展开目录并保留相对路径。Android 可保存至系统媒体库或用户选择的目录，macOS 可选择下载目录。
+- 上传 / 下载统一进入传输中心：展示进度、速度、结果，支持 1–5 个并发、取消、失败重试、批量操作和传输历史恢复。
+- 图片缩略图与图片在线预览（经 OSS 图片处理）；PDF 和文本当前仅提供预览占位页及下载入口，其他类型仅支持下载。
+- Android 可从相册选择图片上传，也可接收其他应用通过系统分享传入的一个或多个文件，选择目标目录后加入上传队列。
+- 浅色 / 深色主题、窄屏底栏和宽屏侧栏布局；“我的”页可检查 GitHub Release 更新。Android 支持校验 APK 摘要后应用内下载安装，macOS 跳转下载 DMG。
 
-- 登录成功 / 失败
-- 文件浏览（列表 / 缩略图、进出目录、新建 / 重命名 / 删除）
-- 上传 / 下载任务与重试取消
-- 图片 / PDF / 文本预览
-- Android 系统分享导入：从相册、文件管理器等应用分享一个或多个文件后，选择目录并确认上传
-- 我的页：会话信息与退出登录
-- 自适应布局：窄屏底栏导航，宽屏侧栏三栏信息结构
+## 架构与依赖
 
-已接入方案 B 会话缓存：
+- Flutter / Dart（SDK 约束见 `pubspec.yaml`）。
+- `packages/private_domain_oss`：封装 Android 与 macOS 的阿里云 OSS 原生 SDK；对象列举、上传、下载、删除、复制、缩略图和图片处理均通过该层执行。
+- FC 仅在登录时提供会话初始化、STS 凭证、OSS 配置和能力约束；客户端随后直连 OSS / STS。
+- 会话凭证使用 `flutter_secure_storage` 保存，展示偏好与传输历史使用 `shared_preferences` 保存。
 
-- 首次登录：优先请求 FC session/bootstrap，安全存储会话与 stsBroker
-- 再次打开：本地恢复会话；STS 过期时客户端直连阿里云 STS 刷新，不经 FC
-- FC 不可用或返回错误时直接显示错误，不再回落到本地演示会话
-- 上传入口使用 Android / macOS 系统文件选择器，文件内容直传 OSS
+完整接口约定见主仓库 [docs/接口.md](../docs/接口.md)，客户端分层见 [docs/Flutter架构设计.md](../docs/Flutter架构设计.md)。
 
-## 运行
+## 本地运行
+
+前提：已安装 Flutter，并准备了可访问的 FC、STS、OSS 环境。进入本目录后执行：
 
 ```bash
-cd private-domain-drive-client
 flutter pub get
 
-# macOS（本地环境配置不提交）
+# macOS
 flutter run -d macos --dart-define-from-file=env/local.json
 
-# Android（需模拟器或真机）
+# Android（模拟器或真机）
 flutter run -d android --dart-define-from-file=env/local.json
-
-# Android 分享导入
-# 在相册或文件管理器中选择文件，使用系统“分享”并选择“私域网盘”。
-# 应用会复制源文件至私有缓存，展示确认上传页；请在缓存清理前完成上传。
 ```
 
-本地 Debug 联调如需预填登录表单，可在不提交的 `env/local.json` 中增加：
+`env/local.json` 不提交到仓库，至少应按部署环境填写：
 
 ```json
 {
-  "DEBUG_DEFAULT_ACCOUNT": "本地测试账号",
-  "DEBUG_DEFAULT_PASSWORD": "本地测试口令"
+  "FC_BASE_URL": "https://<your-function>.<region>.fcapp.run",
+  "FC_ACCESS_KEY_ID": "<access-key-id>",
+  "FC_ACCESS_KEY_SECRET": "<access-key-secret>",
+  "FC_REGION": "cn-hangzhou",
+  "FC_SERVICE": "fc"
 }
 ```
 
-这两个值只会在 Debug 构建中生效；Profile 和 Release 构建始终显示空登录输入框。
+FC HTTP 触发器默认要求阿里云签名；生产和联调均应通过 `FC_ACCESS_KEY_ID`、`FC_ACCESS_KEY_SECRET` 注入签名凭证，不能将真实值写入源码。只有本地入口明确关闭鉴权时，才可额外设置 `FC_SIGN_REQUESTS=false`。
 
-FC HTTP 触发器默认启用签名校验，客户端必须通过 `FC_ACCESS_KEY_ID` 和
-`FC_ACCESS_KEY_SECRET` 注入签名凭证；不要将真实凭证写入源码或提交到仓库。
+如需在 Debug 构建预填登录表单，可增加下列可选字段；Profile 和 Release 构建不会使用它们：
 
-登录账号和口令由服务端校验，请使用服务端已配置的账号。
+```json
+{
+  "DEBUG_DEFAULT_ACCOUNT": "admin",
+  "DEBUG_DEFAULT_PASSWORD": "123456"
+}
+```
 
-## 目录
+服务端当前内置演示账号为 `admin/123456` 和 `member/123456`，两者能力相同；请仅用于受控开发环境。
 
-目录结构遵循主仓库 `docs/Flutter架构设计.md`：
+## 常用操作
 
-- `lib/app`：入口、主题、路由
-- `lib/features`：auth / workspace / transfer / preview / settings / share_import
-- `lib/shared/state`：应用状态与会话编排
-- `lib/shared/widgets`：通用组件
+- Android 系统分享：从相册或文件管理器选择文件，使用系统“分享”并选择“私域网盘”。源文件会先复制到应用缓存，需在缓存被系统清理前确认上传。
+- 文件夹上传：在“上传”菜单选择“上传文件夹”；会先创建远端目录，再将文件逐个加入传输队列。
+- 发布构建：GitHub Actions 的 `.github/workflows/release.yml` 支持手动指定版本或自动递增 PATCH，构建 Android ARM64 APK 与 macOS DMG，并创建带更新清单的 GitHub Release。构建所需的仓库变量 / Secrets 为 `FC_BASE_URL`、`FC_ACCESS_KEY_ID`、`FC_ACCESS_KEY_SECRET` 及 Android 签名相关 Secrets。
 
-## 后续
+## 测试
 
-- 将文件列表、上传、下载、删除和预览替换为基于会话 STS 的 OSS 直连实现
-- 接入真实文件选择、拖拽、系统分享与安全存储
+```bash
+flutter test
+
+# 已连接 macOS 与真实 OSS 环境时，按需执行集成测试
+flutter test integration_test/macos_smoke_test.dart -d macos \
+  --dart-define-from-file=env/local.json
+```
+
+`integration_test/` 中另含 OSS CRUD、缩略图与既有缩略图探测测试；它们会操作配置环境中的 OSS，仅应在隔离测试前缀下运行。
+
+## 目录概览
+
+```text
+lib/
+├── app/                 # 启动、路由、主题
+├── core/                # 网络、常量、错误与平台工具
+├── features/
+│   ├── auth/            # 登录、会话和 STS 刷新
+│   ├── workspace/       # 文件浏览、上传、下载、批量操作
+│   ├── transfer/        # 传输中心
+│   ├── preview/         # 文件预览
+│   ├── settings/        # 主题与应用更新
+│   └── share_import/    # Android 系统分享导入
+├── shared/              # 应用状态与通用组件
+└── main.dart
+packages/private_domain_oss/ # 原生 OSS SDK 适配层
+test/                        # 单元与组件测试
+integration_test/            # macOS 集成测试
+```
