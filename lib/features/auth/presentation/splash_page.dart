@@ -24,7 +24,11 @@ class _SplashPageState extends State<SplashPage> {
     if (!mounted) {
       return;
     }
-    final next = controller.isLoggedIn ? RouteNames.home : RouteNames.login;
+    final next = !controller.isLoggedIn
+        ? RouteNames.login
+        : controller.session?.mustResetPassword == true
+            ? RouteNames.changePassword
+            : RouteNames.home;
     Navigator.of(context).pushReplacementNamed(next);
   }
 

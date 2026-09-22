@@ -139,12 +139,14 @@ class OssConfig {
     required this.region,
     required this.endpoint,
     required this.rootPrefix,
+    this.mustResetPassword = false,
   });
 
   final String bucket;
   final String region;
   final String endpoint;
   final String rootPrefix;
+  final bool mustResetPassword;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'bucket': bucket,
@@ -224,6 +226,7 @@ class UserSession {
     required this.role,
     required this.capabilities,
     required this.rootPrefix,
+    this.mustResetPassword = false,
     this.ossConfig,
     this.credentials,
     this.stsBroker,
@@ -237,6 +240,7 @@ class UserSession {
   final String role;
   final Capabilities capabilities;
   final String rootPrefix;
+  final bool mustResetPassword;
   final OssConfig? ossConfig;
   final StsCredentials? credentials;
   final StsBrokerCredentials? stsBroker;
@@ -253,6 +257,7 @@ class UserSession {
     String? role,
     Capabilities? capabilities,
     String? rootPrefix,
+    bool? mustResetPassword,
     OssConfig? ossConfig,
     StsCredentials? credentials,
     StsBrokerCredentials? stsBroker,
@@ -266,6 +271,7 @@ class UserSession {
       role: role ?? this.role,
       capabilities: capabilities ?? this.capabilities,
       rootPrefix: rootPrefix ?? this.rootPrefix,
+      mustResetPassword: mustResetPassword ?? this.mustResetPassword,
       ossConfig: ossConfig ?? this.ossConfig,
       credentials: credentials ?? this.credentials,
       stsBroker: stsBroker ?? this.stsBroker,
@@ -281,6 +287,7 @@ class UserSession {
         'role': role,
         'capabilities': capabilities.toJson(),
         'rootPrefix': rootPrefix,
+        'mustResetPassword': mustResetPassword,
         'ossConfig': ossConfig?.toJson(),
         'credentials': credentials?.toJson(),
         'stsBroker': stsBroker?.toJson(),
@@ -300,6 +307,7 @@ class UserSession {
           ? Capabilities.fromJson(json['capabilities'] as Map<String, dynamic>)
           : const Capabilities.member(),
       rootPrefix: (json['rootPrefix'] ?? 'shared/').toString(),
+      mustResetPassword: json['mustResetPassword'] == true,
       ossConfig: json['ossConfig'] is Map<String, dynamic>
           ? OssConfig.fromJson(json['ossConfig'] as Map<String, dynamic>)
           : null,

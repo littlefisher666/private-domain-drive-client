@@ -12,6 +12,11 @@ abstract class SessionRepository {
   Future<UserSession> login(
       {required String account, required String password});
   Future<UserSession> refreshCredentials(UserSession session);
+  Future<UserSession> changePassword({
+    required UserSession session,
+    required String currentPassword,
+    required String newPassword,
+  });
   Future<void> logout();
 }
 
@@ -96,6 +101,22 @@ class PersistentSessionRepository implements SessionRepository {
   }
 
   @override
+  Future<UserSession> changePassword({
+    required UserSession session,
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    await _apiClient.changePassword(
+      account: session.account,
+      currentPassword: currentPassword,
+      newPassword: newPassword,
+    );
+    final updated = session.copyWith(mustResetPassword: false);
+    await _store.write(updated);
+    return updated;
+  }
+
+  @override
   Future<void> logout() async {
     await _store.clear();
   }
@@ -147,6 +168,19 @@ class MemorySessionRepository implements SessionRepository {
 
   @override
   Future<UserSession> refreshCredentials(UserSession session) async => session;
+
+  @override
+  Future<UserSession> changePassword({
+    required UserSession session,
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    if (currentPassword != '123456' || newPassword.length < 8) {
+      throw AppError('账号或当前口令错误', code: 'UNAUTHORIZED');
+    }
+    _session = session.copyWith(mustResetPassword: false);
+    return _session!;
+  }
 
   @override
   Future<void> logout() async {
