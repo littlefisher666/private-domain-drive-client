@@ -128,10 +128,10 @@ jobs:
 
       - name: 还原 Android 签名证书
         env:
-          KEYSTORE_BASE64: ${{ secrets.PDD_ANDROID_KEYSTORE_BASE64 }}
-          KEY_ALIAS: ${{ secrets.PDD_ANDROID_KEY_ALIAS }}
-          KEYSTORE_PASSWORD: ${{ secrets.PDD_ANDROID_KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.PDD_ANDROID_KEY_PASSWORD }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           test -n "$KEYSTORE_BASE64" && test -n "$KEY_ALIAS" && test -n "$KEYSTORE_PASSWORD" && test -n "$KEY_PASSWORD"
           echo "$KEYSTORE_BASE64" | base64 --decode > android/upload-keystore.jks
