@@ -1,8 +1,6 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../../app/router/route_names.dart';
-import '../../../core/constants/app_constants.dart';
 import '../../../shared/state/app_scope.dart';
 
 class LoginPage extends StatefulWidget {
@@ -13,14 +11,29 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final _accountController = TextEditingController(
-    text: kDebugMode ? AppConstants.debugDefaultAccount : '',
-  );
-  final _passwordController = TextEditingController(
-    text: kDebugMode ? AppConstants.debugDefaultPassword : '',
-  );
+  final _accountController = TextEditingController();
+  final _passwordController = TextEditingController();
   String? _error;
   bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRememberedCredentials();
+  }
+
+  /// 预填最近一次成功登录的凭据；改密成功后会同步更新记忆，
+  /// 避免预填过期口令。首次启动无记忆时保持为空。
+  Future<void> _loadRememberedCredentials() async {
+    final credentials = await AppScope.read(context).readSavedCredentials();
+    if (!mounted || credentials == null) {
+      return;
+    }
+    setState(() {
+      _accountController.text = credentials.account;
+      _passwordController.text = credentials.password;
+    });
+  }
 
   @override
   void dispose() {

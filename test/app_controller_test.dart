@@ -25,6 +25,37 @@ void main() {
       expect(result.message, '账号或口令错误');
     });
 
+    test('登录成功后记住最近登录凭据', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final controller =
+          AppController(sessionRepository: MemorySessionRepository());
+
+      await controller.login(account: ' admin ', password: '123456');
+
+      final credentials = await controller.readSavedCredentials();
+      expect(credentials, isNotNull);
+      expect(credentials!.account, 'admin');
+      expect(credentials.password, '123456');
+    });
+
+    test('修改密码成功后同步更新记住的口令', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final controller =
+          AppController(sessionRepository: MemorySessionRepository());
+      await controller.login(account: 'admin', password: '123456');
+
+      final error = await controller.changePassword(
+        currentPassword: '123456',
+        newPassword: 'newpassword1',
+      );
+
+      expect(error, isNull);
+      final credentials = await controller.readSavedCredentials();
+      expect(credentials, isNotNull);
+      expect(credentials!.account, 'admin');
+      expect(credentials.password, 'newpassword1');
+    });
+
     test('启动后会恢复本地传输历史', () async {
       const completedTask = TransferTask(
         id: 'download-history-1',

@@ -52,14 +52,7 @@ flutter run -d android --dart-define-from-file=env/local.json
 
 FC HTTP 触发器默认要求阿里云签名；生产和联调均应通过 `FC_ACCESS_KEY_ID`、`FC_ACCESS_KEY_SECRET` 注入签名凭证，不能将真实值写入源码。只有本地入口明确关闭鉴权时，才可额外设置 `FC_SIGN_REQUESTS=false`。
 
-如需在 Debug 构建预填登录表单，可增加下列可选字段；Profile 和 Release 构建不会使用它们：
-
-```json
-{
-  "DEBUG_DEFAULT_ACCOUNT": "admin",
-  "DEBUG_DEFAULT_PASSWORD": "123456"
-}
-```
+登录页会记住最近一次成功登录的账号与口令并自动预填（改密成功后同步更新）；首次启动需手动输入一次。
 
 服务端当前内置演示账号为 `admin/123456` 和 `member/123456`，两者能力相同；请仅用于受控开发环境。
 

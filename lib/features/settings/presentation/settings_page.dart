@@ -206,6 +206,24 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
             ),
+            SizedBox(height: desktop ? 12 : 16),
+            Card(
+              shape: desktop ? null : _mobileCardShape(scheme),
+              child: ListTile(
+                contentPadding: _mobileTilePadding(desktop),
+                minVerticalPadding: _mobileTileVerticalPadding(desktop),
+                leading: _SettingsLeadingIcon(
+                  icon: Icons.lock_outline,
+                  desktop: desktop,
+                ),
+                title: const Text('修改密码'),
+                subtitle: const Text('校验当前密码后设置新密码'),
+                onTap: () => Navigator.of(context).pushNamed(
+                  RouteNames.changePassword,
+                  arguments: false,
+                ),
+              ),
+            ),
             SizedBox(height: desktop ? 12 : 20),
             if (!desktop)
               _SectionLabel(label: '空间与应用', color: scheme.onSurfaceVariant),
