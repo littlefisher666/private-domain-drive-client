@@ -115,7 +115,9 @@ class AppController extends ChangeNotifier {
   AppController(
       {required SessionRepository sessionRepository, OssClient? ossClient})
       : _sessionRepository = sessionRepository,
-        _ossClient = ossClient ?? OssClient();
+        _ossClient = ossClient ?? OssClient() {
+    _ossClient.onCredentialExpired = handleCredentialExpired;
+  }
 
   final SessionRepository _sessionRepository;
   final OssClient _ossClient;
@@ -264,13 +266,11 @@ class AppController extends ChangeNotifier {
     }
     try {
       final restored = await _sessionRepository.restore();
-      if (restored != null) {
+      if (restored != null && restored.isRemote) {
         _session = restored;
         _currentPath =
             restored.rootPrefix.isEmpty ? rootPrefix : restored.rootPrefix;
-        if (restored.isRemote && restored.credentials != null) {
-          await _ossClient.configureSession(restored);
-        }
+        await _ossClient.configureSession(restored);
       }
     } catch (_) {
       // Keep app usable even if secure storage restore fails.
@@ -307,7 +307,7 @@ class AppController extends ChangeNotifier {
       _session = session;
       _currentPath =
           session.rootPrefix.isEmpty ? rootPrefix : session.rootPrefix;
-      if (session.isRemote && session.credentials != null) {
+      if (session.isRemote) {
         await _ossClient.configureSession(session);
       }
       selectedItemListenable.value = null;
@@ -364,21 +364,25 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> ensureFreshCredentials({bool force = false}) async {
+  /// 校验当前会话可用。访问密钥为登录下发的长期密钥，
+  /// 无需刷新；失效时由 [handleCredentialExpired] 引导重新登录。
+  Future<void> ensureSessionReady() async {
     final session = _session;
     if (session == null || !session.isRemote) {
       return;
     }
-    final credentials = session.credentials;
-    if (!force &&
-        credentials != null &&
-        credentials.isValid(skew: const Duration(minutes: 8))) {
+    if (session.credentials?.isValid != true) {
+      throw AppError('会话缺少 OSS 凭证，请重新登录', code: 'REMOTE_SESSION_REQUIRED');
+    }
+    await _ossClient.configureSession(session);
+  }
+
+  /// OSS 鉴权失败（密钥被撤销等）时清除会话，由外层引导用户重新登录。
+  void handleCredentialExpired() {
+    if (_session == null) {
       return;
     }
-    final refreshed = await _sessionRepository.refreshCredentials(session);
-    _session = refreshed;
-    await _ossClient.configureSession(refreshed);
-    notifyListeners();
+    unawaited(logout());
   }
 
   UserSession _requireSession() {
@@ -394,7 +398,7 @@ class AppController extends ChangeNotifier {
     if (session == null || !session.isRemote || session.credentials == null) {
       throw AppError('请先登录服务端账号', code: 'REMOTE_SESSION_REQUIRED');
     }
-    await ensureFreshCredentials();
+    await ensureSessionReady();
     final items = await _ossClient.list(path ?? _currentPath, _session!);
     if ((path ?? _currentPath) == _currentPath) {
       final beforeCount = _remoteDirectories.length;
@@ -418,7 +422,7 @@ class AppController extends ChangeNotifier {
       throw StateError('只有图片文件支持缩略图');
     }
     final session = _requireSession();
-    await ensureFreshCredentials();
+    await ensureSessionReady();
     return _ossClient.downloadThumbnail(item.path, _session ?? session);
   }
 
@@ -427,7 +431,7 @@ class AppController extends ChangeNotifier {
       throw StateError('只有图片文件支持在线预览');
     }
     final session = _requireSession();
-    await ensureFreshCredentials();
+    await ensureSessionReady();
     return _ossClient.downloadImagePreview(item.path, _session ?? session);
   }
 
@@ -663,7 +667,7 @@ class AppController extends ChangeNotifier {
     _directorySizeRequests[path] = request;
     _setDirectorySizeState(path, const DirectorySizeState.loading());
     try {
-      await ensureFreshCredentials();
+      await ensureSessionReady();
       final size = await _ossClient.calculateDirectorySize(
         path,
         _requireSession(),
@@ -819,7 +823,7 @@ class AppController extends ChangeNotifier {
     }
     final dir = _normalizeDir(targetPath ?? _currentPath);
     final path = '$dir$folderName/';
-    await ensureFreshCredentials();
+    await ensureSessionReady();
     await _ossClient.createFolder(path, _requireSession());
     _clearDirectorySizeCache();
     _treeRevision++;
@@ -840,7 +844,7 @@ class AppController extends ChangeNotifier {
         item.isDirectory ? parentPath(item.path) : parentPath(item.path);
     final dir = _normalizeDir(parent == item.path ? rootPrefix : parent);
     final newPath = item.isDirectory ? '$dir$trimmed/' : '$dir$trimmed';
-    await ensureFreshCredentials();
+    await ensureSessionReady();
     final session = _requireSession();
     await _ossClient.copy(item.path, newPath, session);
     await _ossClient.delete(item.path, session);
@@ -851,7 +855,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> deleteItem(FileItem item) async {
     _ensureDeleteCapability();
-    await ensureFreshCredentials();
+    await ensureSessionReady();
     final session = _requireSession();
     final paths = <String>{item.path};
     if (item.isDirectory) {
@@ -891,7 +895,7 @@ class AppController extends ChangeNotifier {
     _ensureDeleteCapability();
     final selected = items.toList(growable: false);
     final paths = <String>{};
-    await ensureFreshCredentials();
+    await ensureSessionReady();
     final session = _requireSession();
     for (final item in selected) {
       _ensureWithinRoot(item.path);
@@ -911,7 +915,7 @@ class AppController extends ChangeNotifier {
     BatchDeletePreview preview,
   ) async {
     _ensureDeleteCapability();
-    await ensureFreshCredentials();
+    await ensureSessionReady();
     final result = await _moveToRecycleBin(
       preview.objectPaths,
       name: preview.selectedCount == 1
@@ -993,7 +997,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<List<RecycleBinEntry>> listRecycleBin() async {
-    await ensureFreshCredentials();
+    await ensureSessionReady();
     final session = _requireSession();
     final prefixes =
         await _ossClient.listPrefixes('$rootPrefix.trash/', session);
@@ -1013,7 +1017,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> restoreRecycleBinEntry(RecycleBinEntry entry) async {
-    await ensureFreshCredentials();
+    await ensureSessionReady();
     final session = _requireSession();
     final restored = <String, String>{};
     for (final item in entry.objects.entries) {
@@ -1081,7 +1085,7 @@ class AppController extends ChangeNotifier {
       ),
       _QueuedTransfer((report, isCanceled) async {
         if (isCanceled()) throw const TransferCanceledException();
-        await ensureFreshCredentials();
+        await ensureSessionReady();
         await _ossClient.uploadFile(
           '$dir$fileName',
           localPath,
@@ -1105,7 +1109,7 @@ class AppController extends ChangeNotifier {
       throw StateError('一期不支持文件夹下载');
     }
 
-    await ensureFreshCredentials();
+    await ensureSessionReady();
     return _ossClient.download(item.path, _requireSession());
   }
 
@@ -1135,7 +1139,7 @@ class AppController extends ChangeNotifier {
         totalBytes: item.size,
       ),
       _QueuedTransfer((report, isCanceled) async {
-        await ensureFreshCredentials();
+        await ensureSessionReady();
         if (isCanceled()) throw const TransferCanceledException();
         final mediaCollection = _androidMediaCollection(item.name);
         if (mediaCollection != null) {
@@ -1210,7 +1214,7 @@ class AppController extends ChangeNotifier {
     }
     final selected = items.toList(growable: false);
     final targets = <String, _DownloadTarget>{};
-    await ensureFreshCredentials();
+    await ensureSessionReady();
     final session = _requireSession();
 
     for (final item in selected.where((item) => item.isDirectory)) {

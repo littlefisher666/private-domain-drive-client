@@ -11,7 +11,7 @@ import com.alibaba.sdk.android.oss.ClientException
 import com.alibaba.sdk.android.oss.OSSClient
 import com.alibaba.sdk.android.oss.ServiceException
 import com.alibaba.sdk.android.oss.callback.OSSCompletedCallback
-import com.alibaba.sdk.android.oss.common.auth.OSSStsTokenCredentialProvider
+import com.alibaba.sdk.android.oss.common.auth.OSSPlainTextAKSKCredentialProvider
 import com.alibaba.sdk.android.oss.internal.OSSAsyncTask
 import com.alibaba.sdk.android.oss.model.*
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -94,10 +94,10 @@ class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     private fun configure(call: MethodCall, result: MethodChannel.Result) {
         val endpoint = call.requiredString("endpoint")
         val newBucket = call.requiredString("bucket")
-        val provider = OSSStsTokenCredentialProvider(
+        // 登录下发的 pdd-client 长期 AccessKey，直接签名请求，不使用 SecurityToken。
+        val provider = OSSPlainTextAKSKCredentialProvider(
             call.requiredString("accessKeyId"),
             call.requiredString("accessKeySecret"),
-            call.requiredString("securityToken"),
         )
         client = OSSClient(applicationContext, endpoint, provider)
         bucket = newBucket
@@ -394,8 +394,8 @@ class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         if (error is ContentTooLargeException) return Triple("invalidRequest", "对象内容超过允许上限", emptyMap())
         if (error is ServiceException) {
             val code = when (error.errorCode) {
-                "SecurityTokenExpired", "InvalidAccessKeyId", "InvalidSecurityToken" -> "credentialExpired"
-                "AccessDenied", "SignatureDoesNotMatch" -> "accessDenied"
+                "InvalidAccessKeyId", "SignatureDoesNotMatch" -> "credentialExpired"
+                "AccessDenied" -> "accessDenied"
                 "NoSuchKey", "NoSuchBucket" -> "notFound"
                 "InvalidArgument", "InvalidRequest" -> "invalidRequest"
                 else -> "serviceError"

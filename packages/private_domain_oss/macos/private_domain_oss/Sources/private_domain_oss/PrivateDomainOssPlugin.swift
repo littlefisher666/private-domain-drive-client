@@ -171,10 +171,10 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
 
     private func configure(_ arguments: [String: Any]) throws {
         let values = try OssBridgeContract.session(arguments)
+        // 登录下发的 pdd-client 长期 AccessKey，直接签名请求，不使用 SecurityToken。
         let credentials = StaticCredentialsProvider(
             accessKeyId: values.accessKeyId,
-            accessKeySecret: values.accessKeySecret,
-            securityToken: values.securityToken
+            accessKeySecret: values.accessKeySecret
         )
         let configuration = Configuration.default()
             .withCredentialsProvider(credentials)

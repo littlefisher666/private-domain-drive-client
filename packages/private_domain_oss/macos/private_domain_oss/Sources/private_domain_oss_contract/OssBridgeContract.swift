@@ -8,7 +8,6 @@ public enum OssBridgeContract {
         public let bucket: String
         public let accessKeyId: String
         public let accessKeySecret: String
-        public let securityToken: String
     }
 
     public struct StableError {
@@ -54,8 +53,7 @@ public enum OssBridgeContract {
             region: try string(arguments, "region"),
             bucket: try string(arguments, "bucket"),
             accessKeyId: try string(arguments, "accessKeyId"),
-            accessKeySecret: try string(arguments, "accessKeySecret"),
-            securityToken: try string(arguments, "securityToken")
+            accessKeySecret: try string(arguments, "accessKeySecret")
         )
     }
 
@@ -162,8 +160,8 @@ public enum OssBridgeContract {
         if let server = error as? ServerError {
             let code: String
             switch server.code {
-            case "SecurityTokenExpired", "InvalidAccessKeyId", "InvalidSecurityToken": code = "credentialExpired"
-            case "AccessDenied", "SignatureDoesNotMatch": code = "accessDenied"
+            case "InvalidAccessKeyId", "SignatureDoesNotMatch": code = "credentialExpired"
+            case "AccessDenied": code = "accessDenied"
             case "NoSuchKey", "NoSuchBucket": code = "notFound"
             case "InvalidArgument", "InvalidRequest": code = "invalidRequest"
             default: code = "serviceError"

@@ -446,7 +446,10 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.descendant(of: dialog, matching: find.textContaining('删除后无法恢复')),
+      find.descendant(
+        of: dialog,
+        matching: find.textContaining('将移入回收站，30 天内可恢复'),
+      ),
       findsOneWidget,
     );
 
@@ -477,8 +480,8 @@ void main() {
     await tester.pumpAndSettle();
 
     final confirmDialog = find.byType(AlertDialog);
-    await tester
-        .tap(find.descendant(of: confirmDialog, matching: find.text('删除')));
+    await tester.tap(find
+        .descendant(of: confirmDialog, matching: find.text('移入回收站')));
     // 确认按钮会触发异步批量删除；只推进当前帧，避免 settle 将后续
     // 刷新/反馈流程一并跑完，导致错过“部分删除失败”对话框。
     await tester.pump();
@@ -502,7 +505,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(oss.deleteManyCalls, 2);
-    expect(find.text('已删除 3 项'), findsOneWidget);
+    expect(find.text('已移入回收站 3 项'), findsOneWidget);
     expect(controller.isMultiSelectionMode, isFalse);
   });
 }
@@ -532,24 +535,22 @@ Future<AppController> _pumpWorkspace(
 }
 
 UserSession _session() {
-  return UserSession(
+  return const UserSession(
     userId: 'test-user',
     account: 'test',
     displayName: '测试成员',
     role: 'member',
-    capabilities: const Capabilities.standard(),
+    capabilities: Capabilities.standard(),
     rootPrefix: 'shared/',
-    ossConfig: const OssConfig(
+    ossConfig: OssConfig(
       bucket: 'test-bucket',
       region: 'cn-hangzhou',
       endpoint: 'oss-cn-hangzhou.aliyuncs.com',
       rootPrefix: 'shared/',
     ),
-    credentials: StsCredentials(
+    credentials: OssCredentials(
       accessKeyId: 'id',
       accessKeySecret: 'secret',
-      securityToken: 'token',
-      expiration: DateTime.now().toUtc().add(const Duration(hours: 1)),
     ),
   );
 }
@@ -566,9 +567,6 @@ class _FakeSessionRepository implements SessionRepository {
   Future<UserSession> login(
           {required String account, required String password}) async =>
       session;
-
-  @override
-  Future<UserSession> refreshCredentials(UserSession session) async => session;
 
   @override
   Future<UserSession> changePassword({
@@ -607,6 +605,16 @@ class _FakeOssClient extends OssClient {
   final Map<String, List<String>> objectKeysByPath = <String, List<String>>{};
   int deleteManyCalls = 0;
   Set<String> firstDeleteFailures = <String>{};
+
+  @override
+  Future<void> configureSession(UserSession session) async {}
+
+  @override
+  Future<void> copy(String from, String to, UserSession session) async {}
+
+  @override
+  Future<void> uploadText(
+      String path, String content, UserSession session) async {}
 
   @override
   Future<List<FileItem>> list(String path, UserSession session) async =>
@@ -650,9 +658,6 @@ class _FakeOssClient extends OssClient {
     await target.writeAsBytes(<int>[1], flush: true);
     onProgress(1, 1);
   }
-
-  @override
-  Future<void> configureSession(UserSession session) async {}
 
   @override
   Future<void> clearConfiguration() async {}

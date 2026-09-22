@@ -137,8 +137,6 @@ class PrivateDomainOss {
     required String bucket,
     required String accessKeyId,
     required String accessKeySecret,
-    required String securityToken,
-    required int expirationMilliseconds,
   }) {
     return _methods.invokeMethod<void>('configure', <String, Object>{
       'endpoint': endpoint,
@@ -146,8 +144,6 @@ class PrivateDomainOss {
       'bucket': bucket,
       'accessKeyId': accessKeyId,
       'accessKeySecret': accessKeySecret,
-      'securityToken': securityToken,
-      'expirationMilliseconds': expirationMilliseconds,
     });
   }
 

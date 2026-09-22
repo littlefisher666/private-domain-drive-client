@@ -54,8 +54,6 @@ void main() {
         'bucket',
         'accessKeyId',
         'accessKeySecret',
-        'securityToken',
-        'expirationMilliseconds',
       ]);
       return null;
     });
@@ -64,10 +62,8 @@ void main() {
       endpoint: 'https://oss.example.test',
       region: 'cn-test',
       bucket: 'test-bucket',
-      accessKeyId: 'temporary-id',
-      accessKeySecret: 'temporary-secret',
-      securityToken: 'temporary-token',
-      expirationMilliseconds: 123,
+      accessKeyId: 'client-id',
+      accessKeySecret: 'client-secret',
     );
   });
 

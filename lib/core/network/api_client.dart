@@ -48,8 +48,8 @@ class ApiClient {
 
     final user = data['user'] as Map<String, dynamic>? ?? const <String, dynamic>{};
     final oss = data['oss'] as Map<String, dynamic>? ?? const <String, dynamic>{};
-    final credentials = data['credentials'] as Map<String, dynamic>? ?? const <String, dynamic>{};
-    final stsBroker = data['stsBroker'] as Map<String, dynamic>? ?? const <String, dynamic>{};
+    final clientCredentials =
+        data['clientCredentials'] as Map<String, dynamic>? ?? const <String, dynamic>{};
     final capabilities = data['capabilities'] as Map<String, dynamic>? ?? const <String, dynamic>{};
     final constraints = data['constraints'] as Map<String, dynamic>? ?? const <String, dynamic>{};
 
@@ -62,8 +62,7 @@ class ApiClient {
       capabilities: Capabilities.fromJson(capabilities),
       rootPrefix: rootPrefix,
       ossConfig: OssConfig.fromJson(oss),
-      credentials: StsCredentials.fromJson(credentials),
-      stsBroker: StsBrokerCredentials.fromJson(stsBroker),
+      credentials: OssCredentials.fromJson(clientCredentials),
       constraints: ClientConstraints.fromJson(constraints),
       authMode: SessionAuthMode.remote,
       mustResetPassword: user['mustResetPassword'] == true,

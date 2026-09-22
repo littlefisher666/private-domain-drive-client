@@ -55,80 +55,28 @@ class Capabilities {
   }
 }
 
-class StsCredentials {
-  const StsCredentials({
+/// 登录时由服务端 bootstrap 下发的 pdd-client 长期 OSS 访问密钥。
+/// 仅在会话内存中持有，不落盘；退出登录时清除。
+class OssCredentials {
+  const OssCredentials({
     required this.accessKeyId,
     required this.accessKeySecret,
-    required this.securityToken,
-    required this.expiration,
   });
 
   final String accessKeyId;
   final String accessKeySecret;
-  final String securityToken;
-  final DateTime expiration;
 
-  bool isValid({Duration skew = Duration.zero}) {
-    return DateTime.now().toUtc().isBefore(expiration.subtract(skew));
-  }
+  bool get isValid => accessKeyId.isNotEmpty && accessKeySecret.isNotEmpty;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'accessKeyId': accessKeyId,
         'accessKeySecret': accessKeySecret,
-        'securityToken': securityToken,
-        'expiration': expiration.toUtc().toIso8601String(),
       };
 
-  factory StsCredentials.fromJson(Map<String, dynamic> json) {
-    return StsCredentials(
+  factory OssCredentials.fromJson(Map<String, dynamic> json) {
+    return OssCredentials(
       accessKeyId: (json['accessKeyId'] ?? '').toString(),
       accessKeySecret: (json['accessKeySecret'] ?? '').toString(),
-      securityToken: (json['securityToken'] ?? '').toString(),
-      expiration: parseApiDateTime((json['expiration'] ?? '').toString()),
-    );
-  }
-}
-
-class StsBrokerCredentials {
-  const StsBrokerCredentials({
-    required this.accessKeyId,
-    required this.accessKeySecret,
-    required this.endpoint,
-    required this.roleArn,
-    required this.roleSessionName,
-    required this.durationSeconds,
-    this.policy = '',
-  });
-
-  final String accessKeyId;
-  final String accessKeySecret;
-  final String endpoint;
-  final String roleArn;
-  final String roleSessionName;
-  final int durationSeconds;
-  final String policy;
-
-  Map<String, dynamic> toJson() => <String, dynamic>{
-        'accessKeyId': accessKeyId,
-        'accessKeySecret': accessKeySecret,
-        'endpoint': endpoint,
-        'roleArn': roleArn,
-        'roleSessionName': roleSessionName,
-        'durationSeconds': durationSeconds,
-        'policy': policy,
-      };
-
-  factory StsBrokerCredentials.fromJson(Map<String, dynamic> json) {
-    return StsBrokerCredentials(
-      accessKeyId: (json['accessKeyId'] ?? '').toString(),
-      accessKeySecret: (json['accessKeySecret'] ?? '').toString(),
-      endpoint: (json['endpoint'] ?? 'sts.cn-hangzhou.aliyuncs.com').toString(),
-      roleArn: (json['roleArn'] ?? '').toString(),
-      roleSessionName:
-          (json['roleSessionName'] ?? 'private-domain-drive-session').toString(),
-      durationSeconds:
-          int.tryParse('${json['durationSeconds'] ?? 3600}') ?? 3600,
-      policy: (json['policy'] ?? '').toString(),
     );
   }
 }
@@ -229,7 +177,6 @@ class UserSession {
     this.mustResetPassword = false,
     this.ossConfig,
     this.credentials,
-    this.stsBroker,
     this.constraints = const ClientConstraints.defaults(),
     this.authMode = SessionAuthMode.remote,
   });
@@ -242,8 +189,7 @@ class UserSession {
   final String rootPrefix;
   final bool mustResetPassword;
   final OssConfig? ossConfig;
-  final StsCredentials? credentials;
-  final StsBrokerCredentials? stsBroker;
+  final OssCredentials? credentials;
   final ClientConstraints constraints;
   final SessionAuthMode authMode;
 
@@ -259,8 +205,7 @@ class UserSession {
     String? rootPrefix,
     bool? mustResetPassword,
     OssConfig? ossConfig,
-    StsCredentials? credentials,
-    StsBrokerCredentials? stsBroker,
+    OssCredentials? credentials,
     ClientConstraints? constraints,
     SessionAuthMode? authMode,
   }) {
@@ -274,7 +219,6 @@ class UserSession {
       mustResetPassword: mustResetPassword ?? this.mustResetPassword,
       ossConfig: ossConfig ?? this.ossConfig,
       credentials: credentials ?? this.credentials,
-      stsBroker: stsBroker ?? this.stsBroker,
       constraints: constraints ?? this.constraints,
       authMode: authMode ?? this.authMode,
     );
@@ -290,7 +234,6 @@ class UserSession {
         'mustResetPassword': mustResetPassword,
         'ossConfig': ossConfig?.toJson(),
         'credentials': credentials?.toJson(),
-        'stsBroker': stsBroker?.toJson(),
         'constraints': constraints.toJson(),
         'authMode': authMode.name,
       };
@@ -312,12 +255,7 @@ class UserSession {
           ? OssConfig.fromJson(json['ossConfig'] as Map<String, dynamic>)
           : null,
       credentials: json['credentials'] is Map<String, dynamic>
-          ? StsCredentials.fromJson(json['credentials'] as Map<String, dynamic>)
-          : null,
-      stsBroker: json['stsBroker'] is Map<String, dynamic>
-          ? StsBrokerCredentials.fromJson(
-              json['stsBroker'] as Map<String, dynamic>,
-            )
+          ? OssCredentials.fromJson(json['credentials'] as Map<String, dynamic>)
           : null,
       constraints: json['constraints'] is Map<String, dynamic>
           ? ClientConstraints.fromJson(

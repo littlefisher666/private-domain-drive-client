@@ -29,13 +29,3 @@ class LogoutUseCase {
 
   Future<void> execute() => _repository.logout();
 }
-
-class RefreshCredentialsUseCase {
-  const RefreshCredentialsUseCase(this._repository);
-
-  final SessionRepository _repository;
-
-  Future<UserSession> execute(UserSession session) {
-    return _repository.refreshCredentials(session);
-  }
-}
