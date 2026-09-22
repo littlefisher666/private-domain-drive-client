@@ -143,7 +143,7 @@ jobs:
             --target-platform android-arm64 \
             --build-name "${{ needs.prepare.outputs.version_name }}" \
             --build-number "${{ needs.prepare.outputs.build_number }}" \
-            --dart-define=FC_BASE_URL="${{ vars.PDD_FC_BASE_URL }}" \
+            --dart-define=FC_BASE_URL="${{ vars.FC_BASE_URL }}" \
             --dart-define=FC_ACCESS_KEY_ID="${{ secrets.PDD_FC_INVOKE_ACCESS_KEY_ID }}" \
             --dart-define=FC_ACCESS_KEY_SECRET="${{ secrets.PDD_FC_INVOKE_ACCESS_KEY_SECRET }}"
 
@@ -192,7 +192,7 @@ jobs:
           flutter build macos --release \
             --build-name "${{ needs.prepare.outputs.version_name }}" \
             --build-number "${{ needs.prepare.outputs.build_number }}" \
-            --dart-define=FC_BASE_URL="${{ vars.PDD_FC_BASE_URL }}" \
+            --dart-define=FC_BASE_URL="${{ vars.FC_BASE_URL }}" \
             --dart-define=FC_ACCESS_KEY_ID="${{ secrets.PDD_FC_INVOKE_ACCESS_KEY_ID }}" \
             --dart-define=FC_ACCESS_KEY_SECRET="${{ secrets.PDD_FC_INVOKE_ACCESS_KEY_SECRET }}"
 
