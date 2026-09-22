@@ -83,8 +83,8 @@ void main() {
         await _writeRepeatedFile(progressSource, 128 * 1024 * 1024);
         await _writeRepeatedFile(cancelSource, 256 * 1024 * 1024);
 
-        // 强制刷新一次 STS，并立刻通过真实列表请求验证新凭证已配置到 Swift SDK。
-        await controller.ensureFreshCredentials(force: true);
+        // 确保会话与 OSS 凭证已配置，并立刻通过真实列表请求验证登录下发的长期密钥可用。
+        await controller.ensureSessionReady();
         await controller.listDirectory(runPath);
 
         final taskStart = controller.tasks.length;

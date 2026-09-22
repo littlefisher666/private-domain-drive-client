@@ -28,6 +28,9 @@ class OssClient {
   final Set<String> _reportedErrorSignatures = <String>{};
   String? _configuredSession;
 
+  /// OSS 返回鉴权失败（访问密钥被撤销等）时通知外层引导重新登录。
+  void Function()? onCredentialExpired;
+
   Future<void> configureSession(UserSession session) =>
       _ensureConfigured(session);
 
@@ -442,14 +445,13 @@ class OssClient {
     final config = session.ossConfig ??
         (throw AppError('会话缺少 OSS 配置', code: 'OSS_CONFIG_MISSING'));
     final credentials = session.credentials ??
-        (throw AppError('会话缺少 OSS 临时凭证', code: 'OSS_CREDENTIALS_MISSING'));
+        (throw AppError('会话缺少 OSS 凭证', code: 'OSS_CREDENTIALS_MISSING'));
     final fingerprint = <Object>[
       config.endpoint,
       config.region,
       config.bucket,
       credentials.accessKeyId,
-      credentials.securityToken,
-      credentials.expiration.toUtc().millisecondsSinceEpoch,
+      credentials.accessKeySecret,
     ].join('|');
     if (!force && _configuredSession == fingerprint) return;
     await _platform(
@@ -459,9 +461,6 @@ class OssClient {
         bucket: config.bucket,
         accessKeyId: credentials.accessKeyId,
         accessKeySecret: credentials.accessKeySecret,
-        securityToken: credentials.securityToken,
-        expirationMilliseconds:
-            credentials.expiration.toUtc().millisecondsSinceEpoch,
       ),
     );
     _configuredSession = fingerprint;
@@ -578,7 +577,7 @@ class OssClient {
         );
       }
       const messages = <String, String>{
-        'credentialExpired': 'OSS 临时凭证已过期',
+        'credentialExpired': 'OSS 访问密钥无效，请重新登录',
         'accessDenied': '没有权限执行该 OSS 操作',
         'notFound': 'OSS 对象不存在',
         'networkUnavailable': '网络连接不可用',
@@ -586,6 +585,9 @@ class OssClient {
         'serviceError': 'OSS 服务请求失败',
         'unknown': 'OSS 操作失败',
       };
+      if (error.code == OssErrorCode.credentialExpired.name) {
+        onCredentialExpired?.call();
+      }
       throw AppError(
         messages[error.code] ?? 'OSS 操作失败',
         code: 'OSS_${error.code.toUpperCase()}',

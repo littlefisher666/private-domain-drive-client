@@ -27,6 +27,7 @@ class _PrivateDomainDriveAppState extends State<PrivateDomainDriveApp> {
   final _navigatorKey = GlobalKey<NavigatorState>();
   StreamSubscription<List<ShareImportItem>>? _shareSubscription;
   String? _openedShareSignature;
+  bool? _lastLoggedIn;
 
   @override
   void initState() {
@@ -67,6 +68,22 @@ class _PrivateDomainDriveAppState extends State<PrivateDomainDriveApp> {
     });
   }
 
+  /// 会话因凭证失效被清除时，引导用户重新登录；启动阶段的初次路由
+  /// 仍由 SplashPage 负责，这里只在「已登录 → 未登录」的迁移时介入。
+  void _navigateToLoginOnSessionLoss() {
+    final loggedIn = widget.controller.isLoggedIn;
+    final hadSession = _lastLoggedIn;
+    _lastLoggedIn = loggedIn;
+    if (widget.controller.bootstrapped &&
+        hadSession == true &&
+        !loggedIn) {
+      _navigatorKey.currentState?.pushNamedAndRemoveUntil(
+        RouteNames.login,
+        (_) => false,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isMacOS = defaultTargetPlatform == TargetPlatform.macOS;
@@ -76,6 +93,7 @@ class _PrivateDomainDriveAppState extends State<PrivateDomainDriveApp> {
         animation: widget.controller,
         builder: (context, _) {
           _showShareConfirmationIfPossible();
+          _navigateToLoginOnSessionLoss();
           return MaterialApp(
             navigatorKey: _navigatorKey,
             title: '私域网盘',

@@ -3,22 +3,20 @@ import XCTest
 @testable import private_domain_oss_contract
 
 final class PrivateDomainOssPluginTests: XCTestCase {
-    func testSessionReadsDocumentedStsAndOssFields() throws {
+    func testSessionReadsDocumentedOssFields() throws {
         let values = try OssBridgeContract.session([
             "endpoint": "https://oss-cn-hangzhou.aliyuncs.com",
             "region": "cn-hangzhou",
             "bucket": "test-bucket",
-            "accessKeyId": "temporary-id",
-            "accessKeySecret": "temporary-secret",
-            "securityToken": "temporary-token",
+            "accessKeyId": "client-id",
+            "accessKeySecret": "client-secret",
         ])
 
         XCTAssertEqual(values.endpoint, "https://oss-cn-hangzhou.aliyuncs.com")
         XCTAssertEqual(values.region, "cn-hangzhou")
         XCTAssertEqual(values.bucket, "test-bucket")
-        XCTAssertEqual(values.accessKeyId, "temporary-id")
-        XCTAssertEqual(values.accessKeySecret, "temporary-secret")
-        XCTAssertEqual(values.securityToken, "temporary-token")
+        XCTAssertEqual(values.accessKeyId, "client-id")
+        XCTAssertEqual(values.accessKeySecret, "client-secret")
     }
 
     func testSessionRejectsMissingFields() {

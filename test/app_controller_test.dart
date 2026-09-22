@@ -584,24 +584,22 @@ Future<void> _waitForTaskStatus(
 }
 
 UserSession _remoteSession() {
-  return UserSession(
+  return const UserSession(
     userId: 'test-user',
     account: 'test',
     displayName: '测试成员',
     role: 'member',
-    capabilities: const Capabilities.standard(),
+    capabilities: Capabilities.standard(),
     rootPrefix: 'shared/',
-    ossConfig: const OssConfig(
+    ossConfig: OssConfig(
       bucket: 'test-bucket',
       region: 'cn-hangzhou',
       endpoint: 'oss-cn-hangzhou.aliyuncs.com',
       rootPrefix: 'shared/',
     ),
-    credentials: StsCredentials(
+    credentials: OssCredentials(
       accessKeyId: 'id',
       accessKeySecret: 'secret',
-      securityToken: 'token',
-      expiration: DateTime.now().toUtc().add(const Duration(hours: 1)),
     ),
   );
 }
@@ -618,9 +616,6 @@ class _FakeSessionRepository implements SessionRepository {
   Future<UserSession> login(
           {required String account, required String password}) async =>
       session;
-
-  @override
-  Future<UserSession> refreshCredentials(UserSession session) async => session;
 
   @override
   Future<UserSession> changePassword({

@@ -259,24 +259,22 @@ Uint8List _jpegHeaderWithTakenAt(String date) {
 }
 
 UserSession _session() {
-  return UserSession(
+  return const UserSession(
     userId: 'u1',
     account: 'u1',
     displayName: '测试用户',
     role: 'member',
-    capabilities: const Capabilities.member(),
+    capabilities: Capabilities.member(),
     rootPrefix: 'shared/',
-    ossConfig: const OssConfig(
+    ossConfig: OssConfig(
       bucket: 'bucket',
       region: 'cn-hangzhou',
       endpoint: 'https://oss-cn-hangzhou.aliyuncs.com',
       rootPrefix: 'shared/',
     ),
-    credentials: StsCredentials(
+    credentials: OssCredentials(
       accessKeyId: 'id',
       accessKeySecret: 'secret',
-      securityToken: 'token',
-      expiration: DateTime(2099),
     ),
   );
 }
@@ -315,8 +313,6 @@ class _FakeNative extends PrivateDomainOss {
     required String bucket,
     required String accessKeyId,
     required String accessKeySecret,
-    required String securityToken,
-    required int expirationMilliseconds,
   }) async {
     configureCalls++;
   }

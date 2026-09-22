@@ -27,7 +27,4 @@ class AppConstants {
       String.fromEnvironment('DEBUG_DEFAULT_ACCOUNT');
   static const debugDefaultPassword =
       String.fromEnvironment('DEBUG_DEFAULT_PASSWORD');
-
-  /// Refresh STS this many minutes before expiration.
-  static const stsRefreshSkew = Duration(minutes: 8);
 }

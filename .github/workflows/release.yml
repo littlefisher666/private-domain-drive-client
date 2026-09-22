@@ -128,10 +128,10 @@ jobs:
 
       - name: 还原 Android 签名证书
         env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEYSTORE_BASE64: ${{ secrets.PDD_ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.PDD_ANDROID_KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.PDD_ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.PDD_ANDROID_KEY_PASSWORD }}
         run: |
           test -n "$KEYSTORE_BASE64" && test -n "$KEY_ALIAS" && test -n "$KEYSTORE_PASSWORD" && test -n "$KEY_PASSWORD"
           echo "$KEYSTORE_BASE64" | base64 --decode > android/upload-keystore.jks
@@ -143,9 +143,9 @@ jobs:
             --target-platform android-arm64 \
             --build-name "${{ needs.prepare.outputs.version_name }}" \
             --build-number "${{ needs.prepare.outputs.build_number }}" \
-            --dart-define=FC_BASE_URL="${{ vars.FC_BASE_URL }}" \
-            --dart-define=FC_ACCESS_KEY_ID="${{ secrets.FC_ACCESS_KEY_ID }}" \
-            --dart-define=FC_ACCESS_KEY_SECRET="${{ secrets.FC_ACCESS_KEY_SECRET }}"
+            --dart-define=FC_BASE_URL="${{ vars.PDD_FC_BASE_URL }}" \
+            --dart-define=FC_ACCESS_KEY_ID="${{ secrets.PDD_FC_INVOKE_ACCESS_KEY_ID }}" \
+            --dart-define=FC_ACCESS_KEY_SECRET="${{ secrets.PDD_FC_INVOKE_ACCESS_KEY_SECRET }}"
 
       - name: 整理 APK 发布文件
         run: cp build/app/outputs/flutter-apk/app-release.apk "private-domain-drive-android-${{ needs.prepare.outputs.tag_name }}.apk"
@@ -192,9 +192,9 @@ jobs:
           flutter build macos --release \
             --build-name "${{ needs.prepare.outputs.version_name }}" \
             --build-number "${{ needs.prepare.outputs.build_number }}" \
-            --dart-define=FC_BASE_URL="${{ vars.FC_BASE_URL }}" \
-            --dart-define=FC_ACCESS_KEY_ID="${{ secrets.FC_ACCESS_KEY_ID }}" \
-            --dart-define=FC_ACCESS_KEY_SECRET="${{ secrets.FC_ACCESS_KEY_SECRET }}"
+            --dart-define=FC_BASE_URL="${{ vars.PDD_FC_BASE_URL }}" \
+            --dart-define=FC_ACCESS_KEY_ID="${{ secrets.PDD_FC_INVOKE_ACCESS_KEY_ID }}" \
+            --dart-define=FC_ACCESS_KEY_SECRET="${{ secrets.PDD_FC_INVOKE_ACCESS_KEY_SECRET }}"
 
       - name: 打包 macOS 应用
         run: |
