@@ -1036,6 +1036,25 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 立即删除一个回收批次；对象清单已覆盖批次的全部 payload 对象。
+  Future<void> purgeRecycleBinEntry(RecycleBinEntry entry) async {
+    await ensureSessionReady();
+    final session = _requireSession();
+    final failed = <String>[];
+    for (final keys in _batches(<String>[
+      ...entry.objects.values,
+      '$rootPrefix.trash/${entry.id}/manifest.json'
+    ])) {
+      final result = await _ossClient.deleteMany(keys, session);
+      failed.addAll(result.failedPaths);
+    }
+    if (failed.isNotEmpty) {
+      throw AppError('有 ${failed.length} 个对象删除失败，请稍后重试',
+          code: 'OSS_DELETE_FAILED');
+    }
+    notifyListeners();
+  }
+
   Future<String> _availableRestorePath(
       String desired, UserSession session) async {
     if (!await _ossClient.objectExists(desired, session)) return desired;

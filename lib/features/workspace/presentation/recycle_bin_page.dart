@@ -57,7 +57,9 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
 
   Future<void> _reload() async {
     final future = _load();
-    setState(() => _entriesFuture = future);
+    setState(() {
+      _entriesFuture = future;
+    });
     await future;
   }
 
@@ -80,23 +82,20 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
     }
 
     for (final entry in entries) {
-      final original = entry.isDirectory ? _folder(entry.originalPath) : entry.originalPath;
-      if (current == AppController.rootPrefix) {
-        if (!original.startsWith(current)) continue;
-        final relative = original.substring(current.length);
+      // 目录条目按其 payload 对象展开；文件条目本身就是一个可列出项。
+      // 两者统一按“源路径的第一段”构成虚拟目录树，避免逐个删除的文件
+      // 聚合出的虚拟文件夹在进入后为空。
+      final sources = entry.isDirectory
+          ? entry.objects.keys
+          : <String>[entry.originalPath];
+      for (final source in sources) {
+        if (!source.startsWith(current)) continue;
+        final relative = source.substring(current.length);
+        if (relative.isEmpty) continue;
         final slash = relative.indexOf('/');
         final name = slash < 0 ? relative : relative.substring(0, slash);
         if (name.isEmpty) continue;
-        add('$current$name', name, entry.isDirectory || slash >= 0, entry);
-      } else if (entry.isDirectory && original.startsWith(current)) {
-        for (final objectPath in entry.objects.keys) {
-          if (!objectPath.startsWith(current)) continue;
-          final relative = objectPath.substring(current.length);
-          if (relative.isEmpty) continue;
-          final slash = relative.indexOf('/');
-          final name = slash < 0 ? relative : relative.substring(0, slash);
-          if (name.isNotEmpty) add('$current$name', name, slash >= 0, entry);
-        }
+        add('$current$name', name, slash >= 0 || relative.endsWith('/'), entry);
       }
     }
     _itemEntries = owners;
@@ -138,6 +137,27 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       await controller.restoreRecycleBinEntry(entry);
       await _reload();
       if (mounted) AppFeedback.showSnack(context, '已恢复 ${entry.name}');
+    } catch (error) {
+      if (mounted) AppFeedback.showSnack(context, error.toString());
+    }
+  }
+
+  Future<void> _purgeItem(FileItem item) async {
+    final entry = _itemEntries[item.path];
+    if (entry == null) return;
+    final controller = AppScope.of(context);
+    final confirmed = await AppFeedback.confirm(
+      context,
+      title: '立即删除“${entry.name}”？',
+      message: '将永久删除该批次，删除后无法再恢复。',
+      confirmLabel: '删除',
+    );
+    if (!confirmed) return;
+    try {
+      await controller.purgeRecycleBinEntry(entry);
+      _selected.value = null;
+      await _reload();
+      if (mounted) AppFeedback.showSnack(context, '已永久删除 ${entry.name}');
     } catch (error) {
       if (mounted) AppFeedback.showSnack(context, error.toString());
     }
@@ -208,6 +228,12 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
               Text('删除于：${_date(entry.deletedAt)}'), Text('永久删除：${_date(entry.expiresAt)}'),
               Text(_remaining(entry.expiresAt)), const SizedBox(height: 20),
               FilledButton.tonal(onPressed: () => _restoreItem(item), child: const Text('恢复')),
+              const SizedBox(height: 8),
+              FilledButton.tonal(
+                onPressed: () => _purgeItem(item),
+                style: FilledButton.styleFrom(foregroundColor: scheme.error),
+                child: const Text('立即删除'),
+              ),
             ]),
     );
   }
@@ -236,7 +262,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
               onGoUp: _goUp, onRefresh: _reload, onCreateFolder: () {}, onUpload: () {}, onUploadDirectory: () {},
               onBrowseModeChanged: controller.setBrowseMode, onThumbnailSizeChanged: controller.setThumbnailSize,
               onSortChanged: controller.setFileSortOption, onOpen: _open, onPreview: (_) {}, onDownload: (_) {}, onDelete: (_) {},
-              detailBuilder: _details,
+              detailBuilder: _details, showPermissionNotice: false,
             );
           }
           return Padding(
