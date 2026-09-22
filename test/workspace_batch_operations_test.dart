@@ -571,6 +571,14 @@ class _FakeSessionRepository implements SessionRepository {
   Future<UserSession> refreshCredentials(UserSession session) async => session;
 
   @override
+  Future<UserSession> changePassword({
+    required UserSession session,
+    required String currentPassword,
+    required String newPassword,
+  }) async =>
+      session.copyWith(mustResetPassword: false);
+
+  @override
   Future<UserSession?> restore() async => session;
 }
 

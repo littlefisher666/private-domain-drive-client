@@ -9,6 +9,7 @@ import 'package:private_domain_drive_client/features/auth/domain/user_session.da
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
 import 'package:private_domain_drive_client/features/transfer/domain/transfer_task.dart';
 import 'package:private_domain_drive_client/features/workspace/domain/file_item.dart';
+import 'package:private_domain_drive_client/features/workspace/domain/recycle_bin_entry.dart';
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
 import 'package:private_domain_drive_client/shared/state/app_controller.dart';
 
@@ -179,6 +180,30 @@ void main() {
       expect(controller.selectedItem, isNull);
     });
 
+    test('恢复时同名路径会使用已还原名称且不覆盖现有对象', () async {
+      final oss = _FakeOssClient()..existingPaths.add('shared/资料.txt');
+      final controller = await _controller(oss: oss);
+      final entry = RecycleBinEntry(
+        id: 'batch-1',
+        name: '资料.txt',
+        originalPath: 'shared/资料.txt',
+        isDirectory: false,
+        deletedAt: DateTime(2026, 9, 20),
+        objects: const <String, String>{
+          'shared/资料.txt': 'shared/.trash/batch-1/payload/资料.txt',
+        },
+      );
+
+      await controller.restoreRecycleBinEntry(entry);
+
+      expect(
+          oss.copies,
+          contains((
+            'shared/.trash/batch-1/payload/资料.txt',
+            'shared/资料（已还原）.txt',
+          )));
+    });
+
     test('选中文件夹后会异步统计大小，并复用本次会话缓存', () async {
       final oss = _FakeOssClient()..directorySizes['shared/资料/'] = 3072;
       final controller = await _controller(oss: oss);
@@ -218,6 +243,11 @@ void main() {
             name: 'b.txt',
             isDirectory: false,
           ),
+        ]
+        ..objectKeysByPath['shared/目录/'] = <String>[
+          'shared/目录/a.txt',
+          'shared/目录/子目录/b.txt',
+          'shared/目录/子目录/',
         ];
       final controller = await _controller(oss: oss);
       await controller.listDirectory();
@@ -229,11 +259,12 @@ void main() {
       );
 
       expect(oss.deleted, <String>[
+        'shared/目录/',
         'shared/目录/a.txt',
         'shared/目录/子目录/b.txt',
         'shared/目录/子目录/',
-        'shared/目录/',
       ]);
+      expect(oss.copies, hasLength(4));
       expect(controller.sidebarDirectories, isEmpty);
       expect(controller.currentPath, 'shared/');
     });
@@ -592,6 +623,14 @@ class _FakeSessionRepository implements SessionRepository {
   Future<UserSession> refreshCredentials(UserSession session) async => session;
 
   @override
+  Future<UserSession> changePassword({
+    required UserSession session,
+    required String currentPassword,
+    required String newPassword,
+  }) async =>
+      session.copyWith(mustResetPassword: false);
+
+  @override
   Future<UserSession?> restore() async => session;
 }
 
@@ -599,6 +638,7 @@ class _FakeOssClient extends OssClient {
   final Map<String, List<FileItem>> itemsByPath = <String, List<FileItem>>{};
   final Map<String, List<String>> objectKeysByPath = <String, List<String>>{};
   final Map<String, int> directorySizes = <String, int>{};
+  final Set<String> existingPaths = <String>{};
   int directorySizeCalls = 0;
   final List<String> createdFolders = <String>[];
   final List<String> deleted = <String>[];
@@ -638,8 +678,22 @@ class _FakeOssClient extends OssClient {
   }
 
   @override
+  Future<bool> objectExists(String path, UserSession session) async =>
+      existingPaths.contains(path);
+
+  @override
   Future<void> delete(String path, UserSession session) async {
     deleted.add(path);
+  }
+
+  @override
+  Future<BatchDeleteResult> deleteMany(
+    Iterable<String> paths,
+    UserSession session,
+  ) async {
+    final values = paths.toList(growable: false);
+    deleted.addAll(values);
+    return BatchDeleteResult(deletedPaths: values);
   }
 
   @override

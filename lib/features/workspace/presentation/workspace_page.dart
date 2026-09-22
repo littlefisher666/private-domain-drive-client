@@ -453,7 +453,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                           }
 
                           if (controller.browseMode == BrowseMode.grid) {
-                            return _GridView(
+                            return WorkspaceGridView(
                               items: items,
                               selectedPath: selectedPath,
                               selectedPaths: selectedPaths,
@@ -482,7 +482,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                               onDelete: _delete,
                             );
                           }
-                          return _ListView(
+                          return WorkspaceListView(
                             items: items,
                             desktop: desktop,
                             selectedPath: selectedPath,
@@ -674,8 +674,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
     final confirmed = await AppFeedback.confirm(
       context,
       title: '确认删除？',
-      message: '将删除“${item.name}”。一期没有回收站，删除后无法恢复。',
-      confirmLabel: '删除',
+      message: '将“${item.name}”移入回收站，30 天内可恢复。',
+      confirmLabel: '移入回收站',
       destructive: true,
     );
     if (!confirmed) {
@@ -685,7 +685,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
       await controller.deleteItem(item);
       await _reload();
       if (mounted) {
-        AppFeedback.showSnack(context, '已删除 ${item.name}');
+        AppFeedback.showSnack(context, '已移入回收站：${item.name}');
       }
     } catch (error) {
       if (mounted) {
@@ -787,8 +787,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
         title: '确认删除 ${preview.selectedCount} 项？',
         message:
             '其中包含 ${preview.directoryCount} 个文件夹，共影响 ${preview.objectCount} 个对象。'
-            '一期没有回收站，删除后无法恢复。',
-        confirmLabel: '删除',
+            '将移入回收站，30 天内可恢复。',
+        confirmLabel: '移入回收站',
         destructive: true,
       );
       if (!confirmed) return;
@@ -818,8 +818,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
         AppFeedback.showSnack(
           context,
           result.failedPaths.isEmpty
-              ? '已删除 ${result.deletedPaths.length} 项'
-              : '已删除 ${result.deletedPaths.length} 项，${result.failedPaths.length} 项失败',
+              ? '已移入回收站 ${result.deletedPaths.length} 项'
+              : '已移入回收站 ${result.deletedPaths.length} 项，${result.failedPaths.length} 项失败',
         );
       }
     } catch (error) {
@@ -1033,7 +1033,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
       body: SafeArea(
         top: !desktop,
         child: desktop
-            ? _DesktopWorkspaceBody(
+            ? WorkspaceDesktopBody(
                 path: controller.displayPath(controller.currentPath),
                 canGoUp: controller.currentPath != AppController.rootPrefix,
                 canUpload: canUpload,
@@ -1068,7 +1068,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
-                    _MobileHeader(
+                    WorkspaceMobileHeader(
                       path: controller.displayPath(controller.currentPath),
                       roleLabel: controller.session?.displayName ?? '成员',
                       canGoUp:
@@ -1191,8 +1191,8 @@ class _BatchSelectionBar extends StatelessWidget {
   }
 }
 
-class _DesktopWorkspaceBody extends StatelessWidget {
-  const _DesktopWorkspaceBody({
+class WorkspaceDesktopBody extends StatelessWidget {
+  const WorkspaceDesktopBody({
     required this.path,
     required this.canGoUp,
     required this.canUpload,
@@ -1216,6 +1216,7 @@ class _DesktopWorkspaceBody extends StatelessWidget {
     required this.onPreview,
     required this.onDownload,
     required this.onDelete,
+    this.detailBuilder,
   });
 
   final String path;
@@ -1242,6 +1243,7 @@ class _DesktopWorkspaceBody extends StatelessWidget {
   final ValueChanged<FileItem> onPreview;
   final ValueChanged<FileItem> onDownload;
   final ValueChanged<FileItem> onDelete;
+  final Widget Function(FileItem?)? detailBuilder;
 
   @override
   Widget build(BuildContext context) {
@@ -1403,12 +1405,14 @@ class _DesktopWorkspaceBody extends StatelessWidget {
                     return ValueListenableBuilder<
                         Map<String, DirectorySizeState>>(
                       valueListenable: directorySizeStatesListenable,
-                      builder: (context, directorySizes, _) => _DetailPanel(
-                        item: current,
-                        directorySize: current == null || !current.isDirectory
-                            ? null
-                            : directorySizes[current.path],
-                      ),
+                      builder: (context, directorySizes, _) => detailBuilder
+                          ?.call(current) ??
+                          _DetailPanel(
+                            item: current,
+                            directorySize: current == null || !current.isDirectory
+                                ? null
+                                : directorySizes[current.path],
+                          ),
                     );
                   },
                 ),
@@ -1562,8 +1566,8 @@ class _MobileThumbnailSizeMenu extends StatelessWidget {
   }
 }
 
-class _MobileHeader extends StatelessWidget {
-  const _MobileHeader({
+class WorkspaceMobileHeader extends StatelessWidget {
+  const WorkspaceMobileHeader({
     required this.path,
     required this.roleLabel,
     required this.canGoUp,
@@ -1575,6 +1579,7 @@ class _MobileHeader extends StatelessWidget {
     required this.onBrowseModeChanged,
     required this.onThumbnailSizeChanged,
     required this.onChooseSort,
+    this.title = '共享空间',
   });
 
   final String path;
@@ -1588,6 +1593,7 @@ class _MobileHeader extends StatelessWidget {
   final ValueChanged<BrowseMode> onBrowseModeChanged;
   final ValueChanged<ThumbnailSize> onThumbnailSizeChanged;
   final VoidCallback onChooseSort;
+  final String title;
 
   @override
   Widget build(BuildContext context) {
@@ -1607,7 +1613,7 @@ class _MobileHeader extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text('共享空间', style: theme.textTheme.headlineSmall),
+                  Text(title, style: theme.textTheme.headlineSmall),
                   const SizedBox(height: 2),
                   Text(
                     '$roleLabel · $path',
@@ -1715,8 +1721,8 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-class _ListView extends StatelessWidget {
-  const _ListView({
+class WorkspaceListView extends StatelessWidget {
+  const WorkspaceListView({
     required this.items,
     required this.desktop,
     required this.selectedPath,
@@ -1960,8 +1966,8 @@ class _ListView extends StatelessWidget {
   }
 }
 
-class _GridView extends StatelessWidget {
-  const _GridView({
+class WorkspaceGridView extends StatelessWidget {
+  const WorkspaceGridView({
     required this.items,
     required this.selectedPath,
     required this.selectedPaths,

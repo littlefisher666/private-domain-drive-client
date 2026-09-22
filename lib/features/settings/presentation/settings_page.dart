@@ -225,6 +225,19 @@ class _SettingsPageState extends State<SettingsPage> {
                     subtitle: const Text('文件与目录'),
                   ),
                   const Divider(height: 1),
+                  ListTile(
+                    contentPadding: _mobileTilePadding(desktop),
+                    minVerticalPadding: _mobileTileVerticalPadding(desktop),
+                    leading: _SettingsLeadingIcon(
+                      icon: Icons.delete_outline,
+                      desktop: desktop,
+                    ),
+                    title: const Text('回收站'),
+                    subtitle: const Text('删除后 30 天内可恢复'),
+                    onTap: () =>
+                        Navigator.of(context).pushNamed(RouteNames.recycleBin),
+                  ),
+                  const Divider(height: 1),
                   FutureBuilder<AppVersion>(
                     future: _version,
                     builder: (context, snapshot) => ListTile(

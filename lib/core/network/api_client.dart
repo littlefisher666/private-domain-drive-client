@@ -66,6 +66,22 @@ class ApiClient {
       stsBroker: StsBrokerCredentials.fromJson(stsBroker),
       constraints: ClientConstraints.fromJson(constraints),
       authMode: SessionAuthMode.remote,
+      mustResetPassword: user['mustResetPassword'] == true,
+    );
+  }
+
+  Future<void> changePassword({
+    required String account,
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    await _postJson(
+      '/api/v1/session/password',
+      body: <String, dynamic>{
+        'account': account,
+        'currentPassword': currentPassword,
+        'newPassword': newPassword,
+      },
     );
   }
 

@@ -235,11 +235,19 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
 
     private func copyObject(_ arguments: [String: Any]) async throws {
         let (client, bucket) = try session()
+        // OSS 要求 x-oss-copy-source 中的对象键采用 URL 编码。Swift SDK 0.4.0
+        // 会直接将 sourceKey 拼接到该请求头；中文等非 ASCII 名称会在传输阶段
+        // 被再次编码，从而与签名内容不一致并触发 SignatureDoesNotMatch。
+        let sourceKey = try OssBridgeContract.string(arguments, "from")
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/")
+        guard let encodedSourceKey = sourceKey.addingPercentEncoding(withAllowedCharacters: allowed) else {
+            throw OssBridgeContract.BridgeError.invalidRequest
+        }
         _ = try await client.copyObject(CopyObjectRequest(
             bucket: bucket,
             key: try OssBridgeContract.string(arguments, "to"),
             sourceBucket: bucket,
-            sourceKey: try OssBridgeContract.string(arguments, "from")
+            sourceKey: encodedSourceKey
         ))
     }
 

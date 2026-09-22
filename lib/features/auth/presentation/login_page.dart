@@ -56,7 +56,11 @@ class _LoginPageState extends State<LoginPage> {
       return;
     }
 
-    Navigator.of(context).pushReplacementNamed(RouteNames.home);
+    Navigator.of(context).pushReplacementNamed(
+      result.session?.mustResetPassword == true
+          ? RouteNames.changePassword
+          : RouteNames.home,
+    );
   }
 
   @override

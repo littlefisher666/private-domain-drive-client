@@ -5,6 +5,7 @@ import '../../../shared/state/app_scope.dart';
 import '../../settings/presentation/settings_page.dart';
 import '../../transfer/presentation/transfer_tasks_page.dart';
 import 'workspace_page.dart';
+import 'recycle_bin_page.dart';
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key, this.initialIndex = 0});
@@ -16,11 +17,13 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
-  late int _index = widget.initialIndex.clamp(0, 2);
+  late int _index = widget.initialIndex.clamp(0, 3);
   int _settingsVisit = 0;
+  int _recycleBinVisit = 0;
 
   void _select(int value) {
     if (value == 2) _settingsVisit++;
+    if (value == 3) _recycleBinVisit++;
     setState(() => _index = value);
   }
 
@@ -33,13 +36,14 @@ class _HomeShellState extends State<HomeShell> {
       return _DesktopShell(
         index: _index,
         settingsVisit: _settingsVisit,
+        recycleBinVisit: _recycleBinVisit,
         onSelect: _select,
       );
     }
 
     return Scaffold(
       body: IndexedStack(
-        index: _index,
+        index: _index.clamp(0, 2),
         children: <Widget>[
           const WorkspacePage(),
           const TransferTasksPage(embedded: true),
@@ -75,11 +79,13 @@ class _DesktopShell extends StatelessWidget {
   const _DesktopShell({
     required this.index,
     required this.settingsVisit,
+    required this.recycleBinVisit,
     required this.onSelect,
   });
 
   final int index;
   final int settingsVisit;
+  final int recycleBinVisit;
   final ValueChanged<int> onSelect;
 
   void _selectPage(int value) {
@@ -96,6 +102,7 @@ class _DesktopShell extends StatelessWidget {
     final title = switch (index) {
       1 => '传输中心',
       2 => '我的',
+      3 => '回收站',
       _ => '私域网盘',
     };
 
@@ -138,6 +145,12 @@ class _DesktopShell extends StatelessWidget {
                               icon: Icons.swap_vert,
                               label: '传输中心',
                               onTap: () => _selectPage(1),
+                            ),
+                            _SideNavItem(
+                              selected: index == 3,
+                              icon: Icons.delete_outline,
+                              label: '回收站',
+                              onTap: () => _selectPage(3),
                             ),
                             const SizedBox(height: 14),
                             Text('目录', style: theme.textTheme.labelLarge),
@@ -218,6 +231,11 @@ class _DesktopShell extends StatelessWidget {
                           embedded: true,
                           desktopChrome: true,
                           visitToken: settingsVisit,
+                        ),
+                        RecycleBinPage(
+                          key: ValueKey<String>('recycle-bin-$recycleBinVisit'),
+                          embedded: true,
+                          visitToken: recycleBinVisit,
                         ),
                       ],
                     ),

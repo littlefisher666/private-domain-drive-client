@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -9,6 +10,7 @@ import '../../features/auth/domain/user_session.dart';
 import '../../features/auth/infrastructure/session_repository.dart';
 import '../../features/transfer/domain/transfer_task.dart';
 import '../../features/workspace/domain/file_item.dart';
+import '../../features/workspace/domain/recycle_bin_entry.dart';
 import '../../features/workspace/infrastructure/oss_client.dart';
 
 class ShareImportItem {
@@ -334,6 +336,32 @@ class AppController extends ChangeNotifier {
     _pendingShareItems = const <ShareImportItem>[];
     _pendingTransferIds.clear();
     notifyListeners();
+  }
+
+  Future<String?> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final session = _session;
+    if (session == null) {
+      return '请先登录';
+    }
+    if (newPassword.length < 8) {
+      return '新密码至少需要 8 个字符';
+    }
+    try {
+      _session = await _sessionRepository.changePassword(
+        session: session,
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+      );
+      notifyListeners();
+      return null;
+    } on AppError catch (error) {
+      return error.message;
+    } catch (error) {
+      return error.toString();
+    }
   }
 
   Future<void> ensureFreshCredentials({bool force = false}) async {
@@ -825,8 +853,21 @@ class AppController extends ChangeNotifier {
     _ensureDeleteCapability();
     await ensureFreshCredentials();
     final session = _requireSession();
+    final paths = <String>{item.path};
     if (item.isDirectory) {
-      await _deleteDirectoryRecursively(item.path, session);
+      paths.addAll(await _ossClient.listAllObjectKeys(item.path, session));
+    }
+    final result = await _moveToRecycleBin(
+      paths,
+      name: item.name,
+      originalPath: item.path,
+      isDirectory: item.isDirectory,
+      session: session,
+    );
+    if (result.failedPaths.isNotEmpty) {
+      throw StateError('有 ${result.failedPaths.length} 个对象未能移入回收站');
+    }
+    if (item.isDirectory) {
       final deletedPath = _normalizeDir(item.path);
       _remoteDirectories.removeWhere(
         (path) => path == deletedPath || path.startsWith(deletedPath),
@@ -834,8 +875,6 @@ class AppController extends ChangeNotifier {
       if (_currentPath.startsWith(deletedPath)) {
         _currentPath = parentPath(deletedPath);
       }
-    } else {
-      await _ossClient.delete(item.path, session);
     }
     _treeRevision++;
     _clearDirectorySizeCache();
@@ -873,20 +912,17 @@ class AppController extends ChangeNotifier {
   ) async {
     _ensureDeleteCapability();
     await ensureFreshCredentials();
-    final deleted = <String>[];
-    final failed = <String>[];
-    final keys = preview.objectPaths.toList(growable: false);
-    for (var offset = 0; offset < keys.length; offset += 1000) {
-      final batch = keys.sublist(offset, (offset + 1000).clamp(0, keys.length));
-      try {
-        await ensureFreshCredentials();
-        final result = await _ossClient.deleteMany(batch, _requireSession());
-        deleted.addAll(result.deletedPaths);
-        failed.addAll(result.failedPaths);
-      } catch (_) {
-        failed.addAll(batch);
-      }
-    }
+    final result = await _moveToRecycleBin(
+      preview.objectPaths,
+      name: preview.selectedCount == 1
+          ? '已删除项目'
+          : '已删除 ${preview.selectedCount} 项',
+      originalPath: _currentPath,
+      isDirectory: preview.directoryCount > 0,
+      session: _requireSession(),
+    );
+    final deleted = result.deletedPaths;
+    final failed = result.failedPaths;
     if (deleted.isNotEmpty) {
       _clearDirectorySizeCache();
       _remoteDirectories.removeWhere((path) => deleted.contains(path));
@@ -900,6 +936,121 @@ class AppController extends ChangeNotifier {
     return BatchDeleteSummary(deletedPaths: deleted, failedPaths: failed);
   }
 
+  Future<BatchDeleteSummary> _moveToRecycleBin(
+    Iterable<String> sourcePaths, {
+    required String name,
+    required String originalPath,
+    required bool isDirectory,
+    required UserSession session,
+  }) async {
+    final sources =
+        sourcePaths.toSet().where((path) => path.startsWith(rootPrefix));
+    final id =
+        '${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
+    final batchRoot = '$rootPrefix.trash/$id/';
+    final copied = <String, String>{};
+    final failed = <String>[];
+    for (final source in sources) {
+      final target =
+          '$batchRoot' 'payload/${source.substring(rootPrefix.length)}';
+      try {
+        await _ossClient.copy(source, target, session);
+        copied[source] = target;
+      } catch (_) {
+        failed.add(source);
+      }
+    }
+    if (copied.isNotEmpty) {
+      final entry = RecycleBinEntry(
+        id: id,
+        name: name,
+        originalPath: originalPath,
+        isDirectory: isDirectory,
+        deletedAt: DateTime.now(),
+        objects: copied,
+      );
+      await _ossClient.uploadText(
+          '$batchRoot' 'manifest.json', entry.encode(), session);
+    }
+    final deleted = <String>[];
+    for (final keys in _batches(copied.keys)) {
+      try {
+        final result = await _ossClient.deleteMany(keys, session);
+        deleted.addAll(result.deletedPaths);
+        failed.addAll(result.failedPaths);
+      } catch (_) {
+        failed.addAll(keys);
+      }
+    }
+    return BatchDeleteSummary(deletedPaths: deleted, failedPaths: failed);
+  }
+
+  Iterable<List<String>> _batches(Iterable<String> keys) sync* {
+    final values = keys.toList(growable: false);
+    for (var offset = 0; offset < values.length; offset += 1000) {
+      yield values.sublist(offset, min(offset + 1000, values.length));
+    }
+  }
+
+  Future<List<RecycleBinEntry>> listRecycleBin() async {
+    await ensureFreshCredentials();
+    final session = _requireSession();
+    final prefixes =
+        await _ossClient.listPrefixes('$rootPrefix.trash/', session);
+    final entries = <RecycleBinEntry>[];
+    for (final prefix in prefixes) {
+      try {
+        entries.add(RecycleBinEntry.decode(
+          utf8.decode(
+              await _ossClient.download('$prefix' 'manifest.json', session)),
+        ));
+      } catch (_) {
+        // 未完成的回收批次没有 manifest，等待生命周期规则自动清理。
+      }
+    }
+    entries.sort((a, b) => b.deletedAt.compareTo(a.deletedAt));
+    return entries;
+  }
+
+  Future<void> restoreRecycleBinEntry(RecycleBinEntry entry) async {
+    await ensureFreshCredentials();
+    final session = _requireSession();
+    final restored = <String, String>{};
+    for (final item in entry.objects.entries) {
+      final destination = await _availableRestorePath(item.key, session);
+      await _ossClient.copy(item.value, destination, session);
+      restored[item.value] = destination;
+    }
+    for (final keys in _batches(<String>[
+      ...restored.keys,
+      '$rootPrefix.trash/${entry.id}/manifest.json'
+    ])) {
+      await _ossClient.deleteMany(keys, session);
+    }
+    _treeRevision++;
+    _clearDirectorySizeCache();
+    notifyListeners();
+  }
+
+  Future<String> _availableRestorePath(
+      String desired, UserSession session) async {
+    if (!await _ossClient.objectExists(desired, session)) return desired;
+    final directory = parentPath(desired);
+    final rawName = desired.substring(directory.length);
+    final isDirectory = rawName.endsWith('/');
+    final name =
+        isDirectory ? rawName.substring(0, rawName.length - 1) : rawName;
+    final dot = name.lastIndexOf('.');
+    final stem = dot > 0 ? name.substring(0, dot) : name;
+    final extension = dot > 0 ? name.substring(dot) : '';
+    for (var number = 0;; number++) {
+      final suffix = number == 0 ? '（已还原）' : '（已还原 $number）';
+      final candidate =
+          '$directory$stem$suffix$extension${isDirectory ? '/' : ''}';
+      if (!await _ossClient.objectExists(candidate, session)) return candidate;
+    }
+  }
+
   Future<BatchDeleteSummary> retryBatchDelete(Iterable<String> failedPaths) {
     final paths = failedPaths.toSet();
     return deleteBatch(BatchDeletePreview(
@@ -907,21 +1058,6 @@ class AppController extends ChangeNotifier {
       directoryCount: 0,
       objectPaths: paths,
     ));
-  }
-
-  Future<void> _deleteDirectoryRecursively(
-    String path,
-    UserSession session,
-  ) async {
-    final children = await _ossClient.list(path, session);
-    for (final child in children) {
-      if (child.isDirectory) {
-        await _deleteDirectoryRecursively(child.path, session);
-      } else {
-        await _ossClient.delete(child.path, session);
-      }
-    }
-    await _ossClient.delete(path, session);
   }
 
   Future<void> uploadFile(

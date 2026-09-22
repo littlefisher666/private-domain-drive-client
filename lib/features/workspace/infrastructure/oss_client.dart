@@ -17,6 +17,7 @@ const _jpegExifProbeSizes = <int>[
   16 * 1024,
   32 * 1024,
 ];
+const _recycleBinPrefix = 'shared/.trash/';
 
 /// 统一 OSS 基础设施入口。所有对象协议均由当前平台的阿里云官方 SDK执行。
 class OssClient {
@@ -38,7 +39,7 @@ class OssClient {
     );
     final folders = <FileItem>[
       for (final key in page.commonPrefixes)
-        if (key != prefix)
+        if (key != prefix && key != _recycleBinPrefix)
           FileItem(
             path: key,
             name: key.substring(prefix.length).replaceFirst(RegExp(r'/$'), ''),
@@ -221,6 +222,47 @@ class OssClient {
             session.constraints.multipartUploadThresholdBytes,
       ),
     );
+  }
+
+  Future<void> uploadText(
+      String path, String content, UserSession session) async {
+    final file = File('${Directory.systemTemp.path}/$path.manifest');
+    await file.parent.create(recursive: true);
+    await file.writeAsString(content, flush: true);
+    try {
+      await uploadFile(path, file.path, session, taskId: 'manifest-$path');
+    } finally {
+      if (await file.exists()) await file.delete();
+    }
+  }
+
+  Future<List<String>> listPrefixes(
+    String prefix,
+    UserSession session,
+  ) async {
+    await _ensureConfigured(session);
+    final prefixes = <String>[];
+    String? marker;
+    do {
+      final page = await _platform(() => _native.listObjects(
+            prefix: prefix,
+            delimiter: '/',
+            marker: marker,
+            maxKeys: 1000,
+          ));
+      prefixes.addAll(page.commonPrefixes);
+      marker = page.isTruncated ? page.nextMarker : null;
+    } while (marker != null && marker.isNotEmpty);
+    return prefixes;
+  }
+
+  Future<bool> objectExists(String path, UserSession session) async {
+    await _ensureConfigured(session);
+    final page = await _platform(
+      () => _native.listObjects(prefix: path, maxKeys: 1),
+    );
+    return page.objects.any((object) => object.key == path) ||
+        page.commonPrefixes.any((prefix) => prefix == path);
   }
 
   Future<List<int>> download(String path, UserSession session) async {
