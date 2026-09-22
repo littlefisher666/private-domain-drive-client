@@ -1217,6 +1217,7 @@ class WorkspaceDesktopBody extends StatelessWidget {
     required this.onDownload,
     required this.onDelete,
     this.detailBuilder,
+    this.showPermissionNotice = true,
   });
 
   final String path;
@@ -1244,6 +1245,7 @@ class WorkspaceDesktopBody extends StatelessWidget {
   final ValueChanged<FileItem> onDownload;
   final ValueChanged<FileItem> onDelete;
   final Widget Function(FileItem?)? detailBuilder;
+  final bool showPermissionNotice;
 
   @override
   Widget build(BuildContext context) {
@@ -1371,7 +1373,7 @@ class WorkspaceDesktopBody extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: <Widget>[
-                      if (!canUpload || !canDelete) ...<Widget>[
+                      if (showPermissionNotice && (!canUpload || !canDelete)) ...<Widget>[
                         Container(
                           margin: const EdgeInsets.only(bottom: 12),
                           padding: const EdgeInsets.symmetric(
