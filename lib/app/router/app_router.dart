@@ -30,7 +30,11 @@ class AppRouter {
         );
       case RouteNames.changePassword:
         return MaterialPageRoute<void>(
-          builder: (_) => const ChangePasswordPage(),
+          builder: (_) => ChangePasswordPage(
+            forced: settings.arguments is bool
+                ? settings.arguments as bool
+                : true,
+          ),
           settings: settings,
         );
       case RouteNames.home:

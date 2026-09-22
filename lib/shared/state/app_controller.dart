@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/errors/app_error.dart';
 import '../../features/auth/domain/user_session.dart';
+import '../../features/auth/infrastructure/saved_credentials_store.dart';
 import '../../features/auth/infrastructure/session_repository.dart';
 import '../../features/transfer/domain/transfer_task.dart';
 import '../../features/workspace/domain/file_item.dart';
@@ -113,14 +114,19 @@ class TransferBatchSummary {
 /// 应用状态控制器。会话与权限来自已部署的 FC，不在生产路径伪造身份。
 class AppController extends ChangeNotifier {
   AppController(
-      {required SessionRepository sessionRepository, OssClient? ossClient})
+      {required SessionRepository sessionRepository,
+      OssClient? ossClient,
+      SavedCredentialsStore? savedCredentialsStore})
       : _sessionRepository = sessionRepository,
-        _ossClient = ossClient ?? OssClient() {
+        _ossClient = ossClient ?? OssClient(),
+        _savedCredentialsStore =
+            savedCredentialsStore ?? SavedCredentialsStore() {
     _ossClient.onCredentialExpired = handleCredentialExpired;
   }
 
   final SessionRepository _sessionRepository;
   final OssClient _ossClient;
+  final SavedCredentialsStore _savedCredentialsStore;
 
   static const rootPrefix = 'shared/';
   static const _transferConcurrencyKey = 'transfer_concurrency';
@@ -312,12 +318,31 @@ class AppController extends ChangeNotifier {
       }
       selectedItemListenable.value = null;
       _clearDirectorySizeCache();
+      await _rememberCredentials(account: account.trim(), password: password);
       notifyListeners();
       return LoginResult.success(session);
     } on AppError catch (error) {
       return LoginResult.failure(error.message);
     } catch (error) {
       return LoginResult.failure(error.toString());
+    }
+  }
+
+  /// 供登录页预填最近一次成功登录的账号与口令。
+  Future<SavedCredentials?> readSavedCredentials() {
+    return _savedCredentialsStore.read();
+  }
+
+  Future<void> _rememberCredentials({
+    required String account,
+    required String password,
+  }) async {
+    try {
+      await _savedCredentialsStore.write(
+        SavedCredentials(account: account, password: password),
+      );
+    } catch (_) {
+      // 凭据记忆失败不应影响登录流程。
     }
   }
 
@@ -354,6 +379,10 @@ class AppController extends ChangeNotifier {
         session: session,
         currentPassword: currentPassword,
         newPassword: newPassword,
+      );
+      await _rememberCredentials(
+        account: session.account,
+        password: newPassword,
       );
       notifyListeners();
       return null;

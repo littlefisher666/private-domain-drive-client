@@ -4,7 +4,9 @@ import '../../../app/router/route_names.dart';
 import '../../../shared/state/app_scope.dart';
 
 class ChangePasswordPage extends StatefulWidget {
-  const ChangePasswordPage({super.key});
+  const ChangePasswordPage({super.key, this.forced = true});
+
+  final bool forced;
 
   @override
   State<ChangePasswordPage> createState() => _ChangePasswordPageState();
@@ -52,10 +54,16 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
       });
       return;
     }
-    Navigator.of(context).pushNamedAndRemoveUntil(
-      RouteNames.home,
-      (route) => false,
-    );
+    if (widget.forced) {
+      Navigator.of(context).pushNamedAndRemoveUntil(
+        RouteNames.home,
+        (route) => false,
+      );
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(const SnackBar(content: Text('密码修改成功')));
+    Navigator.of(context).pop();
   }
 
   @override
@@ -70,7 +78,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text('首次登录需要先设置新密码。'),
+                Text(widget.forced ? '首次登录需要先设置新密码。' : '修改账户登录密码。'),
                 const SizedBox(height: 20),
                 TextField(
                   controller: _current,
@@ -102,7 +110,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                           height: 18,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Text('保存并进入文件空间'),
+                      : Text(widget.forced ? '保存并进入文件空间' : '保存修改'),
                 ),
               ],
             ),
