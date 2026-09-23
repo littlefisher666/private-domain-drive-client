@@ -123,18 +123,12 @@ class FileTypeThumbnail extends StatefulWidget {
   final double height;
   final String cacheNamespace;
 
-  static void clearMemoryCache() {
-    _FileTypeThumbnailState.clearMemoryCache();
-  }
-
   @override
   State<FileTypeThumbnail> createState() => _FileTypeThumbnailState();
 }
 
 class _FileTypeThumbnailState extends State<FileTypeThumbnail> {
-  static const _maxEntries = 100;
   static const _maxConcurrentRequests = 6;
-  static final Map<String, List<int>> _cache = <String, List<int>>{};
   static final Map<String, Future<List<int>>> _inFlight =
       <String, Future<List<int>>>{};
   static final Set<String> _reportedFailures = <String>{};
@@ -189,10 +183,7 @@ class _FileTypeThumbnailState extends State<FileTypeThumbnail> {
               width: double.infinity,
               height: double.infinity,
               gaplessPlayback: true,
-              errorBuilder: (_, __, ___) {
-                _cache.remove(key);
-                return fallback;
-              },
+              errorBuilder: (_, __, ___) => fallback,
             ),
           );
         }
@@ -205,14 +196,9 @@ class _FileTypeThumbnailState extends State<FileTypeThumbnail> {
   }
 
   Future<List<int>> _futureForCurrentItem() {
-    final key = _cacheKey;
-    final cached = _cache[key];
-    if (cached != null) {
-      return SynchronousFuture<List<int>>(cached);
-    }
     return _inFlight.putIfAbsent(
-      key,
-      () => _load(key, widget.item, widget.loader),
+      _cacheKey,
+      () => _load(_cacheKey, widget.item, widget.loader),
     );
   }
 
@@ -252,19 +238,12 @@ class _FileTypeThumbnailState extends State<FileTypeThumbnail> {
   ) {
     return _withRequestPermit(() async {
       try {
-        final bytes = await loader(item);
-        if (bytes.isNotEmpty) {
-          _cache[key] = bytes;
-          if (_cache.length > _maxEntries) {
-            _cache.remove(_cache.keys.first);
-          }
-        }
-        return bytes;
+        return await loader(item);
       } catch (error) {
         final code = error is AppError ? error.code : error.runtimeType;
         final failureKey = '$key|$code';
         if (kDebugMode && _reportedFailures.add(failureKey)) {
-          if (_reportedFailures.length > _maxEntries) {
+          if (_reportedFailures.length > 100) {
             _reportedFailures.remove(_reportedFailures.first);
           }
           debugPrint('缩略图加载失败：${item.path}（$code）');
@@ -274,12 +253,6 @@ class _FileTypeThumbnailState extends State<FileTypeThumbnail> {
         _inFlight.remove(key);
       }
     });
-  }
-
-  static void clearMemoryCache() {
-    _cache.clear();
-    _inFlight.clear();
-    _reportedFailures.clear();
   }
 
   static Future<T> _withRequestPermit<T>(Future<T> Function() action) async {
