@@ -10,6 +10,7 @@ import 'package:private_domain_drive_client/app/bootstrap/app_bootstrap.dart';
 import 'package:private_domain_drive_client/features/transfer/domain/transfer_task.dart';
 import 'package:private_domain_drive_client/features/workspace/domain/file_item.dart';
 import 'package:private_domain_drive_client/main.dart' as app;
+import 'package:private_domain_drive_client/shared/cache/disk_image_cache.dart';
 import 'package:private_domain_drive_client/shared/state/app_controller.dart';
 import 'package:private_domain_drive_client/shared/widgets/file_icon.dart';
 
@@ -391,7 +392,6 @@ void main() {
           existingCodec.dispose();
         }
 
-        FileTypeThumbnail.clearMemoryCache();
         await tester.pumpWidget(
           MaterialApp(
             home: Scaffold(
@@ -443,13 +443,8 @@ void main() {
           return controller.loadThumbnail(item);
         }
 
-        FileTypeThumbnail.clearMemoryCache();
-        await _pumpSingleThumbnail(
-          tester,
-          item: original,
-          loader: countingLoader,
-          namespace: controller.thumbnailCacheNamespace,
-        );
+        // 缩略图组件不再跨挂载持有内存缓存，重复展示由磁盘缓存承担：
+        // 第二次挂载会再次调用 loader，但 controller 层直接命中磁盘缓存。
         await _pumpSingleThumbnail(
           tester,
           item: original,
@@ -457,6 +452,14 @@ void main() {
           namespace: controller.thumbnailCacheNamespace,
         );
         expect(realLoaderCalls, 1);
+        await _waitForDiskCachedThumbnail(controller, original);
+        await _pumpSingleThumbnail(
+          tester,
+          item: original,
+          loader: countingLoader,
+          namespace: controller.thumbnailCacheNamespace,
+        );
+        expect(realLoaderCalls, 2);
 
         final replacement = <int>[
           ..._imageFixtures['qa-thumbnail.png']!,
@@ -480,11 +483,10 @@ void main() {
           loader: countingLoader,
           namespace: controller.thumbnailCacheNamespace,
         );
-        expect(realLoaderCalls, 2);
+        expect(realLoaderCalls, 3);
 
         await controller.logout();
         loggedOutForFallback = true;
-        FileTypeThumbnail.clearMemoryCache();
         await tester.pumpWidget(
           MaterialApp(
             home: FileTypeThumbnail(
@@ -516,7 +518,6 @@ void main() {
           }
         }
         controller.setCurrentPath(originalPath);
-        FileTypeThumbnail.clearMemoryCache();
       }
     },
     skip: !_runOssThumbnailTest,
@@ -595,6 +596,28 @@ Future<void> _pumpSingleThumbnail(
     ),
   );
   await _waitForVisibleImages(tester, minimum: 1);
+}
+
+/// 缩略图写入磁盘缓存是 fire-and-forget 的，轮询等待其落盘。
+Future<void> _waitForDiskCachedThumbnail(
+  AppController controller,
+  FileItem item,
+) async {
+  final cacheKey = DiskImageCache.cacheKey(
+    namespace: controller.thumbnailCacheNamespace,
+    path: item.path,
+    versionToken: item.objectVersionToken,
+    process: ImageThumbnailSpec.process(),
+  );
+  for (var attempt = 0; attempt < 50; attempt++) {
+    final cached = await DiskImageCache.instance.read(
+      DiskImageCacheKind.thumbnails,
+      cacheKey,
+    );
+    if (cached != null) return;
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+  }
+  fail('缩略图未在限时内写入磁盘缓存：${item.path}');
 }
 
 bool _isTerminal(TransferTaskStatus status) =>

@@ -79,8 +79,6 @@ void main() {
     130,
   ];
 
-  setUp(FileTypeThumbnail.clearMemoryCache);
-
   testWidgets('缩略图加载失败回退到图片图标', (tester) async {
     const item = FileItem(
       path: 'shared/fail-thumbnail.jpg',
@@ -138,11 +136,40 @@ void main() {
     expect(find.byType(Image), findsOneWidget);
   });
 
-  testWidgets('相同对象版本和规格命中进程内缓存', (tester) async {
+  testWidgets('同一挂载树内相同缓存键复用加载中的请求', (tester) async {
     var calls = 0;
     final item = FileItem(
       path: 'shared/cached-thumbnail.png',
       name: 'cached-thumbnail.png',
+      isDirectory: false,
+      size: pngBytes.length,
+      updatedAt: DateTime.utc(2026, 8, 15),
+    );
+
+    Future<List<int>> loader(FileItem _) async {
+      calls++;
+      return pngBytes;
+    }
+
+    await tester.pumpWidget(MaterialApp(
+      home: Column(
+        children: [
+          FileTypeThumbnail(item: item, loader: loader),
+          FileTypeThumbnail(item: item, loader: loader),
+        ],
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(calls, 1);
+    expect(find.byType(Image), findsNWidgets(2));
+  });
+
+  testWidgets('重新挂载后重新调用加载器，缓存由磁盘层承担', (tester) async {
+    var calls = 0;
+    final item = FileItem(
+      path: 'shared/remount-thumbnail.png',
+      name: 'remount-thumbnail.png',
       isDirectory: false,
       size: pngBytes.length,
       updatedAt: DateTime.utc(2026, 8, 15),
@@ -163,7 +190,7 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(calls, 1);
+    expect(calls, 2);
     expect(find.byType(Image), findsOneWidget);
   });
 

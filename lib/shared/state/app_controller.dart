@@ -13,6 +13,7 @@ import '../../features/transfer/domain/transfer_task.dart';
 import '../../features/workspace/domain/file_item.dart';
 import '../../features/workspace/domain/recycle_bin_entry.dart';
 import '../../features/workspace/infrastructure/oss_client.dart';
+import '../cache/disk_image_cache.dart';
 
 class ShareImportItem {
   const ShareImportItem({
@@ -454,7 +455,24 @@ class AppController extends ChangeNotifier {
     }
     final session = _requireSession();
     await ensureSessionReady();
-    return _ossClient.downloadThumbnail(item.path, _session ?? session);
+    final cacheKey = DiskImageCache.cacheKey(
+      namespace: thumbnailCacheNamespace,
+      path: item.path,
+      versionToken: item.objectVersionToken,
+      process: ImageThumbnailSpec.process(),
+    );
+    final cached = await DiskImageCache.instance.read(
+      DiskImageCacheKind.thumbnails,
+      cacheKey,
+    );
+    if (cached != null) return cached;
+    final bytes = await _ossClient.downloadThumbnail(item.path, _session ?? session);
+    unawaited(DiskImageCache.instance.write(
+      DiskImageCacheKind.thumbnails,
+      cacheKey,
+      bytes,
+    ));
+    return bytes;
   }
 
   Future<List<int>> loadImagePreview(FileItem item) async {
@@ -463,7 +481,27 @@ class AppController extends ChangeNotifier {
     }
     final session = _requireSession();
     await ensureSessionReady();
-    return _ossClient.downloadImagePreview(item.path, _session ?? session);
+    final cacheKey = DiskImageCache.cacheKey(
+      namespace: thumbnailCacheNamespace,
+      path: item.path,
+      versionToken: item.objectVersionToken,
+      process: ImageThumbnailSpec.process(
+        width: ImageThumbnailSpec.previewSize,
+        height: ImageThumbnailSpec.previewSize,
+      ),
+    );
+    final cached = await DiskImageCache.instance.read(
+      DiskImageCacheKind.previews,
+      cacheKey,
+    );
+    if (cached != null) return cached;
+    final bytes = await _ossClient.downloadImagePreview(item.path, _session ?? session);
+    unawaited(DiskImageCache.instance.write(
+      DiskImageCacheKind.previews,
+      cacheKey,
+      bytes,
+    ));
+    return bytes;
   }
 
   String get thumbnailCacheNamespace {
