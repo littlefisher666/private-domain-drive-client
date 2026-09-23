@@ -23,7 +23,7 @@ concurrency:
 jobs:
   prepare:
     name: 准备发布版本
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version_name: ${{ steps.version.outputs.version_name }}
       current_version: ${{ steps.version.outputs.current_version }}
@@ -91,7 +91,7 @@ jobs:
     name: 运行单元测试
     needs: prepare
     if: ${{ inputs.run_tests }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: 检出代码
@@ -114,7 +114,7 @@ jobs:
     name: 构建 Android 安装包
     needs: [prepare, test]
     if: ${{ !cancelled() && needs.test.result != 'failure' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: 检出构建代码
@@ -241,7 +241,7 @@ jobs:
   release:
     name: 创建 GitHub Release
     needs: [prepare, android, macos]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: 下载构建产物
