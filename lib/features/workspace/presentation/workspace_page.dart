@@ -53,7 +53,7 @@ Future<void> pickAndUploadFile(
       await controller.uploadFile(
         fileName: file.name,
         localPath: localPath,
-        fileSize: await file.length(),
+        fileSize: (await file.length()) ?? 0,
       );
     }
     if (context.mounted) {
