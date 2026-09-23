@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 
 import '../../../app/theme/cupertino_desktop.dart';
@@ -22,8 +23,8 @@ class _HomeShellState extends State<HomeShell> {
   int _recycleBinVisit = 0;
 
   void _select(int value) {
-    if (value == 2) _settingsVisit++;
-    if (value == 3) _recycleBinVisit++;
+    if (value == 2) _recycleBinVisit++;
+    if (value == 3) _settingsVisit++;
     setState(() => _index = value);
   }
 
@@ -43,10 +44,15 @@ class _HomeShellState extends State<HomeShell> {
 
     return Scaffold(
       body: IndexedStack(
-        index: _index.clamp(0, 2),
+        index: _index.clamp(0, 3),
         children: <Widget>[
           const WorkspacePage(),
           const TransferTasksPage(embedded: true),
+          RecycleBinPage(
+            key: ValueKey<String>('recycle-bin-mobile-$_recycleBinVisit'),
+            embedded: true,
+            visitToken: _recycleBinVisit,
+          ),
           SettingsPage(embedded: true, visitToken: _settingsVisit),
         ],
       ),
@@ -63,6 +69,11 @@ class _HomeShellState extends State<HomeShell> {
             icon: Icon(Icons.swap_vert_circle_outlined),
             selectedIcon: Icon(Icons.swap_vert_circle),
             label: '传输',
+          ),
+          NavigationDestination(
+            icon: Icon(CupertinoIcons.trash),
+            selectedIcon: Icon(CupertinoIcons.trash_fill),
+            label: '回收站',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),
@@ -101,8 +112,8 @@ class _DesktopShell extends StatelessWidget {
     final scheme = theme.colorScheme;
     final title = switch (index) {
       1 => '传输中心',
-      2 => '我的',
-      3 => '回收站',
+      2 => '回收站',
+      3 => '我的',
       _ => '私域网盘',
     };
 
@@ -147,10 +158,10 @@ class _DesktopShell extends StatelessWidget {
                               onTap: () => _selectPage(1),
                             ),
                             _SideNavItem(
-                              selected: index == 3,
-                              icon: Icons.delete_outline,
+                              selected: index == 2,
+                              icon: CupertinoIcons.trash,
                               label: '回收站',
-                              onTap: () => _selectPage(3),
+                              onTap: () => _selectPage(2),
                             ),
                             const SizedBox(height: 14),
                             Text('目录', style: theme.textTheme.labelLarge),
@@ -185,7 +196,7 @@ class _DesktopShell extends StatelessWidget {
                               ),
                               child: InkWell(
                                 borderRadius: BorderRadius.circular(14),
-                                onTap: () => _selectPage(2),
+                                onTap: () => _selectPage(3),
                                 child: Padding(
                                   padding: const EdgeInsets.all(12),
                                   child: Column(
@@ -227,15 +238,15 @@ class _DesktopShell extends StatelessWidget {
                           embedded: true,
                           desktopChrome: true,
                         ),
-                        SettingsPage(
-                          embedded: true,
-                          desktopChrome: true,
-                          visitToken: settingsVisit,
-                        ),
                         RecycleBinPage(
                           key: ValueKey<String>('recycle-bin-$recycleBinVisit'),
                           embedded: true,
                           visitToken: recycleBinVisit,
+                        ),
+                        SettingsPage(
+                          embedded: true,
+                          desktopChrome: true,
+                          visitToken: settingsVisit,
                         ),
                       ],
                     ),

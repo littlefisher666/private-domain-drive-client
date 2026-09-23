@@ -15,6 +15,7 @@ import '../../../shared/state/app_controller.dart';
 import '../../../shared/state/app_scope.dart';
 import '../../../shared/widgets/app_feedback.dart';
 import '../../../shared/widgets/file_icon.dart';
+import '../../../shared/widgets/file_sort_sheet.dart';
 import '../../preview/presentation/preview_page.dart';
 import '../domain/file_item.dart';
 
@@ -196,27 +197,11 @@ class _WorkspacePageState extends State<WorkspacePage> {
   }
 
   void _showSortSheet() {
-    final current = AppScope.read(context).fileSortOption;
-    showModalBottomSheet<FileSortOption>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            const ListTile(title: Text('排序方式')),
-            for (final option in FileSortOption.values)
-              ListTile(
-                title: Text(option.label),
-                trailing: option == current ? const Icon(Icons.check) : null,
-                onTap: () => Navigator.of(sheetContext).pop(option),
-              ),
-          ],
-        ),
-      ),
-    ).then((option) {
-      if (option != null) _setSortOption(option);
-    });
+    showFileSortSheet(
+      context,
+      current: AppScope.read(context).fileSortOption,
+      onSelected: _setSortOption,
+    );
   }
 
   void _ensureDefaultSelection(List<FileItem> items) {
@@ -409,30 +394,35 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 final selectedItems = items
                     .where((item) => selectedPaths.contains(item.path))
                     .toList(growable: false);
+                final showBatchBar = desktop ||
+                    selectedItems.isNotEmpty ||
+                    controller.isMultiSelectionMode;
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
-                    _BatchSelectionBar(
-                      selectedCount: selectedItems.length,
-                      allSelected: selectedItems.length == items.length,
-                      itemCount: items.length,
-                      canDownload: controller.capabilities.download,
-                      canDelete: controller.capabilities.delete,
-                      onSelectAll: () {
-                        if (selectedItems.length == items.length) {
-                          controller.clearMultiSelection();
-                        } else {
-                          controller.selectAllItems(items);
-                        }
-                      },
-                      onDownload: selectedItems.isEmpty
-                          ? null
-                          : () => _downloadSelected(selectedItems),
-                      onDelete: selectedItems.isEmpty
-                          ? null
-                          : () => _deleteSelected(selectedItems),
-                    ),
-                    const SizedBox(height: 8),
+                    if (showBatchBar) ...<Widget>[
+                      _BatchSelectionBar(
+                        selectedCount: selectedItems.length,
+                        allSelected: selectedItems.length == items.length,
+                        itemCount: items.length,
+                        canDownload: controller.capabilities.download,
+                        canDelete: controller.capabilities.delete,
+                        onSelectAll: () {
+                          if (selectedItems.length == items.length) {
+                            controller.clearMultiSelection();
+                          } else {
+                            controller.selectAllItems(items);
+                          }
+                        },
+                        onDownload: selectedItems.isEmpty
+                            ? null
+                            : () => _downloadSelected(selectedItems),
+                        onDelete: selectedItems.isEmpty
+                            ? null
+                            : () => _deleteSelected(selectedItems),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
                     Expanded(
                       child: ValueListenableBuilder<FileItem?>(
                         valueListenable: controller.selectedItemListenable,
@@ -856,7 +846,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
               ListTile(
-                leading: const Icon(Icons.upload_file_outlined),
+                dense: true,
+                leading: const Icon(Icons.upload_file_outlined, size: 22),
                 title: const Text('上传文件'),
                 onTap: () {
                   Navigator.pop(context);
@@ -864,7 +855,9 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.drive_folder_upload_outlined),
+                dense: true,
+                leading:
+                    const Icon(Icons.drive_folder_upload_outlined, size: 22),
                 title: const Text('上传文件夹'),
                 onTap: () {
                   Navigator.pop(context);
@@ -872,7 +865,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.photo_outlined),
+                dense: true,
+                leading: const Icon(Icons.photo_outlined, size: 22),
                 title: const Text('从相册上传'),
                 onTap: () {
                   Navigator.pop(context);
@@ -880,7 +874,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.create_new_folder_outlined),
+                dense: true,
+                leading: const Icon(Icons.create_new_folder_outlined, size: 22),
                 title: const Text('新建文件夹'),
                 onTap: () {
                   Navigator.pop(context);
@@ -912,6 +907,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
                   ListTile(
+                    dense: true,
                     title: Text(
                       item.name,
                       maxLines: 2,
@@ -925,9 +921,12 @@ class _WorkspacePageState extends State<WorkspacePage> {
                     ),
                   ),
                   ListTile(
-                    leading: Icon(item.isDirectory
-                        ? Icons.open_in_new
-                        : Icons.visibility_outlined),
+                    dense: true,
+                    leading: Icon(
+                        item.isDirectory
+                            ? Icons.open_in_new
+                            : Icons.visibility_outlined,
+                        size: 22),
                     title: Text(item.isDirectory ? '打开' : '预览'),
                     onTap: () {
                       Navigator.pop(context);
@@ -936,7 +935,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
                   ),
                   if (controller.capabilities.download)
                     ListTile(
-                      leading: const Icon(Icons.download_outlined),
+                      dense: true,
+                      leading: const Icon(Icons.download_outlined, size: 22),
                       title: const Text('下载'),
                       onTap: () {
                         Navigator.pop(context);
@@ -946,7 +946,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
                   if (controller.capabilities.upload ||
                       controller.capabilities.delete)
                     ListTile(
-                      leading: const Icon(Icons.edit_outlined),
+                      dense: true,
+                      leading: const Icon(Icons.edit_outlined, size: 22),
                       title: const Text('重命名'),
                       onTap: () {
                         Navigator.pop(context);
@@ -955,8 +956,10 @@ class _WorkspacePageState extends State<WorkspacePage> {
                     ),
                   if (controller.capabilities.delete)
                     ListTile(
+                      dense: true,
                       leading: Icon(
                         Icons.delete_outline,
+                        size: 22,
                         color: Theme.of(context).colorScheme.error,
                       ),
                       title: Text(
@@ -1162,6 +1165,8 @@ class _BatchSelectionBar extends StatelessWidget {
                     ? null
                     : false,
             tristate: true,
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             onChanged: itemCount == 0 ? null : (_) => onSelectAll(),
           ),
           Text(
@@ -1367,36 +1372,33 @@ class WorkspaceDesktopBody extends StatelessWidget {
           child: Row(
             children: <Widget>[
               Expanded(
-                child: Container(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
-                      if (showPermissionNotice && (!canUpload || !canDelete)) ...<Widget>[
-                        Container(
-                          margin: const EdgeInsets.only(bottom: 12),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 12,
-                          ),
-                          decoration: BoxDecoration(
-                            color: CupertinoDesktopTokens.noteBg,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Text(
-                            '当前用户缺少上传或删除权限。',
-                            style: TextStyle(
-                              color: CupertinoDesktopTokens.noteFg,
-                              fontSize: 12,
-                              height: 1.5,
-                            ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    if (showPermissionNotice &&
+                        (!canUpload || !canDelete)) ...<Widget>[
+                      Container(
+                        margin: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
+                        decoration: BoxDecoration(
+                          color: CupertinoDesktopTokens.noteBg,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Text(
+                          '当前用户缺少上传或删除权限。',
+                          style: TextStyle(
+                            color: CupertinoDesktopTokens.noteFg,
+                            fontSize: 12,
+                            height: 1.5,
                           ),
                         ),
-                      ],
-                      Expanded(child: listArea),
+                      ),
                     ],
-                  ),
+                    Expanded(child: listArea),
+                  ],
                 ),
               ),
               SizedBox(
@@ -1407,13 +1409,14 @@ class WorkspaceDesktopBody extends StatelessWidget {
                     return ValueListenableBuilder<
                         Map<String, DirectorySizeState>>(
                       valueListenable: directorySizeStatesListenable,
-                      builder: (context, directorySizes, _) => detailBuilder
-                          ?.call(current) ??
+                      builder: (context, directorySizes, _) =>
+                          detailBuilder?.call(current) ??
                           _DetailPanel(
                             item: current,
-                            directorySize: current == null || !current.isDirectory
-                                ? null
-                                : directorySizes[current.path],
+                            directorySize:
+                                current == null || !current.isDirectory
+                                    ? null
+                                    : directorySizes[current.path],
                           ),
                     );
                   },
@@ -1619,6 +1622,8 @@ class WorkspaceMobileHeader extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     '$roleLabel · $path',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -1631,42 +1636,27 @@ class WorkspaceMobileHeader extends StatelessWidget {
               icon: const Icon(Icons.sort),
               tooltip: '排序：${sortOption.label}',
             ),
+            if (browseMode == BrowseMode.grid)
+              _MobileThumbnailSizeMenu(
+                thumbnailSize: thumbnailSize,
+                onChanged: onThumbnailSizeChanged,
+              ),
+            IconButton(
+              onPressed: () => onBrowseModeChanged(
+                browseMode == BrowseMode.list
+                    ? BrowseMode.grid
+                    : BrowseMode.list,
+              ),
+              icon: Icon(browseMode == BrowseMode.list
+                  ? Icons.grid_view
+                  : Icons.view_list),
+              tooltip: browseMode == BrowseMode.list ? '切换为缩略图' : '切换为列表',
+            ),
             IconButton(
               onPressed: onRefresh,
               icon: const Icon(Icons.refresh),
               tooltip: '刷新',
             ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: <Widget>[
-            Expanded(
-              child: SegmentedButton<BrowseMode>(
-                segments: const <ButtonSegment<BrowseMode>>[
-                  ButtonSegment(
-                    value: BrowseMode.list,
-                    label: Text('列表'),
-                    icon: Icon(Icons.view_list),
-                  ),
-                  ButtonSegment(
-                    value: BrowseMode.grid,
-                    label: Text('缩略图'),
-                    icon: Icon(Icons.grid_view),
-                  ),
-                ],
-                selected: <BrowseMode>{browseMode},
-                onSelectionChanged: (values) =>
-                    onBrowseModeChanged(values.first),
-              ),
-            ),
-            if (browseMode == BrowseMode.grid) ...<Widget>[
-              const SizedBox(width: 8),
-              _MobileThumbnailSizeMenu(
-                thumbnailSize: thumbnailSize,
-                onChanged: onThumbnailSizeChanged,
-              ),
-            ],
           ],
         ),
       ],
@@ -1845,124 +1835,113 @@ class WorkspaceListView extends StatelessWidget {
       selectedPaths: selectedPaths,
       onSelectionChanged: onMarqueeSelectionChanged,
       childBuilder: (context, itemKeys, marqueeSelecting, onItemPointerDown) =>
-          Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface,
-          borderRadius: BorderRadius.circular(14),
-          border:
-              Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+          ListView.separated(
+        itemCount: items.length,
+        separatorBuilder: (_, __) => const Divider(
+          height: 1,
+          color: Color(0x1F3C3C43),
         ),
-        clipBehavior: Clip.antiAlias,
-        child: ListView.separated(
-          itemCount: items.length,
-          separatorBuilder: (_, __) => const Divider(
-            height: 1,
-            color: Color(0x1F3C3C43),
-          ),
-          itemBuilder: (context, index) {
-            final item = items[index];
-            final selected = selectedPaths.isNotEmpty
-                ? selectedPaths.contains(item.path)
-                : item.path == selectedPath;
-            return Listener(
-              onPointerDown: (event) => onItemPointerDown(event.pointer),
-              child: Material(
-                key: itemKeys[index],
-                color: selected
-                    ? CupertinoDesktopTokens.blue.withValues(alpha: 0.12)
-                    : Colors.transparent,
-                child: GestureDetector(
-                  onSecondaryTapDown: (details) => _showDesktopItemMenu(
-                    context: context,
-                    position: details.globalPosition,
-                    item: item,
-                    canDownload: canDownload,
-                    canRename: canUpload || canDelete,
-                    canDelete: canDelete,
-                    onOpen: () => onOpen(item),
-                    onPreview: () => onPreview(item),
-                    onDownload: () => onDownload(item),
-                    onRename: () => onRename(item),
-                    onDelete: () => onDelete(item),
-                  ),
-                  child: InkWell(
-                    onTap: () => onSelect(item),
-                    onDoubleTap:
-                        selectedPaths.isNotEmpty ? null : () => onOpen(item),
-                    hoverColor:
-                        CupertinoDesktopTokens.blue.withValues(alpha: 0.04),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 11),
-                      child: Row(
-                        children: <Widget>[
-                          if (multiSelecting) ...<Widget>[
-                            _HoverCheckbox(
-                              value: selected,
-                              onChanged: () => onToggle(item),
-                            ),
-                            const SizedBox(width: 6),
-                          ],
-                          FileTypeBadge(item: item),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: <Widget>[
-                                if (renamingPath == item.path)
-                                  _InlineRenameField(
-                                    item: item,
-                                    onSubmit: onRenameSubmit,
-                                    onCancel: onRenameCancel,
-                                  )
-                                else
-                                  Text(
-                                    item.name,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .onSurface,
-                                    ),
-                                  ),
-                                const SizedBox(height: 2),
+        itemBuilder: (context, index) {
+          final item = items[index];
+          final selected = selectedPaths.isNotEmpty
+              ? selectedPaths.contains(item.path)
+              : item.path == selectedPath;
+          return Listener(
+            onPointerDown: (event) => onItemPointerDown(event.pointer),
+            child: Material(
+              key: itemKeys[index],
+              color: selected
+                  ? CupertinoDesktopTokens.blue.withValues(alpha: 0.12)
+                  : Colors.transparent,
+              child: GestureDetector(
+                onSecondaryTapDown: (details) => _showDesktopItemMenu(
+                  context: context,
+                  position: details.globalPosition,
+                  item: item,
+                  canDownload: canDownload,
+                  canRename: canUpload || canDelete,
+                  canDelete: canDelete,
+                  onOpen: () => onOpen(item),
+                  onPreview: () => onPreview(item),
+                  onDownload: () => onDownload(item),
+                  onRename: () => onRename(item),
+                  onDelete: () => onDelete(item),
+                ),
+                child: InkWell(
+                  onTap: () => onSelect(item),
+                  onDoubleTap:
+                      selectedPaths.isNotEmpty ? null : () => onOpen(item),
+                  hoverColor:
+                      CupertinoDesktopTokens.blue.withValues(alpha: 0.04),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 11),
+                    child: Row(
+                      children: <Widget>[
+                        if (multiSelecting) ...<Widget>[
+                          _HoverCheckbox(
+                            value: selected,
+                            onChanged: () => onToggle(item),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
+                        FileTypeBadge(item: item),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              if (renamingPath == item.path)
+                                _InlineRenameField(
+                                  item: item,
+                                  onSubmit: onRenameSubmit,
+                                  onCancel: onRenameCancel,
+                                )
+                              else
                                 Text(
-                                  item.isDirectory
-                                      ? item.itemCount == null
-                                          ? item.typeLabel
-                                          : '${item.itemCount} 项'
-                                      : '${item.typeLabel} · ${FileSizeFormatter.format(item.size ?? 0)}',
+                                  item.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
-                                    fontSize: 12,
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onSurfaceVariant,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color:
+                                        Theme.of(context).colorScheme.onSurface,
                                   ),
                                 ),
-                              ],
-                            ),
+                              const SizedBox(height: 2),
+                              Text(
+                                item.isDirectory
+                                    ? item.itemCount == null
+                                        ? item.typeLabel
+                                        : '${item.itemCount} 项'
+                                    : '${item.typeLabel} · ${FileSizeFormatter.format(item.size ?? 0)}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
+                                ),
+                              ),
+                            ],
                           ),
-                          Text(
-                            metaTimeBuilder(item),
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant,
-                            ),
+                        ),
+                        Text(
+                          metaTimeBuilder(item),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ),
-            );
-          },
-        ),
+            ),
+          );
+        },
       ),
     );
   }
