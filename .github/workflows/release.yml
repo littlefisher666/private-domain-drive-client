@@ -113,7 +113,7 @@ jobs:
   android:
     name: 构建 Android 安装包
     needs: [prepare, test]
-    if: ${{ !cancelled() && needs.test.result != 'failure' }}
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.test.result != 'failure' }}
     runs-on: ubuntu-24.04
 
     steps:
@@ -180,7 +180,7 @@ jobs:
   macos:
     name: 构建 macOS 应用
     needs: [prepare, test]
-    if: ${{ !cancelled() && needs.test.result != 'failure' }}
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.test.result != 'failure' }}
     runs-on: macos-latest
 
     steps:
