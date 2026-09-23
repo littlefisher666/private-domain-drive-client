@@ -4,6 +4,7 @@ import '../../../shared/state/app_controller.dart';
 import '../../../shared/state/app_scope.dart';
 import '../../../shared/widgets/app_feedback.dart';
 import '../../../shared/widgets/file_icon.dart';
+import '../../../shared/widgets/file_sort_sheet.dart';
 import '../domain/file_item.dart';
 import '../domain/recycle_bin_entry.dart';
 import 'workspace_page.dart';
@@ -265,18 +266,26 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
               detailBuilder: _details, showPermissionNotice: false,
             );
           }
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            child: Column(children: <Widget>[
-              WorkspaceMobileHeader(
-                title: '回收站', path: pathLabel, roleLabel: controller.session?.displayName ?? '成员',
-                canGoUp: _currentPath != AppController.rootPrefix, browseMode: controller.browseMode,
-                thumbnailSize: controller.thumbnailSize, sortOption: controller.fileSortOption,
-                onGoUp: _goUp, onRefresh: _reload, onBrowseModeChanged: controller.setBrowseMode,
-                onThumbnailSizeChanged: controller.setThumbnailSize, onChooseSort: () {},
-              ),
-              const SizedBox(height: 12), Expanded(child: _itemsArea(items, controller)),
-            ]),
+          return SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              child: Column(children: <Widget>[
+                WorkspaceMobileHeader(
+                  title: '回收站', path: pathLabel, roleLabel: controller.session?.displayName ?? '成员',
+                  canGoUp: _currentPath != AppController.rootPrefix, browseMode: controller.browseMode,
+                  thumbnailSize: controller.thumbnailSize, sortOption: controller.fileSortOption,
+                  onGoUp: _goUp, onRefresh: _reload, onBrowseModeChanged: controller.setBrowseMode,
+                  onThumbnailSizeChanged: controller.setThumbnailSize,
+                  onChooseSort: () => showFileSortSheet(
+                    context,
+                    current: controller.fileSortOption,
+                    onSelected: controller.setFileSortOption,
+                  ),
+                ),
+                const SizedBox(height: 12), Expanded(child: _itemsArea(items, controller)),
+              ]),
+            ),
           );
         },
       ),
