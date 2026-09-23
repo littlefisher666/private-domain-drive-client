@@ -7,18 +7,15 @@ import '../../../shared/state/app_scope.dart';
 import '../application/update_service.dart';
 import '../infrastructure/github_release_client.dart';
 
-RoundedRectangleBorder _mobileCardShape(ColorScheme scheme) {
-  return RoundedRectangleBorder(
-    borderRadius: BorderRadius.circular(16),
-    side: BorderSide(color: scheme.outlineVariant),
-  );
+RoundedRectangleBorder _mobileCardShape() {
+  return RoundedRectangleBorder(borderRadius: BorderRadius.circular(14));
 }
 
 EdgeInsetsGeometry _mobileTilePadding(bool desktop) {
-  return EdgeInsets.symmetric(horizontal: desktop ? 16 : 18);
+  return const EdgeInsets.symmetric(horizontal: 16);
 }
 
-double _mobileTileVerticalPadding(bool desktop) => desktop ? 4 : 10;
+double _mobileTileVerticalPadding(bool desktop) => desktop ? 4 : 6;
 
 class _SectionLabel extends StatelessWidget {
   const _SectionLabel({required this.label, required this.color});
@@ -55,12 +52,12 @@ class _SettingsLeadingIcon extends StatelessWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         color: scheme.primary.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(11),
+        borderRadius: BorderRadius.circular(9),
       ),
       child: SizedBox(
-        width: 36,
-        height: 36,
-        child: Icon(icon, color: scheme.primary, size: 20),
+        width: 30,
+        height: 30,
+        child: Icon(icon, color: scheme.primary, size: 17),
       ),
     );
   }
@@ -155,9 +152,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     children: <Widget>[
                       Text(
                         '我的',
-                        style: desktop
-                            ? theme.textTheme.headlineSmall
-                            : theme.textTheme.headlineMedium,
+                        style: theme.textTheme.headlineSmall,
                       ),
                       if (desktop)
                         Text(
@@ -170,64 +165,63 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ],
             ),
-            SizedBox(height: desktop ? 16 : 20),
+            SizedBox(height: desktop ? 16 : 16),
             if (!desktop)
               _SectionLabel(label: '账户', color: scheme.onSurfaceVariant),
             if (!desktop) const SizedBox(height: 8),
             Card(
-              shape: desktop ? null : _mobileCardShape(scheme),
-              child: ListTile(
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: desktop ? 16 : 18,
-                  vertical: desktop ? 10 : 8,
-                ),
-                minVerticalPadding: 0,
-                leading: CircleAvatar(
-                  radius: desktop ? 26 : 28,
-                  backgroundColor:
-                      (desktop ? const Color(0xFF007AFF) : scheme.primary)
-                          .withValues(alpha: 0.15),
-                  child: Text(
-                    initial,
-                    style: TextStyle(
-                      color: desktop ? const Color(0xFF007AFF) : scheme.primary,
-                      fontWeight: FontWeight.w700,
-                      fontSize: desktop ? null : 20,
+              shape: desktop ? null : _mobileCardShape(),
+              child: Column(
+                children: <Widget>[
+                  ListTile(
+                    contentPadding: _mobileTilePadding(desktop),
+                    minVerticalPadding: _mobileTileVerticalPadding(desktop),
+                    leading: CircleAvatar(
+                      radius: desktop ? 26 : 18,
+                      backgroundColor:
+                          (desktop ? const Color(0xFF007AFF) : scheme.primary)
+                              .withValues(alpha: 0.15),
+                      child: Text(
+                        initial,
+                        style: TextStyle(
+                          color:
+                              desktop ? const Color(0xFF007AFF) : scheme.primary,
+                          fontWeight: FontWeight.w700,
+                          fontSize: desktop ? null : 15,
+                        ),
+                      ),
+                    ),
+                    title: Text(
+                      session?.displayName ?? '未登录',
+                      style: desktop ? null : theme.textTheme.titleMedium,
+                    ),
+                    subtitle:
+                        session == null ? const Text('请先登录') : null,
+                  ),
+                  Divider(height: 1, indent: desktop ? 84 : 62),
+                  ListTile(
+                    contentPadding: _mobileTilePadding(desktop),
+                    minVerticalPadding: _mobileTileVerticalPadding(desktop),
+                    leading: _SettingsLeadingIcon(
+                      icon: Icons.lock_outline,
+                      desktop: desktop,
+                    ),
+                    title: const Text('修改密码'),
+                    subtitle: const Text('校验当前密码后设置新密码'),
+                    onTap: () => Navigator.of(context).pushNamed(
+                      RouteNames.changePassword,
+                      arguments: false,
                     ),
                   ),
-                ),
-                title: Text(
-                  session?.displayName ?? '未登录',
-                  style: desktop ? null : theme.textTheme.titleMedium,
-                ),
-                subtitle:
-                    session == null ? const Text('请先登录') : null,
+                ],
               ),
             ),
             SizedBox(height: desktop ? 12 : 16),
-            Card(
-              shape: desktop ? null : _mobileCardShape(scheme),
-              child: ListTile(
-                contentPadding: _mobileTilePadding(desktop),
-                minVerticalPadding: _mobileTileVerticalPadding(desktop),
-                leading: _SettingsLeadingIcon(
-                  icon: Icons.lock_outline,
-                  desktop: desktop,
-                ),
-                title: const Text('修改密码'),
-                subtitle: const Text('校验当前密码后设置新密码'),
-                onTap: () => Navigator.of(context).pushNamed(
-                  RouteNames.changePassword,
-                  arguments: false,
-                ),
-              ),
-            ),
-            SizedBox(height: desktop ? 12 : 20),
             if (!desktop)
               _SectionLabel(label: '应用', color: scheme.onSurfaceVariant),
             if (!desktop) const SizedBox(height: 8),
             Card(
-              shape: desktop ? null : _mobileCardShape(scheme),
+              shape: desktop ? null : _mobileCardShape(),
               child: Column(
                 children: <Widget>[
                   FutureBuilder<AppVersion>(
@@ -259,14 +253,14 @@ class _SettingsPageState extends State<SettingsPage> {
                 ],
               ),
             ),
-            SizedBox(height: desktop ? 16 : 20),
+            SizedBox(height: desktop ? 16 : 16),
             if (desktop)
               Text('显示', style: theme.textTheme.titleMedium)
             else
               _SectionLabel(label: '显示', color: scheme.onSurfaceVariant),
             const SizedBox(height: 8),
             Card(
-              shape: desktop ? null : _mobileCardShape(scheme),
+              shape: desktop ? null : _mobileCardShape(),
               child: Column(
                 children: <Widget>[
                   ListTile(
@@ -294,15 +288,20 @@ class _SettingsPageState extends State<SettingsPage> {
                     child: SizedBox(
                       width: double.infinity,
                       child: SegmentedButton<ThemeMode>(
+                        style: const ButtonStyle(
+                          visualDensity: VisualDensity(horizontal: -2, vertical: -2),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        showSelectedIcon: false,
                         segments: const <ButtonSegment<ThemeMode>>[
                           ButtonSegment<ThemeMode>(
                             value: ThemeMode.light,
-                            icon: Icon(Icons.light_mode_outlined),
+                            icon: Icon(Icons.light_mode_outlined, size: 18),
                             label: Text('浅色模式'),
                           ),
                           ButtonSegment<ThemeMode>(
                             value: ThemeMode.dark,
-                            icon: Icon(Icons.dark_mode_outlined),
+                            icon: Icon(Icons.dark_mode_outlined, size: 18),
                             label: Text('深色模式'),
                           ),
                         ],
@@ -315,7 +314,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ],
               ),
             ),
-            SizedBox(height: desktop ? 16 : 24),
+            SizedBox(height: desktop ? 16 : 20),
             if (desktop)
               FilledButton.tonal(
                 onPressed: _logout,
