@@ -1088,7 +1088,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                         child: Padding(
                           padding: const EdgeInsets.all(12),
                           child: Text(
-                            '当前账号缺少部分文件操作权限。',
+                            '当前用户缺少部分文件操作权限。',
                             style: theme.textTheme.bodySmall?.copyWith(
                               color: scheme.onSurfaceVariant,
                             ),
@@ -1385,7 +1385,7 @@ class WorkspaceDesktopBody extends StatelessWidget {
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: const Text(
-                            '当前账号缺少上传或删除权限。',
+                            '当前用户缺少上传或删除权限。',
                             style: TextStyle(
                               color: CupertinoDesktopTokens.noteFg,
                               fontSize: 12,

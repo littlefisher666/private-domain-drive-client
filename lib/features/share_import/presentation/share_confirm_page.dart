@@ -44,7 +44,7 @@ class ShareConfirmPage extends StatelessWidget {
       await AppFeedback.confirm(
         context,
         title: '无法上传',
-        message: '当前账号没有上传权限。',
+        message: '当前用户没有上传权限。',
         confirmLabel: '知道了',
       );
       return;
@@ -149,7 +149,7 @@ class ShareConfirmPage extends StatelessWidget {
                 child: Padding(
                   padding: const EdgeInsets.all(14),
                   child: Text(
-                    '当前账号没有上传权限。',
+                    '当前用户没有上传权限。',
                     style: theme.textTheme.bodyMedium?.copyWith(color: scheme.error),
                   ),
                 ),
