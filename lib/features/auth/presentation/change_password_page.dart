@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../../app/router/route_names.dart';
+import '../../../app/theme/cupertino_desktop.dart';
 import '../../../shared/state/app_scope.dart';
 
 class ChangePasswordPage extends StatefulWidget {
@@ -68,8 +70,18 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
 
   @override
   Widget build(BuildContext context) {
+    final topInset = defaultTargetPlatform == TargetPlatform.macOS
+        ? CupertinoDesktopTokens.titleBarHeight
+        : 0.0;
     return Scaffold(
-      appBar: AppBar(title: const Text('修改密码')),
+      appBar: PreferredSize(
+        // Leave space for native macOS traffic lights under fullSizeContentView.
+        preferredSize: Size.fromHeight(kToolbarHeight + topInset),
+        child: Padding(
+          padding: EdgeInsets.only(top: topInset),
+          child: AppBar(title: const Text('修改密码')),
+        ),
+      ),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),

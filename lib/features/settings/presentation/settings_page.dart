@@ -179,8 +179,9 @@ class _SettingsPageState extends State<SettingsPage> {
               child: ListTile(
                 contentPadding: EdgeInsets.symmetric(
                   horizontal: desktop ? 16 : 18,
-                  vertical: desktop ? 0 : 6,
+                  vertical: desktop ? 10 : 8,
                 ),
+                minVerticalPadding: 0,
                 leading: CircleAvatar(
                   radius: desktop ? 26 : 28,
                   backgroundColor:
@@ -199,11 +200,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   session?.displayName ?? '未登录',
                   style: desktop ? null : theme.textTheme.titleMedium,
                 ),
-                subtitle: Text(
-                  session == null
-                      ? '请先登录'
-                      : "成员 · ${session.capabilities.summary}",
-                ),
+                subtitle:
+                    session == null ? const Text('请先登录') : null,
               ),
             ),
             SizedBox(height: desktop ? 12 : 16),
@@ -226,36 +224,12 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             SizedBox(height: desktop ? 12 : 20),
             if (!desktop)
-              _SectionLabel(label: '空间与应用', color: scheme.onSurfaceVariant),
+              _SectionLabel(label: '应用', color: scheme.onSurfaceVariant),
             if (!desktop) const SizedBox(height: 8),
             Card(
               shape: desktop ? null : _mobileCardShape(scheme),
               child: Column(
                 children: <Widget>[
-                  ListTile(
-                    contentPadding: _mobileTilePadding(desktop),
-                    minVerticalPadding: _mobileTileVerticalPadding(desktop),
-                    leading: _SettingsLeadingIcon(
-                      icon: Icons.folder_shared_outlined,
-                      desktop: desktop,
-                    ),
-                    title: const Text('共享空间'),
-                    subtitle: const Text('文件与目录'),
-                  ),
-                  const Divider(height: 1),
-                  ListTile(
-                    contentPadding: _mobileTilePadding(desktop),
-                    minVerticalPadding: _mobileTileVerticalPadding(desktop),
-                    leading: _SettingsLeadingIcon(
-                      icon: Icons.delete_outline,
-                      desktop: desktop,
-                    ),
-                    title: const Text('回收站'),
-                    subtitle: const Text('删除后 30 天内可恢复'),
-                    onTap: () =>
-                        Navigator.of(context).pushNamed(RouteNames.recycleBin),
-                  ),
-                  const Divider(height: 1),
                   FutureBuilder<AppVersion>(
                     future: _version,
                     builder: (context, snapshot) => ListTile(
