@@ -96,8 +96,9 @@ class ApiClient {
       final headers = <String, String>{'accept': 'application/json'};
       if (AppConstants.fcSignRequests) {
         if (!_signer.enabled) {
+          debugPrint('[FC] signing credentials missing');
           throw AppError(
-            '缺少 FC 请求签名凭证，请通过 FC_ACCESS_KEY_ID / FC_ACCESS_KEY_SECRET 注入',
+            '登录失败，请稍后重试',
             code: 'SIGNING_CONFIG_MISSING',
           );
         }
@@ -118,15 +119,17 @@ class ApiClient {
     } on AppError {
       rethrow;
     } catch (error) {
-      throw AppError('无法连接服务: $error', code: 'NETWORK_ERROR');
+      debugPrint('[FC] network error: $error');
+      throw AppError('网络连接失败，请检查网络后重试', code: 'NETWORK_ERROR');
     }
 
     Map<String, dynamic> payload;
     try {
       payload = jsonDecode(response.body) as Map<String, dynamic>;
     } catch (_) {
+      debugPrint('[FC] bad response ${response.statusCode}: ${response.body}');
       throw AppError(
-        '服务返回异常 (${response.statusCode})',
+        '登录失败，请稍后重试',
         code: 'BAD_RESPONSE',
       );
     }

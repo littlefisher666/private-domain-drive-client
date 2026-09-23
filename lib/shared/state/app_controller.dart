@@ -324,11 +324,12 @@ class AppController extends ChangeNotifier {
     } on AppError catch (error) {
       return LoginResult.failure(error.message);
     } catch (error) {
-      return LoginResult.failure(error.toString());
+      debugPrint('[login] unexpected error: $error');
+      return const LoginResult.failure('登录失败，请稍后重试');
     }
   }
 
-  /// 供登录页预填最近一次成功登录的账号与口令。
+  /// 供登录页预填最近一次成功登录的用户名与密码。
   Future<SavedCredentials?> readSavedCredentials() {
     return _savedCredentialsStore.read();
   }
@@ -389,7 +390,8 @@ class AppController extends ChangeNotifier {
     } on AppError catch (error) {
       return error.message;
     } catch (error) {
-      return error.toString();
+      debugPrint('[changePassword] unexpected error: $error');
+      return '修改失败，请稍后重试';
     }
   }
 
@@ -417,7 +419,7 @@ class AppController extends ChangeNotifier {
   UserSession _requireSession() {
     final session = _session;
     if (session == null || !session.isRemote || session.credentials == null) {
-      throw AppError('请先登录服务端账号', code: 'REMOTE_SESSION_REQUIRED');
+      throw AppError('请先登录', code: 'REMOTE_SESSION_REQUIRED');
     }
     return session;
   }
@@ -425,7 +427,7 @@ class AppController extends ChangeNotifier {
   Future<List<FileItem>> listDirectory([String? path]) async {
     final session = _session;
     if (session == null || !session.isRemote || session.credentials == null) {
-      throw AppError('请先登录服务端账号', code: 'REMOTE_SESSION_REQUIRED');
+      throw AppError('请先登录', code: 'REMOTE_SESSION_REQUIRED');
     }
     await ensureSessionReady();
     final items = await _ossClient.list(path ?? _currentPath, _session!);

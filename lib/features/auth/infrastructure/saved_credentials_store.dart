@@ -11,8 +11,8 @@ class SavedCredentials {
   final String password;
 }
 
-/// 记住最近一次成功登录的账号与口令，供下次打开登录页预填。
-/// 改密成功后同步更新，避免预填过期口令。
+/// 记住最近一次成功登录的用户名与密码，供下次打开登录页预填。
+/// 改密成功后同步更新，避免预填过期密码。
 class SavedCredentialsStore {
   SavedCredentialsStore({FlutterSecureStorage? storage})
       : _storage = storage ?? const FlutterSecureStorage();

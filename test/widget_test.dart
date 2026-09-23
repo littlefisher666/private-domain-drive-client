@@ -18,7 +18,7 @@ void main() {
     return controller;
   }
 
-  testWidgets('登录页展示账号与口令输入项', (tester) async {
+  testWidgets('登录页展示用户名与密码输入项', (tester) async {
     final controller =
         AppController(sessionRepository: MemorySessionRepository());
 
@@ -31,9 +31,9 @@ void main() {
       ),
     );
 
-    expect(find.text('成员账号'), findsOneWidget);
-    expect(find.text('访问口令'), findsOneWidget);
-    expect(find.text('请使用服务端已配置的账号和访问口令'), findsOneWidget);
+    expect(find.text('用户名'), findsOneWidget);
+    expect(find.text('密码'), findsOneWidget);
+    expect(find.text('忘记密码？请联系管理员重置'), findsOneWidget);
   });
 
   testWidgets('登录页预填最近一次成功登录的凭据', (tester) async {
@@ -115,7 +115,7 @@ void main() {
     await tester.enterText(fields.at(2), 'newpassword1');
     await tester.tap(find.text('保存修改'));
     await tester.pump();
-    expect(find.text('账号或当前口令错误'), findsOneWidget);
+    expect(find.text('当前密码错误'), findsOneWidget);
     expect(find.byType(ChangePasswordPage), findsOneWidget);
   });
 

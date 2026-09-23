@@ -23,7 +23,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   /// 预填最近一次成功登录的凭据；改密成功后会同步更新记忆，
-  /// 避免预填过期口令。首次启动无记忆时保持为空。
+  /// 避免预填过期密码。首次启动无记忆时保持为空。
   Future<void> _loadRememberedCredentials() async {
     final credentials = await AppScope.read(context).readSavedCredentials();
     if (!mounted || credentials == null) {
@@ -130,7 +130,7 @@ class _LoginPageState extends State<LoginPage> {
                       Text('登录', style: theme.textTheme.headlineSmall, textAlign: TextAlign.center),
                       const SizedBox(height: 6),
                       Text(
-                        '使用成员账号进入共享空间',
+                        '使用你的用户名和密码进入共享空间',
                         style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
                         textAlign: TextAlign.center,
                       ),
@@ -157,16 +157,9 @@ class _LoginPageState extends State<LoginPage> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: <Widget>[
-                              Text('正在登录并初始化会话…', style: theme.textTheme.titleSmall),
+                              Text('正在登录…', style: theme.textTheme.titleSmall),
                               const SizedBox(height: 10),
                               const LinearProgressIndicator(minHeight: 8),
-                              const SizedBox(height: 8),
-                              Text(
-                                '登录请求将直接发送到已部署的服务端',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                              ),
                             ],
                           ),
                         ),
@@ -177,8 +170,8 @@ class _LoginPageState extends State<LoginPage> {
                         enabled: !_loading,
                         autofillHints: const <String>[AutofillHints.username],
                         decoration: const InputDecoration(
-                          labelText: '成员账号',
-                          hintText: '请输入账号',
+                          labelText: '用户名',
+                          hintText: '请输入用户名',
                         ),
                       ),
                       const SizedBox(height: 14),
@@ -188,8 +181,8 @@ class _LoginPageState extends State<LoginPage> {
                         obscureText: true,
                         autofillHints: const <String>[AutofillHints.password],
                         decoration: const InputDecoration(
-                          labelText: '访问口令',
-                          hintText: '请输入口令',
+                          labelText: '密码',
+                          hintText: '请输入密码',
                         ),
                         onSubmitted: (_) => _login(),
                       ),
@@ -205,7 +198,7 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        '请使用服务端已配置的账号和访问口令',
+                        '忘记密码？请联系管理员重置',
                         style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
                         textAlign: TextAlign.center,
                       ),

@@ -58,7 +58,8 @@ class PersistentSessionRepository implements SessionRepository {
     } on AppError {
       rethrow;
     } catch (error) {
-      throw AppError(error.toString(), code: 'LOGIN_FAILED');
+      debugPrint('[login] unexpected error: $error');
+      throw AppError('登录失败，请稍后重试', code: 'LOGIN_FAILED');
     }
   }
 
@@ -112,7 +113,7 @@ class MemorySessionRepository implements SessionRepository {
     final key = account.trim();
     final user = users[key];
     if (user == null || user.password != password) {
-      throw AppError('账号或口令错误', code: 'UNAUTHORIZED');
+      throw AppError('用户名或密码错误', code: 'UNAUTHORIZED');
     }
     _session = UserSession(
       userId: user.displayName,
@@ -133,7 +134,7 @@ class MemorySessionRepository implements SessionRepository {
     required String newPassword,
   }) async {
     if (currentPassword != '123456' || newPassword.length < 8) {
-      throw AppError('账号或当前口令错误', code: 'UNAUTHORIZED');
+      throw AppError('当前密码错误', code: 'UNAUTHORIZED');
     }
     _session = session.copyWith(mustResetPassword: false);
     return _session!;

@@ -19,10 +19,10 @@ void main() {
       final controller =
           AppController(sessionRepository: MemorySessionRepository());
 
-      final result = await controller.login(account: 'admin', password: '错误口令');
+      final result = await controller.login(account: 'admin', password: '错误密码');
 
       expect(result.ok, isFalse);
-      expect(result.message, '账号或口令错误');
+      expect(result.message, '用户名或密码错误');
     });
 
     test('登录成功后记住最近登录凭据', () async {
@@ -38,7 +38,7 @@ void main() {
       expect(credentials.password, '123456');
     });
 
-    test('修改密码成功后同步更新记住的口令', () async {
+    test('修改密码成功后同步更新记住的密码', () async {
       SharedPreferences.setMockInitialValues(<String, Object>{});
       final controller =
           AppController(sessionRepository: MemorySessionRepository());
