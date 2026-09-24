@@ -32,14 +32,22 @@ class PersistentSessionRepository implements SessionRepository {
 
   @override
   Future<UserSession?> restore() async {
-    // OSS 访问密钥仅在会话内存中持有、不落盘；冷启动必须重新登录换取密钥。
-    // 这里仅清理旧版本可能持久化过的会话数据。
     try {
-      await _store.clear();
+      final session = await _store.read();
+      final valid = session != null &&
+          session.isRemote &&
+          session.ossConfig != null &&
+          session.credentials?.isValid == true;
+      if (!valid) {
+        // 数据不完整或属于旧版本格式，清除后走重新登录。
+        await _store.clear();
+        return null;
+      }
+      return session;
     } catch (_) {
-      // 清理失败不应阻断登录流程。
+      // 安全存储读取失败时退回登录页，不清理可能仍有效的数据。
+      return null;
     }
-    return null;
   }
 
   @override
@@ -49,12 +57,18 @@ class PersistentSessionRepository implements SessionRepository {
   }) async {
     final trimmed = account.trim();
     try {
-      return await _apiClient.bootstrapSession(
+      final session = await _apiClient.bootstrapSession(
         account: trimmed,
         password: password,
         platform: _platformName(),
         appVersion: _appVersion,
       );
+      try {
+        await _store.write(session);
+      } catch (_) {
+        // 持久化失败不影响本次登录，仅下次冷启动需重新登录。
+      }
+      return session;
     } on AppError {
       rethrow;
     } catch (error) {
@@ -74,7 +88,13 @@ class PersistentSessionRepository implements SessionRepository {
       currentPassword: currentPassword,
       newPassword: newPassword,
     );
-    return session.copyWith(mustResetPassword: false);
+    final updated = session.copyWith(mustResetPassword: false);
+    try {
+      await _store.write(updated);
+    } catch (_) {
+      // 持久化失败不影响本次改密，仅下次冷启动需重新登录。
+    }
+    return updated;
   }
 
   @override
