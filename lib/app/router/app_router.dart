@@ -5,7 +5,6 @@ import '../../features/auth/presentation/change_password_page.dart';
 import '../../features/auth/presentation/splash_page.dart';
 import '../../features/preview/presentation/preview_page.dart';
 import '../../features/settings/presentation/settings_page.dart';
-import '../../features/share_import/presentation/share_confirm_page.dart';
 import '../../features/transfer/presentation/transfer_tasks_page.dart';
 import '../../features/workspace/presentation/home_shell.dart';
 import '../../features/workspace/presentation/recycle_bin_page.dart';
@@ -63,11 +62,6 @@ class AppRouter {
       case RouteNames.settings:
         return MaterialPageRoute<void>(
           builder: (_) => const SettingsPage(),
-          settings: settings,
-        );
-      case RouteNames.shareConfirm:
-        return MaterialPageRoute<void>(
-          builder: (_) => const ShareConfirmPage(),
           settings: settings,
         );
       case RouteNames.recycleBin:

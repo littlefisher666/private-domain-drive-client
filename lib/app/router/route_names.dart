@@ -9,6 +9,5 @@ class RouteNames {
   static const preview = '/preview';
   static const transfers = '/transfers';
   static const settings = '/settings';
-  static const shareConfirm = '/share-confirm';
   static const recycleBin = '/recycle-bin';
 }
