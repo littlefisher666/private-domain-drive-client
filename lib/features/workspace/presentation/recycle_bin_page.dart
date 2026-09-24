@@ -83,12 +83,10 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
     }
 
     for (final entry in entries) {
-      // 目录条目按其 payload 对象展开；文件条目本身就是一个可列出项。
-      // 两者统一按“源路径的第一段”构成虚拟目录树，避免逐个删除的文件
-      // 聚合出的虚拟文件夹在进入后为空。
-      final sources = entry.isDirectory
-          ? entry.objects.keys
-          : <String>[entry.originalPath];
+      // 统一按 payload 对象路径展开（批量删除的文件条目 originalPath 记录的
+      // 是删除时所在目录而非文件本身，不能作为来源），并按“源路径的第一段”
+      // 构成虚拟目录树，避免虚拟文件夹进入后为空。
+      final sources = entry.objects.keys;
       for (final source in sources) {
         if (!source.startsWith(current)) continue;
         final relative = source.substring(current.length);
