@@ -56,7 +56,7 @@ class Capabilities {
 }
 
 /// 登录时由服务端 bootstrap 下发的 pdd-client 长期 OSS 访问密钥。
-/// 仅在会话内存中持有，不落盘；退出登录时清除。
+/// 持久化在平台安全存储中，随会话一起恢复；退出登录或密钥失效时清除。
 class OssCredentials {
   const OssCredentials({
     required this.accessKeyId,
