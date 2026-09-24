@@ -173,7 +173,7 @@ class AppController extends ChangeNotifier {
       <String, FileSortOption>{};
   final Set<String> _remoteDirectories = <String>{};
   List<ShareImportItem> _pendingShareItems = const <ShareImportItem>[];
-  String _shareTargetPath = 'shared/photos/';
+  String _shareTargetPath = rootPrefix;
   bool _bootstrapped = false;
   ThemeMode _themeMode = ThemeMode.light;
   int _treeRevision = 0;
@@ -1449,14 +1449,7 @@ class AppController extends ChangeNotifier {
     _pendingShareItems = List<ShareImportItem>.unmodifiable(
       items ?? const <ShareImportItem>[],
     );
-    _shareTargetPath = _normalizeDir(targetPath ?? 'shared/photos/');
-    notifyListeners();
-  }
-
-  void removeShareItem(String id) {
-    _pendingShareItems = _pendingShareItems
-        .where((item) => item.id != id)
-        .toList(growable: false);
+    _shareTargetPath = _normalizeDir(targetPath ?? rootPrefix);
     notifyListeners();
   }
 
