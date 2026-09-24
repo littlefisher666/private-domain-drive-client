@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_domain_drive_client/features/auth/domain/user_session.dart';
+import 'package:private_domain_drive_client/features/auth/infrastructure/saved_credentials_store.dart';
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
 import 'package:private_domain_drive_client/features/transfer/domain/transfer_task.dart';
 import 'package:private_domain_drive_client/features/workspace/domain/file_item.dart';
@@ -17,7 +18,11 @@ void main() {
   group('AppController', () {
     test('登录失败会返回明确错误', () async {
       final controller =
-          AppController(sessionRepository: MemorySessionRepository());
+          AppController(
+            sessionRepository: MemorySessionRepository(),
+            savedCredentialsStore:
+                SavedCredentialsStore(storage: InMemoryCredentialsStorage()),
+          );
 
       final result = await controller.login(account: 'admin', password: '错误密码');
 
@@ -26,9 +31,12 @@ void main() {
     });
 
     test('登录成功后记住最近登录凭据', () async {
-      SharedPreferences.setMockInitialValues(<String, Object>{});
       final controller =
-          AppController(sessionRepository: MemorySessionRepository());
+          AppController(
+            sessionRepository: MemorySessionRepository(),
+            savedCredentialsStore:
+                SavedCredentialsStore(storage: InMemoryCredentialsStorage()),
+          );
 
       await controller.login(account: ' admin ', password: '123456');
 
@@ -39,9 +47,12 @@ void main() {
     });
 
     test('修改密码成功后同步更新记住的密码', () async {
-      SharedPreferences.setMockInitialValues(<String, Object>{});
       final controller =
-          AppController(sessionRepository: MemorySessionRepository());
+          AppController(
+            sessionRepository: MemorySessionRepository(),
+            savedCredentialsStore:
+                SavedCredentialsStore(storage: InMemoryCredentialsStorage()),
+          );
       await controller.login(account: 'admin', password: '123456');
 
       final error = await controller.changePassword(
@@ -80,7 +91,11 @@ void main() {
         ]),
       });
       final controller =
-          AppController(sessionRepository: MemorySessionRepository());
+          AppController(
+            sessionRepository: MemorySessionRepository(),
+            savedCredentialsStore:
+                SavedCredentialsStore(storage: InMemoryCredentialsStorage()),
+          );
 
       await controller.bootstrap();
 
@@ -98,7 +113,11 @@ void main() {
         'theme_mode': 'dark',
       });
       final controller =
-          AppController(sessionRepository: MemorySessionRepository());
+          AppController(
+            sessionRepository: MemorySessionRepository(),
+            savedCredentialsStore:
+                SavedCredentialsStore(storage: InMemoryCredentialsStorage()),
+          );
 
       await controller.bootstrap();
       expect(controller.themeMode, ThemeMode.dark);
@@ -116,7 +135,11 @@ void main() {
         'thumbnail_size': 'large',
       });
       final controller =
-          AppController(sessionRepository: MemorySessionRepository());
+          AppController(
+            sessionRepository: MemorySessionRepository(),
+            savedCredentialsStore:
+                SavedCredentialsStore(storage: InMemoryCredentialsStorage()),
+          );
 
       await controller.bootstrap();
       expect(controller.thumbnailSize, ThumbnailSize.large);
@@ -134,7 +157,11 @@ void main() {
         'thumbnail_size': 'extra-large',
       });
       final controller =
-          AppController(sessionRepository: MemorySessionRepository());
+          AppController(
+            sessionRepository: MemorySessionRepository(),
+            savedCredentialsStore:
+                SavedCredentialsStore(storage: InMemoryCredentialsStorage()),
+          );
 
       await controller.bootstrap();
 

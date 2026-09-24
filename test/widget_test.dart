@@ -2,25 +2,29 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:private_domain_drive_client/app/router/route_names.dart';
 import 'package:private_domain_drive_client/features/auth/presentation/login_page.dart';
 import 'package:private_domain_drive_client/features/auth/presentation/change_password_page.dart';
+import 'package:private_domain_drive_client/features/auth/infrastructure/saved_credentials_store.dart';
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
 import 'package:private_domain_drive_client/shared/state/app_controller.dart';
 import 'package:private_domain_drive_client/shared/state/app_scope.dart';
 
 void main() {
+  AppController controllerWithMemoryStore() => AppController(
+        sessionRepository: MemorySessionRepository(),
+        savedCredentialsStore:
+            SavedCredentialsStore(storage: InMemoryCredentialsStorage()),
+      );
+
   Future<AppController> loggedInController() async {
-    final controller =
-        AppController(sessionRepository: MemorySessionRepository());
+    final controller = controllerWithMemoryStore();
     await controller.login(account: 'admin', password: '123456');
     return controller;
   }
 
   testWidgets('登录页展示用户名与密码输入项', (tester) async {
-    final controller =
-        AppController(sessionRepository: MemorySessionRepository());
+    final controller = controllerWithMemoryStore();
 
     await tester.pumpWidget(
       AppScope(
@@ -37,14 +41,17 @@ void main() {
   });
 
   testWidgets('登录页预填最近一次成功登录的凭据', (tester) async {
-    SharedPreferences.setMockInitialValues(<String, Object>{
-      'pdd.saved_credentials.v1': jsonEncode(<String, String>{
-        'account': 'member',
-        'password': 'remembered-pass',
-      }),
-    });
-    final controller =
-        AppController(sessionRepository: MemorySessionRepository());
+    final controller = AppController(
+      sessionRepository: MemorySessionRepository(),
+      savedCredentialsStore: SavedCredentialsStore(
+        storage: InMemoryCredentialsStorage(initialValues: <String, String>{
+          'pdd.saved_credentials.v1': jsonEncode(<String, String>{
+            'account': 'member',
+            'password': 'remembered-pass',
+          }),
+        }),
+      ),
+    );
 
     await tester.pumpWidget(
       AppScope(
