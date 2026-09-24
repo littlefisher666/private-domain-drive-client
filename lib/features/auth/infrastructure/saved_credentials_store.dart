@@ -11,19 +11,70 @@ class SavedCredentials {
   final String password;
 }
 
+/// 凭据存储后端抽象。生产环境按平台选择实现，测试注入内存实现，
+/// 避免 testWidgets 中未 mock 的平台通道调用永不返回导致套件挂起。
+abstract interface class CredentialsStorage {
+  Future<String?> read(String key);
+
+  Future<void> write(String key, String value);
+}
+
+/// 生产环境后端：macOS 用 SharedPreferences，其他平台用安全存储。
+class PlatformCredentialsStorage implements CredentialsStorage {
+  PlatformCredentialsStorage({FlutterSecureStorage? secureStorage})
+      : _secureStorage = secureStorage ?? const FlutterSecureStorage();
+
+  final FlutterSecureStorage _secureStorage;
+
+  @override
+  Future<String?> read(String key) async {
+    if (Platform.isMacOS) {
+      final preferences = await SharedPreferences.getInstance();
+      return preferences.getString(key);
+    }
+    return _secureStorage.read(key: key);
+  }
+
+  @override
+  Future<void> write(String key, String value) async {
+    if (Platform.isMacOS) {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(key, value);
+      return;
+    }
+    await _secureStorage.write(key: key, value: value);
+  }
+}
+
+/// 测试与纯内存场景使用的后端。
+class InMemoryCredentialsStorage implements CredentialsStorage {
+  InMemoryCredentialsStorage({Map<String, String> initialValues = const {}})
+      : _values = Map<String, String>.of(initialValues);
+
+  final Map<String, String> _values;
+
+  @override
+  Future<String?> read(String key) async => _values[key];
+
+  @override
+  Future<void> write(String key, String value) async {
+    _values[key] = value;
+  }
+}
+
 /// 记住最近一次成功登录的用户名与密码，供下次打开登录页预填。
 /// 改密成功后同步更新，避免预填过期密码。
 class SavedCredentialsStore {
-  SavedCredentialsStore({FlutterSecureStorage? storage})
-      : _storage = storage ?? const FlutterSecureStorage();
+  SavedCredentialsStore({CredentialsStorage? storage})
+      : _storage = storage ?? PlatformCredentialsStorage();
 
   static const _storageKey = 'pdd.saved_credentials.v1';
 
-  final FlutterSecureStorage _storage;
+  final CredentialsStorage _storage;
 
   Future<SavedCredentials?> read() async {
     try {
-      final raw = await _readRaw();
+      final raw = await _storage.read(_storageKey);
       if (raw == null || raw.isEmpty) {
         return null;
       }
@@ -43,28 +94,12 @@ class SavedCredentialsStore {
   }
 
   Future<void> write(SavedCredentials credentials) async {
-    await _writeRaw(jsonEncode(<String, String>{
-      'account': credentials.account,
-      'password': credentials.password,
-    }));
-  }
-
-  Future<String?> _readRaw() async {
-    if (Platform.isMacOS) {
-      final preferences = await SharedPreferences.getInstance();
-      return preferences.getString(_storageKey);
-    }
-
-    return _storage.read(key: _storageKey);
-  }
-
-  Future<void> _writeRaw(String value) async {
-    if (Platform.isMacOS) {
-      final preferences = await SharedPreferences.getInstance();
-      await preferences.setString(_storageKey, value);
-      return;
-    }
-
-    await _storage.write(key: _storageKey, value: value);
+    await _storage.write(
+      _storageKey,
+      jsonEncode(<String, String>{
+        'account': credentials.account,
+        'password': credentials.password,
+      }),
+    );
   }
 }
