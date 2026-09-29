@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../shared/state/app_scope.dart';
+import '../../../shared/widgets/app_feedback.dart';
 import '../../workspace/domain/file_item.dart';
 
 /// 分享导入时直接弹出的上传目标目录选择弹窗。
@@ -71,6 +72,35 @@ class _ShareTargetDialogState extends State<ShareTargetDialog> {
     _loadDirectories();
   }
 
+  Future<void> _createFolder() async {
+    final controller = AppScope.read(context);
+    if (!controller.capabilities.upload) {
+      AppFeedback.showSnack(context, '当前身份没有新建权限');
+      return;
+    }
+    final name = await AppFeedback.promptText(
+      context,
+      title: '新建文件夹',
+      hintText: '请输入文件夹名称',
+      confirmLabel: '创建',
+    );
+    if (name == null || name.trim().isEmpty) {
+      return;
+    }
+    try {
+      await controller.createFolder(name.trim(), targetPath: _currentPath);
+      if (!mounted) return;
+      AppFeedback.showSnack(context, '已创建 ${name.trim()}');
+      await _loadDirectories();
+    } catch (error) {
+      if (!mounted) return;
+      AppFeedback.showSnack(
+        context,
+        error.toString().replaceFirst('Bad state: ', ''),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = AppScope.read(context);
@@ -96,6 +126,11 @@ class _ShareTargetDialogState extends State<ShareTargetDialog> {
                     style: theme.textTheme.titleSmall,
                     overflow: TextOverflow.ellipsis,
                   ),
+                ),
+                IconButton(
+                  tooltip: '新建文件夹',
+                  onPressed: _createFolder,
+                  icon: const Icon(Icons.create_new_folder_outlined),
                 ),
               ],
             ),
