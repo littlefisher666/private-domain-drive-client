@@ -1025,98 +1025,90 @@ class _WorkspacePageState extends State<WorkspacePage> {
     final canDelete = controller.capabilities.delete;
     final canDownload = controller.capabilities.download;
 
-    // 移动端系统后退键优先用于返回上级目录，仅根目录时才允许退出应用。
-    return PopScope(
-      canPop: controller.currentPath == AppController.rootPrefix,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) {
-          unawaited(_goUp());
-        }
-      },
-      child: Scaffold(
-        backgroundColor:
-            desktop ? scheme.surface : theme.scaffoldBackgroundColor,
-        floatingActionButton: desktop || !canUpload
-            ? null
-            : FloatingActionButton(
-                onPressed: _showUploadSheet,
-                child: const Icon(Icons.add),
-              ),
-        body: SafeArea(
-          top: !desktop,
-          child: desktop
-              ? WorkspaceDesktopBody(
-                  path: controller.displayPath(controller.currentPath),
-                  canGoUp: controller.currentPath != AppController.rootPrefix,
+    // 移动端系统后退键由 HomeShell 统一拦截：非「文件」tab 先切回「文件」，
+    // 「文件」tab 内非根目录返回上级，根目录才允许退出应用。
+    return Scaffold(
+      backgroundColor: desktop ? scheme.surface : theme.scaffoldBackgroundColor,
+      floatingActionButton: desktop || !canUpload
+          ? null
+          : FloatingActionButton(
+              onPressed: _showUploadSheet,
+              child: const Icon(Icons.add),
+            ),
+      body: SafeArea(
+        top: !desktop,
+        child: desktop
+            ? WorkspaceDesktopBody(
+                path: controller.displayPath(controller.currentPath),
+                canGoUp: controller.currentPath != AppController.rootPrefix,
+                canUpload: canUpload,
+                canDelete: canDelete,
+                canDownload: canDownload,
+                browseMode: controller.browseMode,
+                thumbnailSize: controller.thumbnailSize,
+                sortOption: controller.fileSortOption,
+                selectedListenable: controller.selectedItemListenable,
+                directorySizeStatesListenable:
+                    controller.directorySizeStatesListenable,
+                listArea: _buildItemsArea(
+                  controller: controller,
+                  desktop: true,
                   canUpload: canUpload,
-                  canDelete: canDelete,
-                  canDownload: canDownload,
-                  browseMode: controller.browseMode,
-                  thumbnailSize: controller.thumbnailSize,
-                  sortOption: controller.fileSortOption,
-                  selectedListenable: controller.selectedItemListenable,
-                  directorySizeStatesListenable:
-                      controller.directorySizeStatesListenable,
-                  listArea: _buildItemsArea(
-                    controller: controller,
-                    desktop: true,
-                    canUpload: canUpload,
-                  ),
-                  onGoUp: _goUp,
-                  onRefresh: _reload,
-                  onCreateFolder: _createFolder,
-                  onUpload: () => _pickUpload(fromAlbum: false),
-                  onUploadDirectory: _pickUploadDirectory,
-                  onBrowseModeChanged: controller.setBrowseMode,
-                  onThumbnailSizeChanged: controller.setThumbnailSize,
-                  onSortChanged: _setSortOption,
-                  onOpen: _handleOpen,
-                  onPreview: _openPreview,
-                  onDownload: _download,
-                  onDelete: _delete,
-                )
-              : Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
-                      WorkspaceMobileHeader(
-                        path: controller.displayPath(controller.currentPath),
-                        roleLabel: controller.session?.displayName ?? '成员',
-                        canGoUp:
-                            controller.currentPath != AppController.rootPrefix,
-                        browseMode: controller.browseMode,
-                        sortOption: controller.fileSortOption,
-                        onGoUp: _goUp,
-                        onRefresh: _reload,
-                        onBrowseModeChanged: controller.setBrowseMode,
-                        onChooseSort: _showSortSheet,
-                      ),
-                      const SizedBox(height: 12),
-                      if (!canUpload || !canDelete)
-                        Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Text(
-                              '当前用户缺少部分文件操作权限。',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: scheme.onSurfaceVariant,
-                              ),
+                ),
+                onGoUp: _goUp,
+                onRefresh: _reload,
+                onCreateFolder: _createFolder,
+                onUpload: () => _pickUpload(fromAlbum: false),
+                onUploadDirectory: _pickUploadDirectory,
+                onBrowseModeChanged: controller.setBrowseMode,
+                onThumbnailSizeChanged: controller.setThumbnailSize,
+                onSortChanged: _setSortOption,
+                onOpen: _handleOpen,
+                onPreview: _openPreview,
+                onDownload: _download,
+                onDelete: _delete,
+              )
+            : Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    WorkspaceMobileHeader(
+                      path: controller.displayPath(controller.currentPath),
+                      roleLabel: controller.session?.displayName ?? '成员',
+                      canGoUp:
+                          controller.currentPath != AppController.rootPrefix,
+                      browseMode: controller.browseMode,
+                      sortOption: controller.fileSortOption,
+                      onGoUp: _goUp,
+                      onRefresh: _reload,
+                      onBrowseModeChanged: controller.setBrowseMode,
+                      onChooseSort: _showSortSheet,
+                    ),
+                    const SizedBox(height: 12),
+                    if (!canUpload || !canDelete)
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Text(
+                            '当前用户缺少部分文件操作权限。',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
                             ),
                           ),
                         ),
-                      const SizedBox(height: 12),
-                      Expanded(
-                        child: _buildItemsArea(
-                          controller: controller,
-                          desktop: false,
-                          canUpload: canUpload,
-                        ),
                       ),
-                    ],
-                  ),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: _buildItemsArea(
+                        controller: controller,
+                        desktop: false,
+                        canUpload: canUpload,
+                      ),
+                    ),
+                  ],
                 ),
-        ),
+              ),
       ),
     );
   }
@@ -1696,6 +1688,7 @@ class WorkspaceListView extends StatelessWidget {
     required this.onMore,
     required this.onSelect,
     required this.onToggle,
+    this.onLongPress,
     required this.onMarqueeSelectionChanged,
     required this.onPreview,
     required this.onDownload,
@@ -1720,6 +1713,7 @@ class WorkspaceListView extends StatelessWidget {
   final ValueChanged<FileItem> onMore;
   final ValueChanged<FileItem> onSelect;
   final ValueChanged<FileItem> onToggle;
+  final ValueChanged<FileItem>? onLongPress;
   final ValueChanged<Set<String>> onMarqueeSelectionChanged;
   final ValueChanged<FileItem> onPreview;
   final ValueChanged<FileItem> onDownload;
@@ -1781,7 +1775,7 @@ class WorkspaceListView extends StatelessWidget {
                 onSelect(item);
                 if (!multiSelecting) onOpen(item);
               },
-              onLongPress: () => onToggle(item),
+              onLongPress: () => (onLongPress ?? onToggle)(item),
               trailing: IconButton(
                 tooltip: '更多',
                 visualDensity: VisualDensity.compact,
@@ -1929,6 +1923,7 @@ class WorkspaceGridView extends StatelessWidget {
     required this.onMore,
     required this.onSelect,
     required this.onToggle,
+    this.onLongPress,
     required this.onMarqueeSelectionChanged,
     required this.canUpload,
     required this.canDelete,
@@ -1954,6 +1949,7 @@ class WorkspaceGridView extends StatelessWidget {
   final ValueChanged<FileItem> onMore;
   final ValueChanged<FileItem> onSelect;
   final ValueChanged<FileItem> onToggle;
+  final ValueChanged<FileItem>? onLongPress;
   final ValueChanged<Set<String>> onMarqueeSelectionChanged;
   final bool canUpload;
   final bool canDelete;
@@ -1980,6 +1976,7 @@ class WorkspaceGridView extends StatelessWidget {
         onMore: onMore,
         onSelect: onSelect,
         onToggle: onToggle,
+        onLongPress: onLongPress,
       );
     }
     return _DesktopMarqueeSelection(
@@ -2104,6 +2101,7 @@ class _MobileUniformGrid extends StatelessWidget {
     required this.onMore,
     required this.onSelect,
     required this.onToggle,
+    this.onLongPress,
   });
 
   final List<FileItem> items;
@@ -2117,6 +2115,7 @@ class _MobileUniformGrid extends StatelessWidget {
   final ValueChanged<FileItem> onMore;
   final ValueChanged<FileItem> onSelect;
   final ValueChanged<FileItem> onToggle;
+  final ValueChanged<FileItem>? onLongPress;
 
   static const _spacing = 3.0;
 
@@ -2207,7 +2206,7 @@ class _MobileUniformGrid extends StatelessWidget {
         onSelect(item);
         if (!multiSelecting) onOpen(item);
       },
-      onLongPress: () => onToggle(item),
+      onLongPress: () => (onLongPress ?? onToggle)(item),
       trailing: IconButton(
         tooltip: '更多',
         visualDensity: VisualDensity.compact,
@@ -2228,41 +2227,41 @@ class _MobileUniformGrid extends StatelessWidget {
         onSelect(item);
         if (!multiSelecting) onOpen(item);
       },
-      onLongPress: () => onToggle(item),
+      onLongPress: () => (onLongPress ?? onToggle)(item),
       child: Stack(
-          fit: StackFit.expand,
-          children: <Widget>[
-            ColoredBox(
-              color: scheme.surfaceContainerHighest,
-              child: FileTypeThumbnail(
-                item: item,
-                height: double.infinity,
-                loader: thumbnailLoader,
-                cacheNamespace: thumbnailCacheNamespace,
+        fit: StackFit.expand,
+        children: <Widget>[
+          ColoredBox(
+            color: scheme.surfaceContainerHighest,
+            child: FileTypeThumbnail(
+              item: item,
+              height: double.infinity,
+              loader: thumbnailLoader,
+              cacheNamespace: thumbnailCacheNamespace,
+            ),
+          ),
+          if (selected)
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: scheme.primary.withValues(alpha: 0.08),
+                border: Border.all(color: scheme.primary, width: 2),
               ),
             ),
-            if (selected)
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  color: scheme.primary.withValues(alpha: 0.08),
-                  border: Border.all(color: scheme.primary, width: 2),
+          if (multiSelecting)
+            Align(
+              alignment: Alignment.topRight,
+              child: Padding(
+                padding: const EdgeInsets.all(2),
+                child: Checkbox(
+                  value: selected,
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  onChanged: (_) => onToggle(item),
                 ),
               ),
-            if (multiSelecting)
-              Align(
-                alignment: Alignment.topRight,
-                child: Padding(
-                  padding: const EdgeInsets.all(2),
-                  child: Checkbox(
-                    value: selected,
-                    visualDensity: VisualDensity.compact,
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    onChanged: (_) => onToggle(item),
-                  ),
-                ),
-              ),
-          ],
-        ),
+            ),
+        ],
+      ),
     );
   }
 }
