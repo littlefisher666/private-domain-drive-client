@@ -124,7 +124,21 @@ class AppTheme {
       navigationBarTheme: NavigationBarThemeData(
         height: 68,
         backgroundColor: isDark ? const Color(0xFF111827) : Colors.white,
-        indicatorColor: colorScheme.primary.withValues(alpha: 0.14),
+        indicatorColor: colorScheme.primary.withValues(alpha: 0.16),
+        iconTheme: WidgetStateProperty.resolveWith((states) {
+          final selected = states.contains(WidgetState.selected);
+          return IconThemeData(
+            color: selected ? colorScheme.primary : colorScheme.onSurfaceVariant,
+          );
+        }),
+        labelTextStyle: WidgetStateProperty.resolveWith((states) {
+          final selected = states.contains(WidgetState.selected);
+          return TextStyle(
+            fontSize: 12,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+            color: selected ? colorScheme.primary : colorScheme.onSurfaceVariant,
+          );
+        }),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
