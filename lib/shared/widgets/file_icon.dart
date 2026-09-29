@@ -175,16 +175,13 @@ class _FileTypeThumbnailState extends State<FileTypeThumbnail> {
         if (snapshot.connectionState == ConnectionState.done &&
             bytes != null &&
             bytes.isNotEmpty) {
-          return ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: Image(
-              image: _imageProviderFor(key, bytes),
-              fit: BoxFit.cover,
-              width: double.infinity,
-              height: double.infinity,
-              gaplessPlayback: true,
-              errorBuilder: (_, __, ___) => fallback,
-            ),
+          return Image(
+            image: _imageProviderFor(key, bytes),
+            fit: BoxFit.cover,
+            width: double.infinity,
+            height: double.infinity,
+            gaplessPlayback: true,
+            errorBuilder: (_, __, ___) => fallback,
           );
         }
         return fallback;
@@ -215,10 +212,7 @@ class _FileTypeThumbnailState extends State<FileTypeThumbnail> {
     final container = Container(
       height: widget.height == double.infinity ? null : widget.height,
       alignment: Alignment.center,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        color: style.bg,
-      ),
+      color: style.bg,
       child: FileTypeIcon(item: widget.item, size: 36),
     );
     return widget.height == double.infinity

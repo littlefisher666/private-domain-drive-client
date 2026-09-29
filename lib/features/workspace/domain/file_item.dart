@@ -33,23 +33,13 @@ extension ThumbnailSizeX on ThumbnailSize {
         ThumbnailSize.large => '大',
       };
 
-  double maxCrossAxisExtent({required bool desktop}) => switch (this) {
-        ThumbnailSize.small => desktop ? 140 : 130,
-        ThumbnailSize.medium => desktop ? 190 : 180,
-        ThumbnailSize.large => desktop ? 270 : 260,
+  double get maxCrossAxisExtent => switch (this) {
+        ThumbnailSize.small => 140,
+        ThumbnailSize.medium => 190,
+        ThumbnailSize.large => 270,
       };
 
-  double childAspectRatio({required bool desktop}) => switch (this) {
-        ThumbnailSize.small => desktop ? 0.92 : 0.76,
-        ThumbnailSize.medium => desktop ? 0.92 : 0.76,
-        ThumbnailSize.large => desktop ? 0.92 : 0.76,
-      };
-
-  int get mobileCrossAxisCount => switch (this) {
-        ThumbnailSize.small => 3,
-        ThumbnailSize.medium => 2,
-        ThumbnailSize.large => 1,
-      };
+  double get childAspectRatio => 0.92;
 }
 
 enum FileSortOption {
