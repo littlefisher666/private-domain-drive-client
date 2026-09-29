@@ -24,7 +24,10 @@ class _HomeShellState extends State<HomeShell> {
   int _recycleBinVisit = 0;
 
   void _select(int value) {
-    if (value == 2) _recycleBinVisit++;
+    if (value == 2) {
+      _recycleBinVisit++;
+      AppScope.of(context).setRecycleBinPath(AppController.rootPrefix);
+    }
     if (value == 3) _settingsVisit++;
     setState(() => _index = value);
   }
@@ -45,12 +48,23 @@ class _HomeShellState extends State<HomeShell> {
 
     final controller = AppScope.of(context);
 
-    // 移动端系统后退键：非「文件」tab 先切回「文件」；「文件」tab 内非根目录
-    // 返回上级目录；仅「文件」tab 且位于根目录时才允许退出应用。
+    // 移动端系统后退键：回收站内非根目录先向上返回；回收站根目录及其他
+    // 非「文件」tab 切回「文件」；「文件」tab 内非根目录返回上级；
+    // 仅「文件」tab 且位于根目录时才允许退出应用。
     return PopScope(
       canPop: _index == 0 && controller.currentPath == AppController.rootPrefix,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) {
+          return;
+        }
+        if (_index == 2) {
+          if (controller.recycleBinPath != AppController.rootPrefix) {
+            controller.setRecycleBinPath(
+              controller.parentPath(controller.recycleBinPath),
+            );
+            return;
+          }
+          _select(0);
           return;
         }
         if (_index != 0) {
@@ -58,8 +72,9 @@ class _HomeShellState extends State<HomeShell> {
           return;
         }
         if (controller.currentPath != AppController.rootPrefix) {
-          controller
-              .setCurrentPath(controller.parentPath(controller.currentPath));
+          controller.setCurrentPath(
+            controller.parentPath(controller.currentPath),
+          );
         }
       },
       child: Scaffold(

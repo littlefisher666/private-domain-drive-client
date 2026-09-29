@@ -195,6 +195,15 @@ class AppController extends ChangeNotifier {
   bool get isLoggedIn => _session != null;
   String get currentPath => _currentPath;
 
+  String _recycleBinPath = rootPrefix;
+
+  String get recycleBinPath => _recycleBinPath;
+
+  void setRecycleBinPath(String path) {
+    _recycleBinPath = _normalizeDir(path);
+    notifyListeners();
+  }
+
   /// 将 OSS 内部对象键转换为用户可见的相对路径。
   String displayPath(String path) {
     final normalized = path.trim();
@@ -468,7 +477,8 @@ class AppController extends ChangeNotifier {
     if (cached != null) {
       return cached;
     }
-    final bytes = await _ossClient.downloadThumbnail(item.path, _session ?? session);
+    final bytes =
+        await _ossClient.downloadThumbnail(item.path, _session ?? session);
     unawaited(DiskImageCache.instance.write(
       DiskImageCacheKind.thumbnails,
       cacheKey,
@@ -497,7 +507,8 @@ class AppController extends ChangeNotifier {
       cacheKey,
     );
     if (cached != null) return cached;
-    final bytes = await _ossClient.downloadImagePreview(item.path, _session ?? session);
+    final bytes =
+        await _ossClient.downloadImagePreview(item.path, _session ?? session);
     unawaited(DiskImageCache.instance.write(
       DiskImageCacheKind.previews,
       cacheKey,
