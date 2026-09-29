@@ -341,6 +341,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final result = _updateCheck;
     if (_checkingUpdate && result == null) return '正在检查最新版本…';
     if (result == null) return '从 GitHub Releases 获取稳定版';
+    if (result.latestVersion.isEmpty) return '暂未发现本平台的发布版本';
     return '最新版本 ${result.latestVersion}';
   }
 
