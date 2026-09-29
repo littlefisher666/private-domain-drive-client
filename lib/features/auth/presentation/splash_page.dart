@@ -29,6 +29,15 @@ class _SplashPageState extends State<SplashPage> {
         : controller.session?.mustResetPassword == true
             ? RouteNames.changePassword
             : RouteNames.home;
+    // 分享导入的目录选择弹窗可能已压在启动页之上；pushReplacementNamed
+    // 替换的是最上层路由，会误删弹窗，需等更高层路由关闭后再跳转。
+    final modal = ModalRoute.of(context);
+    while (mounted && modal != null && !modal.isCurrent) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    if (!mounted) {
+      return;
+    }
     Navigator.of(context).pushReplacementNamed(next);
   }
 

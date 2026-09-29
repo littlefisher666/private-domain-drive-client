@@ -69,6 +69,16 @@ class _LoginPageState extends State<LoginPage> {
       return;
     }
 
+    // 分享导入的目录选择弹窗可能已压在登录页之上；pushReplacementNamed
+    // 替换的是最上层路由，会误删弹窗，需等更高层路由关闭后再跳转。
+    final modal = ModalRoute.of(context);
+    while (mounted && modal != null && !modal.isCurrent) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    if (!mounted) {
+      return;
+    }
+
     Navigator.of(context).pushReplacementNamed(
       result.session?.mustResetPassword == true
           ? RouteNames.changePassword
