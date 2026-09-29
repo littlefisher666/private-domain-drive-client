@@ -109,6 +109,60 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
     });
   }
 
+  Future<void> _showItemActions(FileItem item) async {
+    final entry = _itemEntries[item.path];
+    if (entry == null) return;
+    final scheme = Theme.of(context).colorScheme;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              ListTile(
+                dense: true,
+                title: Text(
+                  item.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(sheetContext).textTheme.titleMedium,
+                ),
+                subtitle: Text(
+                  '${item.typeLabel} · ${_remaining(entry.expiresAt)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.restore_outlined, size: 22),
+                title: const Text('恢复'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _restoreItem(item);
+                },
+              ),
+              ListTile(
+                dense: true,
+                leading: Icon(Icons.delete_forever_outlined,
+                    size: 22, color: scheme.error),
+                title: Text('立即删除',
+                    style: TextStyle(color: scheme.error)),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _purgeItem(item);
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   void _goUp() {
     if (_currentPath == AppController.rootPrefix) return;
     final path = _currentPath.substring(0, _currentPath.length - 1);
@@ -192,7 +246,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
         selectedPaths: const <String>{}, multiSelecting: false, desktop: _desktop,
         thumbnailSize: controller.thumbnailSize, subtitleBuilder: _subtitle,
         thumbnailLoader: (_) async => <int>[], thumbnailCacheNamespace: 'recycle-bin',
-        onOpen: _open, onMore: _restoreItem,
+        onOpen: _open, onMore: _showItemActions, onLongPress: _showItemActions,
         onSelect: (item) => _selected.value = item, onToggle: (_) {},
         onMarqueeSelectionChanged: (_) {}, canUpload: false, canDelete: false,
         canDownload: false, onDownload: (_) {}, onRename: (_) {}, renamingPath: null,
@@ -203,7 +257,8 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       items: items, desktop: _desktop, selectedPath: common['selectedPath'] as String?,
       selectedPaths: const <String>{}, multiSelecting: false, subtitleBuilder: _subtitle,
       metaTimeBuilder: _metaTime, canUpload: false, canDelete: false, canDownload: false,
-      onOpen: _open, onMore: _restoreItem, onSelect: (item) => _selected.value = item,
+      onOpen: _open, onMore: _showItemActions, onLongPress: _showItemActions,
+      onSelect: (item) => _selected.value = item,
       onToggle: (_) {}, onMarqueeSelectionChanged: (_) {}, onPreview: (_) {},
       onDownload: (_) {}, onRename: (_) {}, renamingPath: null,
       onRenameSubmit: (_, __) async => false, onRenameCancel: () {}, onDelete: (_) {},
