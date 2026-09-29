@@ -8,7 +8,7 @@ class MainFlutterWindow: NSWindow {
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
 
-    // Align with docs/ui macOS Cupertino canvas: wide desktop window.
+    // Wide desktop window sizing.
     self.minSize = NSSize(width: 1024, height: 680)
     self.setContentSize(NSSize(width: 1280, height: 820))
     self.title = "私域网盘"

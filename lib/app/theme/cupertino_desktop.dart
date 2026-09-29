@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Visual tokens aligned with docs/ui macOS Cupertino prototype.
+/// Visual tokens aligned with the macOS Cupertino palette.
 class CupertinoDesktopTokens {
   CupertinoDesktopTokens._();
 
