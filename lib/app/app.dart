@@ -89,7 +89,9 @@ class _PrivateDomainDriveAppState extends State<PrivateDomainDriveApp> {
           ShareTargetDialog(initialPath: controller.shareTargetPath),
     );
     if (selected == null) {
-      // 用户取消即放弃本次导入，避免残留待上传项。
+      // 用户取消即放弃本次导入，避免残留待上传项；同时清除防重入签名，
+      // 让用户建完文件夹后重新分享同一批内容仍能再次弹出目录选择。
+      _openedShareSignature = null;
       controller.prepareShareImport(items: const <ShareImportItem>[]);
       return;
     }
