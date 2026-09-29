@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 
 import '../../../app/theme/cupertino_desktop.dart';
+import '../../../shared/state/app_controller.dart';
 import '../../../shared/state/app_scope.dart';
 import '../../settings/presentation/settings_page.dart';
 import '../../transfer/presentation/transfer_tasks_page.dart';
@@ -42,45 +43,65 @@ class _HomeShellState extends State<HomeShell> {
       );
     }
 
-    return Scaffold(
-      body: IndexedStack(
-        index: _index.clamp(0, 3),
-        children: <Widget>[
-          const WorkspacePage(),
-          const TransferTasksPage(embedded: true),
-          RecycleBinPage(
-            key: ValueKey<String>('recycle-bin-mobile-$_recycleBinVisit'),
-            embedded: true,
-            visitToken: _recycleBinVisit,
-          ),
-          SettingsPage(embedded: true, visitToken: _settingsVisit),
-        ],
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: _select,
-        destinations: const <NavigationDestination>[
-          NavigationDestination(
-            icon: Icon(Icons.folder_outlined),
-            selectedIcon: Icon(Icons.folder),
-            label: '文件',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.swap_vert_circle_outlined),
-            selectedIcon: Icon(Icons.swap_vert_circle),
-            label: '传输',
-          ),
-          NavigationDestination(
-            icon: Icon(CupertinoIcons.trash),
-            selectedIcon: Icon(CupertinoIcons.trash_fill),
-            label: '回收站',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: '我的',
-          ),
-        ],
+    final controller = AppScope.of(context);
+
+    // 移动端系统后退键：非「文件」tab 先切回「文件」；「文件」tab 内非根目录
+    // 返回上级目录；仅「文件」tab 且位于根目录时才允许退出应用。
+    return PopScope(
+      canPop: _index == 0 && controller.currentPath == AppController.rootPrefix,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) {
+          return;
+        }
+        if (_index != 0) {
+          _select(0);
+          return;
+        }
+        if (controller.currentPath != AppController.rootPrefix) {
+          controller
+              .setCurrentPath(controller.parentPath(controller.currentPath));
+        }
+      },
+      child: Scaffold(
+        body: IndexedStack(
+          index: _index.clamp(0, 3),
+          children: <Widget>[
+            const WorkspacePage(),
+            const TransferTasksPage(embedded: true),
+            RecycleBinPage(
+              key: ValueKey<String>('recycle-bin-mobile-$_recycleBinVisit'),
+              embedded: true,
+              visitToken: _recycleBinVisit,
+            ),
+            SettingsPage(embedded: true, visitToken: _settingsVisit),
+          ],
+        ),
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _index,
+          onDestinationSelected: _select,
+          destinations: const <NavigationDestination>[
+            NavigationDestination(
+              icon: Icon(Icons.folder_outlined),
+              selectedIcon: Icon(Icons.folder),
+              label: '文件',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.swap_vert_circle_outlined),
+              selectedIcon: Icon(Icons.swap_vert_circle),
+              label: '传输',
+            ),
+            NavigationDestination(
+              icon: Icon(CupertinoIcons.trash),
+              selectedIcon: Icon(CupertinoIcons.trash_fill),
+              label: '回收站',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.person_outline),
+              selectedIcon: Icon(Icons.person),
+              label: '我的',
+            ),
+          ],
+        ),
       ),
     );
   }
