@@ -35,6 +35,9 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+        }
         release {
             if (keystoreProperties.isEmpty) {
                 if (gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }) {
