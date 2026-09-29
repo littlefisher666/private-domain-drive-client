@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import '../../../core/version/app_version.dart';
+
 class ReleaseAsset {
   const ReleaseAsset({required this.name, required this.url, this.digest});
   final String name;
@@ -50,20 +52,35 @@ class GithubReleaseClient {
   };
 
   /// 查询当前平台的最新发布：从 Releases 列表中按 tag 前缀
-  /// （`android/` 或 `macos/`）匹配第一个发布，并下载其更新清单。
+  /// （`android/` 或 `macos/`）匹配，并选取其中**版本号最高**的一个，
+  /// 下载其更新清单。列表顺序不保证最新在前（GitHub 实测会穿插旧共享
+  /// 序列与各平台条目），因此不得依赖接口排序取第一个。
   /// 没有平台匹配的发布或清单资产时返回 null，由调用方按“已是最新版本”处理。
   Future<GithubRelease?> latestForPlatform({required String tagPrefix}) async {
     debugPrint('[更新检查] 查询平台发布列表（tag 前缀：$tagPrefix）');
     try {
       final releases = await _fetchReleases();
-      final matched = releases
-          .where((release) =>
-              (release['tag_name'] as String? ?? '').startsWith(tagPrefix))
-          .firstOrNull;
-      if (matched == null) {
+      final versionPattern = RegExp(r'^\d+\.\d+\.\d+$');
+      final candidates = releases
+          .map((release) => release['tag_name'] as String? ?? '')
+          .where((tag) => tag.startsWith(tagPrefix))
+          .map((tag) => (
+                tag: tag,
+                version: tag
+                    .substring(tagPrefix.length)
+                    .replaceFirst(RegExp(r'^v'), ''),
+              ))
+          .where((candidate) => versionPattern.hasMatch(candidate.version))
+          .toList()
+        ..sort((a, b) => compareAppVersions(b.version, a.version));
+      final best = candidates.firstOrNull;
+      if (best == null) {
         debugPrint('[更新检查] 未找到前缀为 $tagPrefix 的发布');
         return null;
       }
+      debugPrint('[更新检查] 平台最新发布：${best.tag}（候选 ${candidates.length} 个）');
+      final matched = releases
+          .firstWhere((release) => release['tag_name'] == best.tag);
       debugPrint('[更新检查] 匹配到平台发布：${matched['tag_name']}');
       final manifestUrl = ((matched['assets'] as List<dynamic>? ?? const [])
               .cast<Map<String, dynamic>>()

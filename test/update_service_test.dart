@@ -203,6 +203,37 @@ void main() {
     expect(result.availableUpdate, isNull);
   });
 
+  test('列表顺序不代表最新时取版本号最高的平台发布', () async {
+    // 复现 GitHub 实测乱序：旧共享序列与低版本平台条目排在前面。
+    final service = _serviceWith(
+      currentVersion: '0.0.9',
+      releases: [
+        _apiRelease(tagName: 'v0.0.9'),
+        _apiRelease(tagName: 'macos/v0.0.9'),
+        _apiRelease(tagName: 'android/v0.0.9'),
+        _apiRelease(tagName: 'android/v0.0.10'),
+      ],
+      manifest: {
+        'version': '0.0.10',
+        'notes': '修复',
+        'assets': {
+          'android': {
+            'name': 'private-domain-drive-android-v0.0.10.apk',
+            'url': 'https://example.com/android.apk',
+            'digest': 'sha256:abc',
+          },
+        },
+      },
+    );
+
+    final result = await service.checkLatest();
+    expect(result.latestVersion, '0.0.10');
+    expect(result.hasUpdate, isTrue);
+    expect(result.availableUpdate, isNotNull);
+    expect(result.availableUpdate!.asset.name,
+        'private-domain-drive-android-v0.0.10.apk');
+  });
+
   test('macOS 端按平台前缀匹配并忽略其他平台的新版本', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     final service = _serviceWith(

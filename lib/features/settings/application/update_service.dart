@@ -121,21 +121,6 @@ class UpdateService {
     if (!started) throw StateError('请先在系统设置中允许此应用安装未知来源应用');
   }
 
-  static int compareVersions(String left, String right) {
-    List<int> parse(String value) => value
-        .replaceFirst(RegExp(r'^v'), '')
-        .split('+')
-        .first
-        .split('.')
-        .map(int.tryParse)
-        .map((n) => n ?? 0)
-        .toList();
-    final a = parse(left), b = parse(right);
-    for (var i = 0; i < 3; i++) {
-      final result =
-          (i < a.length ? a[i] : 0).compareTo(i < b.length ? b[i] : 0);
-      if (result != 0) return result;
-    }
-    return 0;
-  }
+  static int compareVersions(String left, String right) =>
+      compareAppVersions(left, right);
 }
