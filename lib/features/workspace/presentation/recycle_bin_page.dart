@@ -272,9 +272,8 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
                 WorkspaceMobileHeader(
                   title: '回收站', path: pathLabel, roleLabel: controller.session?.displayName ?? '成员',
                   canGoUp: _currentPath != AppController.rootPrefix, browseMode: controller.browseMode,
-                  thumbnailSize: controller.thumbnailSize, sortOption: controller.fileSortOption,
+                  sortOption: controller.fileSortOption,
                   onGoUp: _goUp, onRefresh: _reload, onBrowseModeChanged: controller.setBrowseMode,
-                  onThumbnailSizeChanged: controller.setThumbnailSize,
                   onChooseSort: () => showFileSortSheet(
                     context,
                     current: controller.fileSortOption,

@@ -521,7 +521,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
     if (width == null || width <= 0) {
       return 1;
     }
-    final maxCrossAxisExtent = thumbnailSize.maxCrossAxisExtent(desktop: true);
+    final maxCrossAxisExtent = thumbnailSize.maxCrossAxisExtent;
     const crossAxisSpacing = 12.0;
     final count =
         ((width + crossAxisSpacing) / (maxCrossAxisExtent + crossAxisSpacing))
@@ -1547,50 +1547,16 @@ class _ThumbnailSizeSegmented extends StatelessWidget {
   }
 }
 
-class _MobileThumbnailSizeMenu extends StatelessWidget {
-  const _MobileThumbnailSizeMenu({
-    required this.thumbnailSize,
-    required this.onChanged,
-  });
-
-  final ThumbnailSize thumbnailSize;
-  final ValueChanged<ThumbnailSize> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return PopupMenuButton<ThumbnailSize>(
-      tooltip: '缩略图大小：${thumbnailSize.label}',
-      initialValue: thumbnailSize,
-      onSelected: onChanged,
-      itemBuilder: (context) => ThumbnailSize.values
-          .map(
-            (size) => CheckedPopupMenuItem<ThumbnailSize>(
-              value: size,
-              checked: size == thumbnailSize,
-              child: Text('${size.label}图'),
-            ),
-          )
-          .toList(growable: false),
-      child: const Padding(
-        padding: EdgeInsets.all(8),
-        child: Icon(Icons.photo_size_select_large_outlined),
-      ),
-    );
-  }
-}
-
 class WorkspaceMobileHeader extends StatelessWidget {
   const WorkspaceMobileHeader({
     required this.path,
     required this.roleLabel,
     required this.canGoUp,
     required this.browseMode,
-    required this.thumbnailSize,
     required this.sortOption,
     required this.onGoUp,
     required this.onRefresh,
     required this.onBrowseModeChanged,
-    required this.onThumbnailSizeChanged,
     required this.onChooseSort,
     this.title = '共享空间',
   });
@@ -1599,12 +1565,10 @@ class WorkspaceMobileHeader extends StatelessWidget {
   final String roleLabel;
   final bool canGoUp;
   final BrowseMode browseMode;
-  final ThumbnailSize thumbnailSize;
   final FileSortOption sortOption;
   final VoidCallback onGoUp;
   final VoidCallback onRefresh;
   final ValueChanged<BrowseMode> onBrowseModeChanged;
-  final ValueChanged<ThumbnailSize> onThumbnailSizeChanged;
   final VoidCallback onChooseSort;
   final String title;
 
@@ -1644,11 +1608,6 @@ class WorkspaceMobileHeader extends StatelessWidget {
               icon: const Icon(Icons.sort),
               tooltip: '排序：${sortOption.label}',
             ),
-            if (browseMode == BrowseMode.grid)
-              _MobileThumbnailSizeMenu(
-                thumbnailSize: thumbnailSize,
-                onChanged: onThumbnailSizeChanged,
-              ),
             IconButton(
               onPressed: () => onBrowseModeChanged(
                 browseMode == BrowseMode.list
@@ -2008,21 +1967,21 @@ class WorkspaceGridView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final gridDelegate = desktop
-        ? SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: thumbnailSize.maxCrossAxisExtent(desktop: true),
-            mainAxisSpacing: 12,
-            crossAxisSpacing: 12,
-            childAspectRatio: thumbnailSize.childAspectRatio(desktop: true),
-          )
-        : SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: thumbnailSize.mobileCrossAxisCount,
-            mainAxisSpacing: 12,
-            crossAxisSpacing: 12,
-            // 移动端多选会额外显示复选框；预留纵向空间，避免真机字体
-            // 或系统缩放下缩略图卡片底部溢出。
-            childAspectRatio: thumbnailSize.childAspectRatio(desktop: false),
-          );
+    if (!desktop) {
+      return _MobileUniformGrid(
+        items: items,
+        selectedPath: selectedPath,
+        selectedPaths: selectedPaths,
+        multiSelecting: multiSelecting,
+        subtitleBuilder: subtitleBuilder,
+        thumbnailLoader: thumbnailLoader,
+        thumbnailCacheNamespace: thumbnailCacheNamespace,
+        onOpen: onOpen,
+        onMore: onMore,
+        onSelect: onSelect,
+        onToggle: onToggle,
+      );
+    }
     return _DesktopMarqueeSelection(
       enabled: desktop && defaultTargetPlatform == TargetPlatform.macOS,
       items: items,
@@ -2030,88 +1989,18 @@ class WorkspaceGridView extends StatelessWidget {
       onSelectionChanged: onMarqueeSelectionChanged,
       childBuilder: (context, itemKeys, marqueeSelecting, onItemPointerDown) =>
           GridView.builder(
-        gridDelegate: gridDelegate,
+        gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: thumbnailSize.maxCrossAxisExtent,
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+          childAspectRatio: thumbnailSize.childAspectRatio,
+        ),
         itemCount: items.length,
         itemBuilder: (context, index) {
           final item = items[index];
           final selected = selectedPaths.isNotEmpty
               ? selectedPaths.contains(item.path)
               : item.path == selectedPath;
-          final scheme = Theme.of(context).colorScheme;
-
-          if (!desktop) {
-            return Material(
-              color: selected
-                  ? scheme.primary.withValues(alpha: 0.08)
-                  : scheme.surface,
-              borderRadius: BorderRadius.circular(18),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(18),
-                onTap: () {
-                  onSelect(item);
-                  if (!multiSelecting) onOpen(item);
-                },
-                onLongPress: () => onToggle(item),
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(
-                      color: selected ? scheme.primary : scheme.outlineVariant,
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
-                      Expanded(
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(14),
-                            color: scheme.surfaceContainerHighest,
-                          ),
-                          child: FileTypeThumbnail(
-                            item: item,
-                            height: double.infinity,
-                            loader: thumbnailLoader,
-                            cacheNamespace: thumbnailCacheNamespace,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      if (multiSelecting)
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: Checkbox(
-                            value: selected,
-                            onChanged: (_) => onToggle(item),
-                          ),
-                        ),
-                      if (renamingPath == item.path)
-                        _InlineRenameField(
-                          item: item,
-                          onSubmit: onRenameSubmit,
-                          onCancel: onRenameCancel,
-                        )
-                      else
-                        Text(
-                          item.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
-                      const SizedBox(height: 2),
-                      Text(
-                        item.typeLabel,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: scheme.onSurfaceVariant,
-                            ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          }
 
           return Listener(
             onPointerDown: (event) => onItemPointerDown(event.pointer),
@@ -2196,6 +2085,184 @@ class WorkspaceGridView extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+/// 移动端相册式流式缩略图布局：每行统一行高，条目宽度按图片宽高比
+/// 分配并撑满整行，行与行之间只保留极小间距，与系统相册的“照片”页一致。
+class _MobileUniformGrid extends StatelessWidget {
+  const _MobileUniformGrid({
+    required this.items,
+    required this.selectedPath,
+    required this.selectedPaths,
+    required this.multiSelecting,
+    required this.subtitleBuilder,
+    required this.thumbnailLoader,
+    required this.thumbnailCacheNamespace,
+    required this.onOpen,
+    required this.onMore,
+    required this.onSelect,
+    required this.onToggle,
+  });
+
+  final List<FileItem> items;
+  final String? selectedPath;
+  final Set<String> selectedPaths;
+  final bool multiSelecting;
+  final String Function(FileItem) subtitleBuilder;
+  final Future<List<int>> Function(FileItem item) thumbnailLoader;
+  final String thumbnailCacheNamespace;
+  final ValueChanged<FileItem> onOpen;
+  final ValueChanged<FileItem> onMore;
+  final ValueChanged<FileItem> onSelect;
+  final ValueChanged<FileItem> onToggle;
+
+  static const _spacing = 3.0;
+
+  /// 缩略图目标格子尺寸；列数按可用宽度自动推算。
+  static const _maxTileExtent = 68.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final images = <FileItem>[];
+    final others = <FileItem>[];
+    for (final item in items) {
+      if (!item.isDirectory && item.kind == FileKind.image) {
+        images.add(item);
+      } else {
+        others.add(item);
+      }
+    }
+    return CustomScrollView(
+      slivers: <Widget>[
+        if (images.isNotEmpty)
+          SliverPadding(
+            padding: EdgeInsets.only(bottom: others.isEmpty ? 12 : 8),
+            sliver: SliverGrid(
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: _maxTileExtent,
+                mainAxisSpacing: _spacing,
+                crossAxisSpacing: _spacing,
+                childAspectRatio: 1,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                (context, index) => _buildTile(context, images[index]),
+                childCount: images.length,
+              ),
+            ),
+          ),
+        if (others.isNotEmpty)
+          SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final item = others[index];
+                return _buildOtherRow(context, item);
+              },
+              childCount: others.length,
+            ),
+          ),
+        const SliverToBoxAdapter(child: SizedBox(height: 12)),
+      ],
+    );
+  }
+
+  Widget _buildOtherRow(BuildContext context, FileItem item) {
+    final scheme = Theme.of(context).colorScheme;
+    return ListTile(
+      dense: true,
+      visualDensity: const VisualDensity(vertical: -2),
+      contentPadding: const EdgeInsets.only(left: 12, right: 4),
+      horizontalTitleGap: 10,
+      minLeadingWidth: 28,
+      minVerticalPadding: 5,
+      leading: multiSelecting
+          ? SizedBox(
+              width: 28,
+              height: 28,
+              child: Checkbox(
+                value: selectedPaths.contains(item.path),
+                visualDensity: VisualDensity.compact,
+                onChanged: (_) => onToggle(item),
+              ),
+            )
+          : FileTypeIcon(item: item, size: 24),
+      title: Text(
+        item.name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+      ),
+      subtitle: Text(
+        subtitleBuilder(item),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+      ),
+      onTap: () {
+        onSelect(item);
+        if (!multiSelecting) onOpen(item);
+      },
+      onLongPress: () => onToggle(item),
+      trailing: IconButton(
+        tooltip: '更多',
+        visualDensity: VisualDensity.compact,
+        constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+        onPressed: () => onMore(item),
+        icon: const Icon(Icons.more_vert, size: 20),
+      ),
+    );
+  }
+
+  Widget _buildTile(BuildContext context, FileItem item) {
+    final selected = selectedPaths.isNotEmpty
+        ? selectedPaths.contains(item.path)
+        : item.path == selectedPath;
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: () {
+        onSelect(item);
+        if (!multiSelecting) onOpen(item);
+      },
+      onLongPress: () => onToggle(item),
+      child: Stack(
+          fit: StackFit.expand,
+          children: <Widget>[
+            ColoredBox(
+              color: scheme.surfaceContainerHighest,
+              child: FileTypeThumbnail(
+                item: item,
+                height: double.infinity,
+                loader: thumbnailLoader,
+                cacheNamespace: thumbnailCacheNamespace,
+              ),
+            ),
+            if (selected)
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: scheme.primary.withValues(alpha: 0.08),
+                  border: Border.all(color: scheme.primary, width: 2),
+                ),
+              ),
+            if (multiSelecting)
+              Align(
+                alignment: Alignment.topRight,
+                child: Padding(
+                  padding: const EdgeInsets.all(2),
+                  child: Checkbox(
+                    value: selected,
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    onChanged: (_) => onToggle(item),
+                  ),
+                ),
+              ),
+          ],
+        ),
     );
   }
 }

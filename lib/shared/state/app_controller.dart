@@ -465,7 +465,9 @@ class AppController extends ChangeNotifier {
       DiskImageCacheKind.thumbnails,
       cacheKey,
     );
-    if (cached != null) return cached;
+    if (cached != null) {
+      return cached;
+    }
     final bytes = await _ossClient.downloadThumbnail(item.path, _session ?? session);
     unawaited(DiskImageCache.instance.write(
       DiskImageCacheKind.thumbnails,
