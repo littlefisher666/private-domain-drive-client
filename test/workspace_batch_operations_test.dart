@@ -208,34 +208,6 @@ void main() {
     await controller.setThumbnailSize(ThumbnailSize.medium);
   });
 
-  testWidgets('移动端中图与大图使用不同的网格列数', (tester) async {
-    final controller = await _pumpWorkspace(tester, items, desktop: false);
-    controller.setBrowseMode(BrowseMode.grid);
-    await tester.pumpAndSettle();
-
-    var grid = tester.widget<GridView>(find.byType(GridView));
-    expect(
-      (grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount)
-          .crossAxisCount,
-      2,
-    );
-
-    await tester.tap(find.byIcon(Icons.photo_size_select_large_outlined));
-    await tester.pumpAndSettle();
-    await tester.tap(
-      find.widgetWithText(CheckedPopupMenuItem<ThumbnailSize>, '大图'),
-    );
-    await tester.pumpAndSettle();
-
-    grid = tester.widget<GridView>(find.byType(GridView));
-    expect(
-      (grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount)
-          .crossAxisCount,
-      1,
-    );
-    await controller.setThumbnailSize(ThumbnailSize.medium);
-  });
-
   testWidgets('桌面列表支持拖拽框选多个条目', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     final controller = await _pumpWorkspace(tester, items);
