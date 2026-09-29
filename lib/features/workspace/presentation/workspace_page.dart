@@ -1025,90 +1025,98 @@ class _WorkspacePageState extends State<WorkspacePage> {
     final canDelete = controller.capabilities.delete;
     final canDownload = controller.capabilities.download;
 
-    return Scaffold(
-      backgroundColor: desktop ? scheme.surface : theme.scaffoldBackgroundColor,
-      floatingActionButton: desktop || !canUpload
-          ? null
-          : FloatingActionButton(
-              onPressed: _showUploadSheet,
-              child: const Icon(Icons.add),
-            ),
-      body: SafeArea(
-        top: !desktop,
-        child: desktop
-            ? WorkspaceDesktopBody(
-                path: controller.displayPath(controller.currentPath),
-                canGoUp: controller.currentPath != AppController.rootPrefix,
-                canUpload: canUpload,
-                canDelete: canDelete,
-                canDownload: canDownload,
-                browseMode: controller.browseMode,
-                thumbnailSize: controller.thumbnailSize,
-                sortOption: controller.fileSortOption,
-                selectedListenable: controller.selectedItemListenable,
-                directorySizeStatesListenable:
-                    controller.directorySizeStatesListenable,
-                listArea: _buildItemsArea(
-                  controller: controller,
-                  desktop: true,
+    // 移动端系统后退键优先用于返回上级目录，仅根目录时才允许退出应用。
+    return PopScope(
+      canPop: controller.currentPath == AppController.rootPrefix,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          unawaited(_goUp());
+        }
+      },
+      child: Scaffold(
+        backgroundColor:
+            desktop ? scheme.surface : theme.scaffoldBackgroundColor,
+        floatingActionButton: desktop || !canUpload
+            ? null
+            : FloatingActionButton(
+                onPressed: _showUploadSheet,
+                child: const Icon(Icons.add),
+              ),
+        body: SafeArea(
+          top: !desktop,
+          child: desktop
+              ? WorkspaceDesktopBody(
+                  path: controller.displayPath(controller.currentPath),
+                  canGoUp: controller.currentPath != AppController.rootPrefix,
                   canUpload: canUpload,
-                ),
-                onGoUp: _goUp,
-                onRefresh: _reload,
-                onCreateFolder: _createFolder,
-                onUpload: () => _pickUpload(fromAlbum: false),
-                onUploadDirectory: _pickUploadDirectory,
-                onBrowseModeChanged: controller.setBrowseMode,
-                onThumbnailSizeChanged: controller.setThumbnailSize,
-                onSortChanged: _setSortOption,
-                onOpen: _handleOpen,
-                onPreview: _openPreview,
-                onDownload: _download,
-                onDelete: _delete,
-              )
-            : Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    WorkspaceMobileHeader(
-                      path: controller.displayPath(controller.currentPath),
-                      roleLabel: controller.session?.displayName ?? '成员',
-                      canGoUp:
-                          controller.currentPath != AppController.rootPrefix,
-                      browseMode: controller.browseMode,
-                      thumbnailSize: controller.thumbnailSize,
-                      sortOption: controller.fileSortOption,
-                      onGoUp: _goUp,
-                      onRefresh: _reload,
-                      onBrowseModeChanged: controller.setBrowseMode,
-                      onThumbnailSizeChanged: controller.setThumbnailSize,
-                      onChooseSort: _showSortSheet,
-                    ),
-                    const SizedBox(height: 12),
-                    if (!canUpload || !canDelete)
-                      Card(
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Text(
-                            '当前用户缺少部分文件操作权限。',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: scheme.onSurfaceVariant,
+                  canDelete: canDelete,
+                  canDownload: canDownload,
+                  browseMode: controller.browseMode,
+                  thumbnailSize: controller.thumbnailSize,
+                  sortOption: controller.fileSortOption,
+                  selectedListenable: controller.selectedItemListenable,
+                  directorySizeStatesListenable:
+                      controller.directorySizeStatesListenable,
+                  listArea: _buildItemsArea(
+                    controller: controller,
+                    desktop: true,
+                    canUpload: canUpload,
+                  ),
+                  onGoUp: _goUp,
+                  onRefresh: _reload,
+                  onCreateFolder: _createFolder,
+                  onUpload: () => _pickUpload(fromAlbum: false),
+                  onUploadDirectory: _pickUploadDirectory,
+                  onBrowseModeChanged: controller.setBrowseMode,
+                  onThumbnailSizeChanged: controller.setThumbnailSize,
+                  onSortChanged: _setSortOption,
+                  onOpen: _handleOpen,
+                  onPreview: _openPreview,
+                  onDownload: _download,
+                  onDelete: _delete,
+                )
+              : Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      WorkspaceMobileHeader(
+                        path: controller.displayPath(controller.currentPath),
+                        roleLabel: controller.session?.displayName ?? '成员',
+                        canGoUp:
+                            controller.currentPath != AppController.rootPrefix,
+                        browseMode: controller.browseMode,
+                        sortOption: controller.fileSortOption,
+                        onGoUp: _goUp,
+                        onRefresh: _reload,
+                        onBrowseModeChanged: controller.setBrowseMode,
+                        onChooseSort: _showSortSheet,
+                      ),
+                      const SizedBox(height: 12),
+                      if (!canUpload || !canDelete)
+                        Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Text(
+                              '当前用户缺少部分文件操作权限。',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
                             ),
                           ),
                         ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: _buildItemsArea(
+                          controller: controller,
+                          desktop: false,
+                          canUpload: canUpload,
+                        ),
                       ),
-                    const SizedBox(height: 12),
-                    Expanded(
-                      child: _buildItemsArea(
-                        controller: controller,
-                        desktop: false,
-                        canUpload: canUpload,
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
+        ),
       ),
     );
   }
