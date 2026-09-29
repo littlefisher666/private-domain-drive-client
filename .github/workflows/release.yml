@@ -3,8 +3,17 @@ name: 私域网盘发布
 on:
   workflow_dispatch:
     inputs:
+      platforms:
+        description: "本次发布的平台"
+        required: false
+        type: choice
+        default: both
+        options:
+          - both
+          - android
+          - macos
       version:
-        description: "可选；留空时按当前最新版本自动递增 PATCH，例如 1.0.1 → 1.0.2"
+        description: "可选；留空时按所选平台各自最新版本自动递增 PATCH，例如 1.0.1 → 1.0.2"
         required: false
         type: string
       run_tests:
@@ -20,15 +29,21 @@ concurrency:
   group: flutter-release
   cancel-in-progress: false
 
+env:
+  RELEASE_BASE_URL: https://github.com/littlefisher666/private-domain-drive-client
+
 jobs:
   prepare:
     name: 准备发布版本
     runs-on: ubuntu-24.04
     outputs:
-      version_name: ${{ steps.version.outputs.version_name }}
-      current_version: ${{ steps.version.outputs.current_version }}
+      publish_android: ${{ steps.version.outputs.publish_android }}
+      publish_macos: ${{ steps.version.outputs.publish_macos }}
+      android_version_name: ${{ steps.version.outputs.android_version_name }}
+      android_tag_name: ${{ steps.version.outputs.android_tag_name }}
+      macos_version_name: ${{ steps.version.outputs.macos_version_name }}
+      macos_tag_name: ${{ steps.version.outputs.macos_tag_name }}
       build_number: ${{ steps.version.outputs.build_number }}
-      tag_name: ${{ steps.version.outputs.tag_name }}
 
     steps:
       - name: 检出发布代码
@@ -46,44 +61,99 @@ jobs:
         shell: bash
         env:
           REQUESTED_VERSION: ${{ inputs.version }}
+          PLATFORMS: ${{ inputs.platforms }}
         run: |
-          latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)"
-          current_version="${latest_tag#v}"
+          set -euo pipefail
+
+          # 解析版本：入参为平台当前版本（无 tag 时为 1.0.0）与是否手动指定版本，
+          # 输出目标版本号。手动指定时两端统一采用该值，否则按平台独立递增 PATCH。
+          resolve_version() {
+            local platform="$1"
+            local prefix="${platform}/"
+            local latest_tag current_version
+            latest_tag="$(git tag --list "${prefix}v[0-9]*.[0-9]*.[0-9]*" --sort=-version:refname | head -n 1)"
+            echo "平台 ${platform} 最新 tag：${latest_tag:-无}" >&2
+            if [[ -n "$requested_version" ]]; then
+              echo "$requested_version"
+              return
+            fi
+            current_version="${latest_tag#"${prefix}"}"
+            current_version="${current_version#v}"
+            if [[ -z "$current_version" ]]; then
+              echo "1.0.0"
+              return
+            fi
+            if [[ "$current_version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              echo "${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
+            else
+              echo "平台 ${platform} 最新 tag 格式错误：$latest_tag" >&2
+              return 1
+            fi
+          }
+
           requested_version="$REQUESTED_VERSION"
           requested_version="${requested_version#v}"
-          if [[ -z "$requested_version" ]]; then
-            if [[ -z "$current_version" ]]; then
-              version_name="1.0.0"
-            elif [[ "$current_version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-              version_name="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
-            else
-              echo "当前最新 Tag 格式错误：$latest_tag"
-              exit 1
-            fi
-          elif [[ "$requested_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            version_name="$requested_version"
-          else
+          if [[ -n "$requested_version" ]] && ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "版本号格式错误：$REQUESTED_VERSION，应为 1.1.2 或 v1.1.2"
             exit 1
           fi
-          build_number="${GITHUB_RUN_NUMBER}"
-          tag_name="v${version_name}"
 
-          if git rev-parse "$tag_name" >/dev/null 2>&1; then
-            echo "版本 tag 已存在：${tag_name}，请输入其他版本号。"
-            exit 1
+          # REST API 触发时 platforms 可能为空，按默认值 both 处理
+          PLATFORMS="${PLATFORMS:-both}"
+          publish_android=false
+          publish_macos=false
+          case "$PLATFORMS" in
+            both) publish_android=true; publish_macos=true ;;
+            android) publish_android=true ;;
+            macos) publish_macos=true ;;
+            *) echo "无效的发布平台：$PLATFORMS"; exit 1 ;;
+          esac
+
+          android_version=""
+          macos_version=""
+          if [[ "$publish_android" == "true" ]]; then
+            android_version="$(resolve_version android)"
+          fi
+          if [[ "$publish_macos" == "true" ]]; then
+            macos_version="$(resolve_version macos)"
           fi
 
-          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
-          echo "current_version=${current_version:-无发布版本}" >> "$GITHUB_OUTPUT"
+          build_number="${GITHUB_RUN_NUMBER}"
+
+          if [[ "$publish_android" == "true" ]]; then
+            android_tag_name="android/v${android_version}"
+            if git rev-parse "$android_tag_name" >/dev/null 2>&1; then
+              echo "版本 tag 已存在：${android_tag_name}，请输入其他版本号。"
+              exit 1
+            fi
+          fi
+          if [[ "$publish_macos" == "true" ]]; then
+            macos_tag_name="macos/v${macos_version}"
+            if git rev-parse "$macos_tag_name" >/dev/null 2>&1; then
+              echo "版本 tag 已存在：${macos_tag_name}，请输入其他版本号。"
+              exit 1
+            fi
+          fi
+
+          echo "publish_android=$publish_android" >> "$GITHUB_OUTPUT"
+          echo "publish_macos=$publish_macos" >> "$GITHUB_OUTPUT"
+          echo "android_version_name=$android_version" >> "$GITHUB_OUTPUT"
+          echo "android_tag_name=${android_tag_name:-}" >> "$GITHUB_OUTPUT"
+          echo "macos_version_name=$macos_version" >> "$GITHUB_OUTPUT"
+          echo "macos_tag_name=${macos_tag_name:-}" >> "$GITHUB_OUTPUT"
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
-          echo "tag_name=$tag_name" >> "$GITHUB_OUTPUT"
-          echo "发布版本：${tag_name}（构建号：${build_number}）"
+
+          echo "发布平台：$PLATFORMS（Android：$publish_android，macOS：$publish_macos）"
           {
             echo "## 发布版本"
-            echo "- 当前最新版本：\`${current_version:-无发布版本}\`"
-            echo "- 本次发布版本：\`$tag_name\`"
-            echo "- Android 构建号：\`$build_number\`"
+            echo "- 本次发布平台：\`$PLATFORMS\`"
+            if [[ "$publish_android" == "true" ]]; then
+              echo "- Android 发布版本：\`$android_tag_name\`"
+            fi
+            if [[ "$publish_macos" == "true" ]]; then
+              echo "- macOS 发布版本：\`$macos_tag_name\`"
+            fi
+            echo "- 构建号：\`$build_number\`"
             echo "- 运行单元测试：\`${{ inputs.run_tests }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -113,7 +183,7 @@ jobs:
   android:
     name: 构建 Android 安装包
     needs: [prepare, test]
-    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.test.result != 'failure' }}
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.test.result != 'failure' && needs.prepare.outputs.publish_android == 'true' }}
     runs-on: ubuntu-24.04
 
     steps:
@@ -161,14 +231,14 @@ jobs:
         run: |
           flutter build apk --release \
             --target-platform android-arm64 \
-            --build-name "${{ needs.prepare.outputs.version_name }}" \
+            --build-name "${{ needs.prepare.outputs.android_version_name }}" \
             --build-number "${{ needs.prepare.outputs.build_number }}" \
             --dart-define=FC_BASE_URL="${{ vars.FC_BASE_URL }}" \
             --dart-define=FC_ACCESS_KEY_ID="${{ secrets.PDD_FC_INVOKE_ACCESS_KEY_ID }}" \
             --dart-define=FC_ACCESS_KEY_SECRET="${{ secrets.PDD_FC_INVOKE_ACCESS_KEY_SECRET }}"
 
       - name: 整理 APK 发布文件
-        run: cp build/app/outputs/flutter-apk/app-release.apk "private-domain-drive-android-${{ needs.prepare.outputs.tag_name }}.apk"
+        run: cp build/app/outputs/flutter-apk/app-release.apk "private-domain-drive-android-v${{ needs.prepare.outputs.android_version_name }}.apk"
 
       - name: 上传 APK 构建产物
         uses: actions/upload-artifact@v7
@@ -180,7 +250,7 @@ jobs:
   macos:
     name: 构建 macOS 应用
     needs: [prepare, test]
-    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.test.result != 'failure' }}
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.test.result != 'failure' && needs.prepare.outputs.publish_macos == 'true' }}
     runs-on: macos-latest
 
     steps:
@@ -207,7 +277,7 @@ jobs:
       - name: 构建未签名 macOS 应用
         run: |
           flutter build macos --release \
-            --build-name "${{ needs.prepare.outputs.version_name }}" \
+            --build-name "${{ needs.prepare.outputs.macos_version_name }}" \
             --build-number "${{ needs.prepare.outputs.build_number }}" \
             --dart-define=FC_BASE_URL="${{ vars.FC_BASE_URL }}" \
             --dart-define=FC_ACCESS_KEY_ID="${{ secrets.PDD_FC_INVOKE_ACCESS_KEY_ID }}" \
@@ -229,7 +299,7 @@ jobs:
             -srcfolder "$staging_directory" \
             -ov \
             -format UDZO \
-            "$GITHUB_WORKSPACE/private-domain-drive-macos-${{ needs.prepare.outputs.tag_name }}.dmg"
+            "$GITHUB_WORKSPACE/private-domain-drive-macos-v${{ needs.prepare.outputs.macos_version_name }}.dmg"
 
       - name: 上传 macOS 构建产物
         uses: actions/upload-artifact@v7
@@ -241,6 +311,7 @@ jobs:
   release:
     name: 创建 GitHub Release
     needs: [prepare, android, macos]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.android.result != 'failure' && needs.macos.result != 'failure' }}
     runs-on: ubuntu-24.04
 
     steps:
@@ -262,108 +333,185 @@ jobs:
 
       - name: 计算发布文件摘要
         env:
-          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+          PUBLISH_ANDROID: ${{ needs.prepare.outputs.publish_android }}
+          PUBLISH_MACOS: ${{ needs.prepare.outputs.publish_macos }}
+          ANDROID_VERSION: ${{ needs.prepare.outputs.android_version_name }}
+          MACOS_VERSION: ${{ needs.prepare.outputs.macos_version_name }}
         run: |
-          android_name="private-domain-drive-android-${TAG_NAME}.apk"
-          macos_name="private-domain-drive-macos-${TAG_NAME}.dmg"
-          android_digest="sha256:$(sha256sum "dist/$android_name" | awk '{print $1}')"
-          macos_digest="sha256:$(sha256sum "dist/$macos_name" | awk '{print $1}')"
-          echo "android_name=$android_name" >> "$GITHUB_ENV"
-          echo "macos_name=$macos_name" >> "$GITHUB_ENV"
-          echo "android_digest=$android_digest" >> "$GITHUB_ENV"
-          echo "macos_digest=$macos_digest" >> "$GITHUB_ENV"
-
-      - name: 生成更新说明
-        env:
-          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
-        run: |
-          previous_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)"
-          compare_range="${previous_tag:+$previous_tag..}HEAD"
-          echo "提交范围：$compare_range"
-
-          features=""
-          fixes=""
-          others=""
-          while IFS= read -r subject; do
-            if ! printf '%s\n' "$subject" | grep -Eq '^(feat|fix|perf|refactor|style|build)(\([^)]*\))?(!)?: '; then
-              continue
-            fi
-            type="$(printf '%s\n' "$subject" | sed -E 's/^([a-z]+)(\([^)]*\))?(!)?: .*/\1/')"
-            scope="$(printf '%s\n' "$subject" | sed -E -n 's/^[a-z]+\(([^)]*)\).*/\1/p')"
-            breaking="$(printf '%s\n' "$subject" | sed -E 's/^[a-z]+(\([^)]*\))?(!)?: .*/\2/')"
-            desc="$(printf '%s\n' "$subject" | sed -E 's/^[a-z]+(\([^)]*\))?(!)?: //')"
-            if [[ "$breaking" == "!" ]]; then
-              desc="${desc}（不兼容变更）"
-            fi
-            if [[ -n "$scope" ]]; then
-              entry="- ${desc}（${scope}）"
-            else
-              entry="- $desc"
-            fi
-            case "$type" in
-              feat) features="${features}${entry}"$'\n' ;;
-              fix) fixes="${fixes}${entry}"$'\n' ;;
-              *) others="${others}${entry}"$'\n' ;;
-            esac
-          done < <(git log --format=%s "$compare_range")
-
-          if [[ -z "$features$fixes$others" ]]; then
-            others="- 例行发布，无用户可感知的变更。"$'\n'
+          set -euo pipefail
+          if [[ "$PUBLISH_ANDROID" == "true" ]]; then
+            android_name="private-domain-drive-android-v${ANDROID_VERSION}.apk"
+            android_digest="sha256:$(sha256sum "dist/$android_name" | awk '{print $1}')"
+            echo "android_name=$android_name" >> "$GITHUB_ENV"
+            echo "android_digest=$android_digest" >> "$GITHUB_ENV"
+          fi
+          if [[ "$PUBLISH_MACOS" == "true" ]]; then
+            macos_name="private-domain-drive-macos-v${MACOS_VERSION}.dmg"
+            macos_digest="sha256:$(sha256sum "dist/$macos_name" | awk '{print $1}')"
+            echo "macos_name=$macos_name" >> "$GITHUB_ENV"
+            echo "macos_digest=$macos_digest" >> "$GITHUB_ENV"
           fi
 
-          emit_markdown() {
-            if [[ -n "$2" ]]; then
-              echo ""
-              echo "### $1"
-              printf '%s' "$2"
-            fi
-          }
-          {
-            echo "## 更新内容"
-            emit_markdown "新功能" "$features"
-            emit_markdown "修复" "$fixes"
-            emit_markdown "优化" "$others"
-          } > release_notes.md
+      - name: 生成发布说明
+        env:
+          PUBLISH_ANDROID: ${{ needs.prepare.outputs.publish_android }}
+          PUBLISH_MACOS: ${{ needs.prepare.outputs.publish_macos }}
+          ANDROID_TAG_NAME: ${{ needs.prepare.outputs.android_tag_name }}
+          MACOS_TAG_NAME: ${{ needs.prepare.outputs.macos_tag_name }}
+        run: |
+          set -euo pipefail
 
-          emit_plain() {
-            if [[ -n "$2" ]]; then
-              echo "【${1}】"
-              printf '%s' "$2"
-              echo ""
+          # 说明范围：上一次同平台版本 tag 到本次提交；开头标注发布平台并在同步发布时互链对方 Release。
+          generate_notes() {
+            local platform="$1"
+            local new_tag="$2"
+            local other_tag="$3"
+            local prefix="${platform}/"
+            local previous_tag compare_range
+            previous_tag="$(git tag --list "${prefix}v[0-9]*.[0-9]*.[0-9]*" --sort=-version:refname | head -n 1)"
+            compare_range="${previous_tag:+$previous_tag..}HEAD"
+            echo "[$platform] 提交范围：$compare_range"
+
+            local features="" fixes="" others=""
+            while IFS= read -r subject; do
+              if ! printf '%s\n' "$subject" | grep -Eq '^(feat|fix|perf|refactor|style|build)(\([^)]*\))?(!)?: '; then
+                continue
+              fi
+              local type scope breaking desc entry
+              type="$(printf '%s\n' "$subject" | sed -E 's/^([a-z]+)(\([^)]*\))?(!)?: .*/\1/')"
+              scope="$(printf '%s\n' "$subject" | sed -E -n 's/^[a-z]+\(([^)]*)\).*/\1/p')"
+              breaking="$(printf '%s\n' "$subject" | sed -E 's/^[a-z]+(\([^)]*\))?(!)?: .*/\2/')"
+              desc="$(printf '%s\n' "$subject" | sed -E 's/^[a-z]+(\([^)]*\))?(!)?: //')"
+              if [[ "$breaking" == "!" ]]; then
+                desc="${desc}（不兼容变更）"
+              fi
+              if [[ -n "$scope" ]]; then
+                entry="- ${desc}（${scope}）"
+              else
+                entry="- $desc"
+              fi
+              case "$type" in
+                feat) features="${features}${entry}"$'\n' ;;
+                fix) fixes="${fixes}${entry}"$'\n' ;;
+                *) others="${others}${entry}"$'\n' ;;
+              esac
+            done < <(git log --format=%s "$compare_range")
+
+            if [[ -z "$features$fixes$others" ]]; then
+              others="- 例行发布，无用户可感知的变更。"$'\n'
             fi
+
+            local platform_line="发布平台：${platform}"
+            if [[ -n "$other_tag" ]]; then
+              platform_line="${platform_line}（另一端本次同步发布：[${other_tag}](${RELEASE_BASE_URL}/releases/tag/${other_tag})）"
+            fi
+
+            emit_markdown() {
+              if [[ -n "$2" ]]; then
+                echo ""
+                echo "### $1"
+                printf '%s' "$2"
+              fi
+            }
+            {
+              echo "> $platform_line"
+              echo "## 更新内容"
+              emit_markdown "新功能" "$features"
+              emit_markdown "修复" "$fixes"
+              emit_markdown "优化" "$others"
+            } > "release_notes_${platform}.md"
+
+            emit_plain() {
+              if [[ -n "$2" ]]; then
+                echo "【${1}】"
+                printf '%s' "$2"
+                echo ""
+              fi
+            }
+            {
+              emit_plain "新功能" "$features"
+              emit_plain "修复" "$fixes"
+              emit_plain "优化" "$others"
+            } > "release_notes_plain_${platform}.txt"
           }
-          {
-            emit_plain "新功能" "$features"
-            emit_plain "修复" "$fixes"
-            emit_plain "优化" "$others"
-          } > release_notes_plain.txt
+
+          if [[ "$PUBLISH_ANDROID" == "true" ]]; then
+            other_tag=""
+            if [[ "$PUBLISH_MACOS" == "true" ]]; then
+              other_tag="$MACOS_TAG_NAME"
+            fi
+            generate_notes android "$ANDROID_TAG_NAME" "$other_tag"
+          fi
+          if [[ "$PUBLISH_MACOS" == "true" ]]; then
+            other_tag=""
+            if [[ "$PUBLISH_ANDROID" == "true" ]]; then
+              other_tag="$ANDROID_TAG_NAME"
+            fi
+            generate_notes macos "$MACOS_TAG_NAME" "$other_tag"
+          fi
 
           echo "--- Release 说明预览 ---"
-          cat release_notes.md
+          for platform in android macos; do
+            if [[ -f "release_notes_${platform}.md" ]]; then
+              echo "[$platform]"
+              cat "release_notes_${platform}.md"
+            fi
+          done
 
-      - name: 生成 GitHub 更新清单
+      - name: 生成平台更新清单
         env:
-          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
-          VERSION_NAME: ${{ needs.prepare.outputs.version_name }}
+          PUBLISH_ANDROID: ${{ needs.prepare.outputs.publish_android }}
+          PUBLISH_MACOS: ${{ needs.prepare.outputs.publish_macos }}
+          ANDROID_VERSION: ${{ needs.prepare.outputs.android_version_name }}
+          MACOS_VERSION: ${{ needs.prepare.outputs.macos_version_name }}
+          ANDROID_TAG_NAME: ${{ needs.prepare.outputs.android_tag_name }}
+          MACOS_TAG_NAME: ${{ needs.prepare.outputs.macos_tag_name }}
         run: |
-          release_url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/${TAG_NAME}"
-          jq -n \
-            --arg version "$VERSION_NAME" \
-            --rawfile notes release_notes_plain.txt \
-            --arg android_name "$android_name" --arg android_url "$release_url/$android_name" --arg android_digest "$android_digest" \
-            --arg macos_name "$macos_name" --arg macos_url "$release_url/$macos_name" --arg macos_digest "$macos_digest" \
-            '{version: $version, notes: ($notes | gsub("\\s+$"; "")), assets: {android: {name: $android_name, url: $android_url, digest: $android_digest}, macos: {name: $macos_name, url: $macos_url, digest: $macos_digest}}}' \
-            > dist/private-domain-drive-update.json
+          set -euo pipefail
+          # 每个平台 Release 附带自己的清单，assets 仅含该平台字段；清单版本与平台 tag 版本一致。
+          if [[ "$PUBLISH_ANDROID" == "true" ]]; then
+            mkdir -p dist/android
+            android_url="${RELEASE_BASE_URL}/releases/download/${ANDROID_TAG_NAME}/${android_name}"
+            jq -n \
+              --arg version "$ANDROID_VERSION" \
+              --rawfile notes release_notes_plain_android.txt \
+              --arg name "$android_name" --arg url "$android_url" --arg digest "$android_digest" \
+              '{version: $version, notes: ($notes | gsub("\\s+$"; "")), assets: {android: {name: $name, url: $url, digest: $digest}}}' \
+              > dist/android/private-domain-drive-update.json
+          fi
+          if [[ "$PUBLISH_MACOS" == "true" ]]; then
+            mkdir -p dist/macos
+            macos_url="${RELEASE_BASE_URL}/releases/download/${MACOS_TAG_NAME}/${macos_name}"
+            jq -n \
+              --arg version "$MACOS_VERSION" \
+              --rawfile notes release_notes_plain_macos.txt \
+              --arg name "$macos_name" --arg url "$macos_url" --arg digest "$macos_digest" \
+              '{version: $version, notes: ($notes | gsub("\\s+$"; "")), assets: {macos: {name: $name, url: $url, digest: $digest}}}' \
+              > dist/macos/private-domain-drive-update.json
+          fi
 
-      - name: 创建发布标签与 Release
+      - name: 创建 Android Release
+        if: ${{ needs.prepare.outputs.publish_android == 'true' }}
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ needs.prepare.outputs.tag_name }}
+          tag_name: ${{ needs.prepare.outputs.android_tag_name }}
           target_commitish: ${{ github.sha }}
-          name: ${{ needs.prepare.outputs.tag_name }}
-          body_path: release_notes.md
+          name: ${{ needs.prepare.outputs.android_tag_name }}
+          body_path: release_notes_android.md
           generate_release_notes: true
           files: |
             dist/private-domain-drive-android-*.apk
+            dist/android/private-domain-drive-update.json
+
+      - name: 创建 macOS Release
+        if: ${{ needs.prepare.outputs.publish_macos == 'true' }}
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare.outputs.macos_tag_name }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ needs.prepare.outputs.macos_tag_name }}
+          body_path: release_notes_macos.md
+          generate_release_notes: true
+          files: |
             dist/private-domain-drive-macos-*.dmg
-            dist/private-domain-drive-update.json
+            dist/macos/private-domain-drive-update.json

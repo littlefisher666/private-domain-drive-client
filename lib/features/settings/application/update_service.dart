@@ -44,27 +44,36 @@ class UpdateService {
   Future<UpdateCheckResult> checkLatest() async {
     final current = await _versionReader.read();
     debugPrint('[更新检查] 当前版本：${current.name}');
-    final release = await _releaseClient.latest();
+    final isAndroid = defaultTargetPlatform == TargetPlatform.android;
+    final tagPrefix = isAndroid ? 'android/' : 'macos/';
+    final assetPrefix = isAndroid
+        ? 'private-domain-drive-android-v'
+        : 'private-domain-drive-macos-v';
+    final assetSuffix = isAndroid ? '.apk' : '.dmg';
+    final release = await _releaseClient.latestForPlatform(tagPrefix: tagPrefix);
+    if (release == null) {
+      debugPrint('[更新检查] 未找到本平台的发布记录，视为已是最新版本');
+      return UpdateCheckResult(
+        currentVersion: current.name,
+        latestVersion: '',
+      );
+    }
+    debugPrint('[更新检查] 远端版本：${release.version}');
     final comparison = compareVersions(release.version, current.name);
-    debugPrint('[更新检查] 远端版本：${release.version}，比较结果：$comparison');
+    debugPrint('[更新检查] 比较结果：$comparison');
     if (comparison <= 0) {
       return UpdateCheckResult(
         currentVersion: current.name,
         latestVersion: release.version,
       );
     }
-    final prefix = defaultTargetPlatform == TargetPlatform.android
-        ? 'private-domain-drive-android-v'
-        : 'private-domain-drive-macos-v';
-    final suffix =
-        defaultTargetPlatform == TargetPlatform.android ? '.apk' : '.dmg';
-    debugPrint('[更新检查] 查找资产：$prefix*$suffix');
+    debugPrint('[更新检查] 查找资产：$assetPrefix*$assetSuffix');
     final asset = release.assets
         .where((item) =>
-            item.name.startsWith(prefix) && item.name.endsWith(suffix))
+            item.name.startsWith(assetPrefix) && item.name.endsWith(assetSuffix))
         .firstOrNull;
     if (asset == null) {
-      debugPrint('[更新检查] 未找到当前平台的发布资产');
+      debugPrint('[更新检查] 更新清单未包含当前平台的发布资产');
       return UpdateCheckResult(
         currentVersion: current.name,
         latestVersion: release.version,
