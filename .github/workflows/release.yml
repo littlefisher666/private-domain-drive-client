@@ -70,7 +70,7 @@ jobs:
           tag_name="v${version_name}"
 
           if git rev-parse "$tag_name" >/dev/null 2>&1; then
-            echo "版本 tag 已存在：$tag_name，请输入其他版本号。"
+            echo "版本 tag 已存在：${tag_name}，请输入其他版本号。"
             exit 1
           fi
 
@@ -78,7 +78,7 @@ jobs:
           echo "current_version=${current_version:-无发布版本}" >> "$GITHUB_OUTPUT"
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
           echo "tag_name=$tag_name" >> "$GITHUB_OUTPUT"
-          echo "发布版本：$tag_name（构建号：$build_number）"
+          echo "发布版本：${tag_name}（构建号：${build_number}）"
           {
             echo "## 发布版本"
             echo "- 当前最新版本：\`${current_version:-无发布版本}\`"
@@ -244,6 +244,11 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+      - name: 检出发布代码
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
       - name: 下载构建产物
         uses: actions/download-artifact@v8
         with:
@@ -268,6 +273,74 @@ jobs:
           echo "android_digest=$android_digest" >> "$GITHUB_ENV"
           echo "macos_digest=$macos_digest" >> "$GITHUB_ENV"
 
+      - name: 生成更新说明
+        env:
+          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+        run: |
+          previous_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1)"
+          compare_range="${previous_tag:+$previous_tag..}HEAD"
+          echo "提交范围：$compare_range"
+
+          features=""
+          fixes=""
+          others=""
+          while IFS= read -r subject; do
+            if ! printf '%s\n' "$subject" | grep -Eq '^(feat|fix|perf|refactor|style|build)(\([^)]*\))?(!)?: '; then
+              continue
+            fi
+            type="$(printf '%s\n' "$subject" | sed -E 's/^([a-z]+)(\([^)]*\))?(!)?: .*/\1/')"
+            scope="$(printf '%s\n' "$subject" | sed -E -n 's/^[a-z]+\(([^)]*)\).*/\1/p')"
+            breaking="$(printf '%s\n' "$subject" | sed -E 's/^[a-z]+(\([^)]*\))?(!)?: .*/\2/')"
+            desc="$(printf '%s\n' "$subject" | sed -E 's/^[a-z]+(\([^)]*\))?(!)?: //')"
+            if [[ "$breaking" == "!" ]]; then
+              desc="${desc}（不兼容变更）"
+            fi
+            if [[ -n "$scope" ]]; then
+              entry="- ${desc}（${scope}）"
+            else
+              entry="- $desc"
+            fi
+            case "$type" in
+              feat) features="${features}${entry}"$'\n' ;;
+              fix) fixes="${fixes}${entry}"$'\n' ;;
+              *) others="${others}${entry}"$'\n' ;;
+            esac
+          done < <(git log --format=%s "$compare_range")
+
+          if [[ -z "$features$fixes$others" ]]; then
+            others="- 例行发布，无用户可感知的变更。"$'\n'
+          fi
+
+          emit_markdown() {
+            if [[ -n "$2" ]]; then
+              echo ""
+              echo "### $1"
+              printf '%s' "$2"
+            fi
+          }
+          {
+            echo "## 更新内容"
+            emit_markdown "新功能" "$features"
+            emit_markdown "修复" "$fixes"
+            emit_markdown "优化" "$others"
+          } > release_notes.md
+
+          emit_plain() {
+            if [[ -n "$2" ]]; then
+              echo "【${1}】"
+              printf '%s' "$2"
+              echo ""
+            fi
+          }
+          {
+            emit_plain "新功能" "$features"
+            emit_plain "修复" "$fixes"
+            emit_plain "优化" "$others"
+          } > release_notes_plain.txt
+
+          echo "--- Release 说明预览 ---"
+          cat release_notes.md
+
       - name: 生成 GitHub 更新清单
         env:
           TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
@@ -276,9 +349,10 @@ jobs:
           release_url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/${TAG_NAME}"
           jq -n \
             --arg version "$VERSION_NAME" \
+            --rawfile notes release_notes_plain.txt \
             --arg android_name "$android_name" --arg android_url "$release_url/$android_name" --arg android_digest "$android_digest" \
             --arg macos_name "$macos_name" --arg macos_url "$release_url/$macos_name" --arg macos_digest "$macos_digest" \
-            '{version: $version, notes: "", assets: {android: {name: $android_name, url: $android_url, digest: $android_digest}, macos: {name: $macos_name, url: $macos_url, digest: $macos_digest}}}' \
+            '{version: $version, notes: ($notes | gsub("\\s+$"; "")), assets: {android: {name: $android_name, url: $android_url, digest: $android_digest}, macos: {name: $macos_name, url: $macos_url, digest: $macos_digest}}}' \
             > dist/private-domain-drive-update.json
 
       - name: 创建发布标签与 Release
@@ -287,6 +361,7 @@ jobs:
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           target_commitish: ${{ github.sha }}
           name: ${{ needs.prepare.outputs.tag_name }}
+          body_path: release_notes.md
           generate_release_notes: true
           files: |
             dist/private-domain-drive-android-*.apk
