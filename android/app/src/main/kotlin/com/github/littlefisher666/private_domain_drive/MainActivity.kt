@@ -3,6 +3,7 @@ package com.github.littlefisher666.private_domain_drive
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.database.Cursor
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
@@ -23,6 +24,7 @@ class MainActivity : FlutterActivity() {
         private const val EVENTS = "private_domain_drive/share_import_events"
         private const val DOWNLOAD_DIRECTORY = "private_domain_drive/download_directory_picker"
         private const val APP_UPDATE = "private_domain_drive/app_update"
+        private const val SYSTEM_PROXY = "private_domain_drive/system_proxy"
         private const val DOWNLOAD_DIRECTORY_REQUEST = 702
     }
 
@@ -78,6 +80,16 @@ class MainActivity : FlutterActivity() {
                     return@setMethodCallHandler result.success(false)
                 }
                 result.success(openApkInstaller(path))
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SYSTEM_PROXY)
+            .setMethodCallHandler { call, result ->
+                if (call.method != "getDefaultProxy") return@setMethodCallHandler result.notImplemented()
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return@setMethodCallHandler result.success(null)
+                val connectivity = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager
+                val proxy = connectivity?.defaultProxy
+                val host = proxy?.host
+                if (host.isNullOrBlank()) return@setMethodCallHandler result.success(null)
+                result.success(mapOf("host" to host, "port" to proxy.port))
             }
         receiveShareIntent(intent, emit = false)
     }
