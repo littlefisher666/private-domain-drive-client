@@ -1,9 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 
 import '../../../core/version/app_version.dart';
+import 'system_proxy.dart';
 
 class ReleaseAsset {
   const ReleaseAsset({required this.name, required this.url, this.digest});
@@ -39,17 +42,39 @@ class GithubRelease {
 }
 
 class GithubReleaseClient {
-  GithubReleaseClient({http.Client? client})
-      : _client = client ?? http.Client();
-  final http.Client _client;
+  GithubReleaseClient({http.Client? client}) : _injectedClient = client;
+  final http.Client? _injectedClient;
+  http.Client? _resolvedClient;
 
   static const _releasesEndpoint =
       'https://api.github.com/repos/littlefisher666/private-domain-drive-client/releases?per_page=30';
+  static const releasesPageUrl =
+      'https://github.com/littlefisher666/private-domain-drive-client/releases';
   static const _manifestAssetName = 'private-domain-drive-update.json';
   static const _headers = {
     'Accept': 'application/vnd.github+json',
     'User-Agent': 'private-domain-drive-client',
   };
+  static const _requestTimeout = Duration(seconds: 10);
+
+  /// 首次请求时解析一次系统代理并缓存客户端。
+  /// 未检测到系统代理时保持默认直连（HttpClient 自身仍会读取
+  /// http_proxy/https_proxy 环境变量）。
+  Future<http.Client> get _client async {
+    final injected = _injectedClient;
+    if (injected != null) return injected;
+    if (_resolvedClient != null) return _resolvedClient!;
+    final proxy = await resolveSystemProxy();
+    if (proxy != null) {
+      debugPrint('[更新检查] 使用系统代理：$proxy');
+      _resolvedClient = IOClient(
+        HttpClient()..findProxy = (uri) => proxy,
+      );
+    } else {
+      _resolvedClient = http.Client();
+    }
+    return _resolvedClient!;
+  }
 
   /// 查询当前平台的最新发布：从 Releases 列表中按 tag 前缀
   /// （`android/` 或 `macos/`）匹配，并选取其中**版本号最高**的一个，
@@ -92,10 +117,13 @@ class GithubReleaseClient {
         return null;
       }
       debugPrint('[更新检查] 下载更新清单：$manifestUrl');
-      final response = await _client.get(
-        Uri.parse(manifestUrl),
-        headers: _headers,
-      );
+      final client = await _client;
+      final response = await client
+          .get(
+            Uri.parse(manifestUrl),
+            headers: _headers,
+          )
+          .timeout(_requestTimeout);
       debugPrint('[更新检查] 更新清单响应状态：${response.statusCode}');
       if (response.statusCode != 200) {
         debugPrint(
@@ -119,10 +147,13 @@ class GithubReleaseClient {
   }
 
   Future<List<Map<String, dynamic>>> _fetchReleases() async {
-    final response = await _client.get(
-      Uri.parse(_releasesEndpoint),
-      headers: _headers,
-    );
+    final client = await _client;
+    final response = await client
+        .get(
+          Uri.parse(_releasesEndpoint),
+          headers: _headers,
+        )
+        .timeout(_requestTimeout);
     debugPrint('[更新检查] 发布列表响应状态：${response.statusCode}');
     if (response.statusCode != 200) {
       debugPrint(

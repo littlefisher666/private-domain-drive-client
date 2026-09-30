@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/router/route_names.dart';
 import '../../../core/version/app_version.dart';
@@ -86,6 +87,7 @@ class _SettingsPageState extends State<SettingsPage> {
   );
   UpdateCheckResult? _updateCheck;
   bool _checkingUpdate = false;
+  bool _updateCheckFailed = false;
 
   @override
   void initState() {
@@ -106,10 +108,16 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() => _checkingUpdate = true);
     try {
       final result = await _updates.checkLatest();
-      if (mounted) setState(() => _updateCheck = result);
+      if (mounted) {
+        setState(() {
+          _updateCheck = result;
+          _updateCheckFailed = false;
+        });
+      }
     } catch (error, stackTrace) {
       debugPrint('[更新检查] 自动检查失败：$error');
       debugPrintStack(stackTrace: stackTrace, label: '[更新检查] 自动检查异常堆栈');
+      if (mounted) setState(() => _updateCheckFailed = true);
     } finally {
       if (mounted) setState(() => _checkingUpdate = false);
     }
@@ -252,7 +260,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                     title: const Text('检查更新'),
                     subtitle: Text(_updateSubtitle),
-                    trailing: _updateBadge,
+                    trailing: _updateTrailing,
                     onTap: _checkForUpdate,
                   ),
                 ],
@@ -344,6 +352,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   String get _updateSubtitle {
     if (_checkingUpdate) return '正在检查最新版本…';
+    if (_updateCheckFailed) return '网络不稳定，无法访问 GitHub';
     final result = _updateCheck;
     if (result == null) return '从 GitHub Releases 获取稳定版';
     if (result.latestVersion.isEmpty) return '暂未发现本平台的发布版本';
@@ -358,11 +367,31 @@ class _SettingsPageState extends State<SettingsPage> {
         child: CircularProgressIndicator(strokeWidth: 2),
       );
     }
+    if (_updateCheckFailed) {
+      return TextButton(
+        onPressed: _openReleasesPage,
+        child: const Text('手动下载'),
+      );
+    }
     if (_updateCheck?.availableUpdate == null) return null;
     return const Chip(
       label: Text('有新版本'),
       visualDensity: VisualDensity.compact,
     );
+  }
+
+  Future<void> _openReleasesPage() async {
+    final url = Uri.parse(GithubReleaseClient.releasesPageUrl);
+    try {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    } catch (error) {
+      debugPrint('[更新检查] 打开 GitHub 发布页失败：$error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('无法打开浏览器，请手动访问 GitHub Releases')),
+        );
+      }
+    }
   }
 
   Future<void> _logout() async {
@@ -375,6 +404,11 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _checkForUpdate() async {
+    if (_checkingUpdate) return;
+    setState(() {
+      _checkingUpdate = true;
+      _updateCheckFailed = false;
+    });
     try {
       final result = await _updates.checkLatest();
       if (mounted) setState(() => _updateCheck = result);
@@ -420,9 +454,12 @@ class _SettingsPageState extends State<SettingsPage> {
       debugPrint('[更新检查] 页面处理失败：$error');
       debugPrintStack(stackTrace: stackTrace, label: '[更新检查] 页面异常堆栈');
       if (mounted) {
+        setState(() => _updateCheckFailed = true);
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('检查更新失败，请稍后重试')));
       }
+    } finally {
+      if (mounted) setState(() => _checkingUpdate = false);
     }
   }
 
