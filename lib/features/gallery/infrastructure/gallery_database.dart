@@ -26,47 +26,69 @@ class GalleryDatabase {
         '${support.path}${_safe(accountKey)}gallery_meta.db';
     _database = await openDatabase(
       path,
-      version: 1,
-      onConfigure: (database) => database.execute('PRAGMA journal_mode=WAL'),
+      version: 7,
+      onUpgrade: (database, oldVersion, newVersion) async {
+        // v2-v4：修复早期版本写坏拍摄时间的索引（EXIF 截断解析、
+        // 非标准日期尾巴、HEIC 支持），清空照片条目全量重扫。
+        // v5/v6：无 EXIF 时新增文件名/目录日期推断（v6 补充 14 位
+        // 连写时间戳），仅重置索引元信息触发增量修复重扫（拍摄
+        // 时间正确的条目直接复用）。
+        // v7：上传路径补齐同一推断，修复存量上传条目拍摄时间等于
+        // 上传时间的问题，同样仅重置索引元信息触发增量重扫。
+        if (oldVersion < 4) {
+          await database.execute('DROP TABLE IF EXISTS photo_entries');
+        }
+        await database.execute('DROP TABLE IF EXISTS index_meta');
+        await _createIndexTables(database);
+      },
       onCreate: (database, version) async {
-        await database.execute(<String>[
-          'CREATE TABLE photo_entries (',
-          'key TEXT PRIMARY KEY,',
-          'media INTEGER NOT NULL,',
-          'taken_at INTEGER NOT NULL,',
-          'size INTEGER NOT NULL,',
-          'dir TEXT NOT NULL,',
-          'thumb_key TEXT,',
-          'mtime INTEGER,',
-          'width INTEGER,',
-          'height INTEGER,',
-          'lat REAL,',
-          'lon REAL,',
-          'device TEXT',
-          ')',
-        ].join());
-        await database.execute('CREATE INDEX idx_taken_at ON photo_entries(taken_at)');
-        await database.execute(<String>[
-          'CREATE TABLE original_cache (',
-          'key TEXT PRIMARY KEY,',
-          'file_path TEXT NOT NULL,',
-          'size INTEGER NOT NULL,',
-          'cached_at INTEGER NOT NULL,',
-          'last_access INTEGER NOT NULL',
-          ')',
-        ].join());
-        await database.execute(<String>[
-          'CREATE TABLE index_meta (',
-          'id INTEGER PRIMARY KEY CHECK (id = 1),',
-          'version INTEGER NOT NULL,',
-          'scanned_at INTEGER,',
-          'needs_repair INTEGER NOT NULL DEFAULT 0',
-          ')',
-        ].join());
+        await _createIndexTables(database);
+        await _createOriginalCacheTable(database);
       },
     );
     _openedAccountKey = accountKey;
     return _database!;
+  }
+
+  Future<void> _createIndexTables(Database database) async {
+    await database.execute(<String>[
+      'CREATE TABLE IF NOT EXISTS photo_entries (',
+      'key TEXT PRIMARY KEY,',
+      'media INTEGER NOT NULL,',
+      'taken_at INTEGER NOT NULL,',
+      'size INTEGER NOT NULL,',
+      'dir TEXT NOT NULL,',
+      'thumb_key TEXT,',
+      'mtime INTEGER,',
+      'width INTEGER,',
+      'height INTEGER,',
+      'lat REAL,',
+      'lon REAL,',
+      'device TEXT',
+      ')',
+    ].join());
+    await database.execute(
+        'CREATE INDEX IF NOT EXISTS idx_taken_at ON photo_entries(taken_at)');
+    await database.execute(<String>[
+      'CREATE TABLE IF NOT EXISTS index_meta (',
+      'id INTEGER PRIMARY KEY CHECK (id = 1),',
+      'version INTEGER NOT NULL,',
+      'scanned_at INTEGER,',
+      'needs_repair INTEGER NOT NULL DEFAULT 0',
+      ')',
+    ].join());
+  }
+
+  Future<void> _createOriginalCacheTable(Database database) async {
+    await database.execute(<String>[
+      'CREATE TABLE IF NOT EXISTS original_cache (',
+      'key TEXT PRIMARY KEY,',
+      'file_path TEXT NOT NULL,',
+      'size INTEGER NOT NULL,',
+      'cached_at INTEGER NOT NULL,',
+      'last_access INTEGER NOT NULL',
+      ')',
+    ].join());
   }
 
   Future<void> close() async {

@@ -90,7 +90,7 @@ void main() {
     expect(native.processes, contains('image/exif'));
   });
 
-  test('图片处理未返回 EXIF 时从 JPEG 文件头读取拍摄时间', () async {
+  test('JPEG 文件头已含拍摄时间时直接解析，不发图片处理请求', () async {
     final native = _FakeNative()
       ..processedBytesError = PlatformException(code: 'invalidRequest')
       ..bytesResult = _jpegHeaderWithTakenAt('2026:09:08 19:25:41');
@@ -101,8 +101,67 @@ void main() {
     );
 
     expect(info.takenAt, DateTime(2026, 9, 8, 19, 25, 41));
-    expect(native.processes, <String?>['image/exif', 'image/exif', null]);
+    expect(native.processes, <String?>[null]);
     expect(native.maxBytesRequests.last, 2 * 1024);
+  });
+
+  test('APP1 段超长截断时仍解析出已取回字节内的拍摄时间', () async {
+    final native = _FakeNative()
+      ..bytesResult = _truncatedLargeExifJpeg('2026:09:08 19:25:41');
+
+    final info = await OssClient(native: native).readImageExif(
+      'shared/相册/camera.jpg',
+      _session(),
+    );
+
+    expect(info.takenAt, DateTime(2026, 9, 8, 19, 25, 41));
+    expect(native.processes, <String?>[null]);
+    expect(native.maxBytesRequests.last, 2 * 1024);
+  });
+
+  test('EXIF 日期串带非标准尾巴时仍解析出拍摄时间', () async {
+    // 实测相机相册导出的日期串形如 "2019:06:14 12:20:38下午"。
+    final native = _FakeNative()
+      ..bytesResult = _jpegHeaderWithDateValue(
+        ascii.encode('2019:06:14 12:20:38') + utf8.encode('下午') + <int>[0],
+      );
+
+    final info = await OssClient(native: native).readImageExif(
+      'shared/相册/IMG_0079.JPG',
+      _session(),
+    );
+
+    expect(info.takenAt, DateTime(2019, 6, 14, 12, 20, 38));
+    expect(native.processes, <String?>[null]);
+  });
+
+  test('HEIC 头部扫描 TIFF EXIF 解析拍摄时间，不发图片处理请求', () async {
+    final native = _FakeNative()
+      ..bytesResult = _heicHeaderWithTakenAt('2020:05:13 18:53:55');
+
+    final info = await OssClient(native: native).readImageExif(
+      'shared/相册/IMG_0561.HEIC',
+      _session(),
+    );
+
+    expect(info.takenAt, DateTime(2020, 5, 13, 18, 53, 55));
+    expect(native.processes, <String?>[null]);
+    expect(native.maxBytesRequests.last, 2 * 1024);
+  });
+
+  test('头部解析不出拍摄时间时回退图片处理 EXIF', () async {
+    final native = _FakeNative()
+      ..bytesResult = Uint8List.fromList(
+        utf8.encode('{"DateTimeOriginal":"2026:09:08 19:25:41"}'),
+      );
+
+    final info = await OssClient(native: native).readImageExif(
+      'shared/相册/test.heic',
+      _session(),
+    );
+
+    expect(info.takenAt, DateTime(2026, 9, 8, 19, 25, 41));
+    expect(native.processes, <String?>[null, 'image/exif']);
   });
 
   test('缩略图请求会重新同步原生 OSS 会话', () async {
@@ -197,64 +256,70 @@ void main() {
 Uint8List _jpegHeaderWithTakenAt(String date) {
   final dateBytes = ascii.encode('$date\x00');
   expect(dateBytes, hasLength(20));
+  return _jpegHeaderWithDateValue(dateBytes);
+}
+
+/// 日期串允许任意字节（如带"下午"等非标准尾巴的相册导出文件）。
+Uint8List _jpegHeaderWithDateValue(List<int> dateValue) {
+  final tiff = _exifTiffBlob(dateValue);
+  final app1Length = 2 + 6 + tiff.length;
   return Uint8List.fromList(<int>[
-    0xff,
-    0xd8,
-    0xff,
-    0xe1,
-    0x00,
-    0x48,
-    0x45,
-    0x78,
-    0x69,
-    0x66,
-    0x00,
-    0x00,
-    0x4d,
-    0x4d,
-    0x00,
-    0x2a,
-    0x00,
-    0x00,
-    0x00,
-    0x08,
-    0x00,
-    0x01,
-    0x87,
-    0x69,
-    0x00,
-    0x04,
-    0x00,
-    0x00,
-    0x00,
-    0x01,
-    0x00,
-    0x00,
-    0x00,
-    0x1a,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x01,
-    0x90,
-    0x03,
-    0x00,
-    0x02,
-    0x00,
-    0x00,
-    0x00,
-    0x14,
-    0x00,
-    0x00,
-    0x00,
-    0x2c,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    ...dateBytes,
+    0xff, 0xd8, 0xff, 0xe1,
+    (app1Length >> 8) & 0xff, app1Length & 0xff,
+    0x45, 0x78, 0x69, 0x66, 0x00, 0x00,
+    ...tiff,
+  ]);
+}
+
+/// 大端 TIFF：IFD0 经 Exif 子 IFD（0x8769）指向 DateTimeOriginal。
+List<int> _exifTiffBlob(List<int> dateValue) {
+  const valueOffset = 44;
+  final tiff = <int>[
+    0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x08,
+    0x00, 0x01,
+    0x87, 0x69, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x1a,
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01,
+    0x90, 0x03, 0x00, 0x02,
+    (dateValue.length >> 24) & 0xff,
+    (dateValue.length >> 16) & 0xff,
+    (dateValue.length >> 8) & 0xff,
+    dateValue.length & 0xff,
+    (valueOffset >> 24) & 0xff,
+    (valueOffset >> 16) & 0xff,
+    (valueOffset >> 8) & 0xff,
+    valueOffset & 0xff,
+    0x00, 0x00, 0x00, 0x00,
+    ...dateValue,
+  ];
+  assert(tiff.length == valueOffset + dateValue.length);
+  return tiff;
+}
+
+Uint8List _heicHeaderWithTakenAt(String date) {
+  final dateBytes = ascii.encode('$date\x00');
+  final ftyp = <int>[
+    0x00, 0x00, 0x00, 0x18,
+    0x66, 0x74, 0x79, 0x70, // 'ftyp'
+    0x68, 0x65, 0x69, 0x63, // 'heic'
+    0x00, 0x00, 0x00, 0x00,
+    0x6d, 0x69, 0x66, 0x31,
+    0x68, 0x65, 0x69, 0x63,
+  ];
+  final filler = List<int>.filled(512, 0x00);
+  return Uint8List.fromList(
+    <int>[...ftyp, ...filler, ..._exifTiffBlob(dateBytes)],
+  );
+}
+
+/// 相机照片常见结构：APP1/EXIF 段声明 65534 字节，Range 探测只取回前 2KB。
+Uint8List _truncatedLargeExifJpeg(String date) {
+  final full = _jpegHeaderWithTakenAt(date).toList();
+  full[4] = 0xff;
+  full[5] = 0xfe;
+  return Uint8List.fromList(<int>[
+    ...full,
+    ...List<int>.filled(2 * 1024 - full.length, 0),
   ]);
 }
 

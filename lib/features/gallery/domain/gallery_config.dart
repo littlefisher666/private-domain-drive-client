@@ -17,6 +17,10 @@ class GalleryConfig {
   /// 容量清理的目标阈值（清理至该值以下，约 4.5 GB）。
   static const int cacheCapacityTarget = cacheCapacityLimit - 512 * 1024 * 1024;
 
+  /// 超过该大小的图片不走 OSS 图片处理（服务端限制 ImageTooLarge），
+  /// 改为客户端本地生成缩略图上传到 thumbs/。
+  static const int oversizedImageLimit = 20 * 1024 * 1024;
+
   /// OSS 索引清单对象（相对会话根前缀）。
   static const String manifestRelativeKey = 'index/photos.json';
 
@@ -26,6 +30,11 @@ class GalleryConfig {
   /// 清单写入冲突重试上限。
   static const int manifestWriteMaxAttempts = 3;
 
-  /// 全量扫描时并发解析 EXIF 的请求数。
-  static const int scanExifConcurrency = 4;
+  /// 清单对象读取上限（数万条目时可超 1MB，不适用文本预览的 512KB 上限）。
+  static const int manifestMaxBytes = 8 * 1024 * 1024;
+
+  /// 全量扫描时并发解析 EXIF 的请求数（工作池常驻 worker 数）。
+  /// 受原生 OSS SDK 并发稳定性约束，过高会在原生 HTTP 客户端
+  /// 会话释放时触发段错误（实测 96 必崩，32 稳定）。
+  static const int scanExifConcurrency = 32;
 }

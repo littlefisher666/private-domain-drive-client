@@ -27,6 +27,7 @@ class _GalleryPageState extends State<GalleryPage> {
 
   // 框选状态（仅桌面端）。
   final Map<String, GlobalKey> _cellKeys = <String, GlobalKey>{};
+  final Set<String> _collapsedGroups = <String>{};
   Rect? _selectionRect;
   Offset? _dragStart;
   bool _dragActive = false;
@@ -77,9 +78,8 @@ class _GalleryPageState extends State<GalleryPage> {
 
     return Scaffold(
       backgroundColor: widget.desktopChrome ? scheme.surface : null,
-      appBar: widget.desktopChrome
-          ? null
-          : _MobileAppBar(controller: controller),
+      appBar:
+          widget.desktopChrome ? null : _MobileAppBar(controller: controller),
       body: Column(
         children: <Widget>[
           if (widget.desktopChrome)
@@ -152,32 +152,41 @@ class _GalleryPageState extends State<GalleryPage> {
 
     final items = <Widget>[
       for (final group in groups) ...<Widget>[
-        _GroupHeader(group: group),
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 3),
-          gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: cellExtent,
-            mainAxisSpacing: 2,
-            crossAxisSpacing: 2,
-            childAspectRatio: 1,
-          ),
-          itemCount: group.entries.length,
-          itemBuilder: (context, index) {
-            final entry = group.entries[index];
-            return _PhotoCell(
-              controller: controller,
-              entry: entry,
-              cellKey: _cellKeys.putIfAbsent(entry.key, GlobalKey.new),
-              desktop: widget.desktopChrome,
-              onTap: () => _onCellTap(controller, entry),
-              onLongPress: widget.desktopChrome
-                  ? null
-                  : () => _onCellLongPress(controller, entry),
-            );
-          },
+        _GroupHeader(
+          group: group,
+          collapsed: _collapsedGroups.contains(group.key),
+          onToggle: () => setState(() {
+            if (!_collapsedGroups.remove(group.key)) {
+              _collapsedGroups.add(group.key);
+            }
+          }),
         ),
+        if (!_collapsedGroups.contains(group.key))
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 3),
+            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: cellExtent,
+              mainAxisSpacing: 2,
+              crossAxisSpacing: 2,
+              childAspectRatio: 1,
+            ),
+            itemCount: group.entries.length,
+            itemBuilder: (context, index) {
+              final entry = group.entries[index];
+              return _PhotoCell(
+                controller: controller,
+                entry: entry,
+                cellKey: _cellKeys.putIfAbsent(entry.key, GlobalKey.new),
+                desktop: widget.desktopChrome,
+                onTap: () => _onCellTap(controller, entry),
+                onLongPress: widget.desktopChrome
+                    ? null
+                    : () => _onCellLongPress(controller, entry),
+              );
+            },
+          ),
       ],
     ];
 
@@ -199,8 +208,7 @@ class _GalleryPageState extends State<GalleryPage> {
             onPointerMove: (event) {
               final start = _dragStart;
               if (start == null) return;
-              if (!_dragActive &&
-                  (event.position - start).distance < 5) {
+              if (!_dragActive && (event.position - start).distance < 5) {
                 return;
               }
               _dragActive = true;
@@ -278,8 +286,7 @@ class _GalleryPageState extends State<GalleryPage> {
       controller.toggleSelection(entry);
       return;
     }
-    if (widget.desktopChrome &&
-        HardwareKeyboard.instance.isMetaPressed) {
+    if (widget.desktopChrome && HardwareKeyboard.instance.isMetaPressed) {
       controller.toggleSelection(entry);
       return;
     }
@@ -342,39 +349,58 @@ class _DesktopShortcuts extends StatelessWidget {
 }
 
 class _GroupHeader extends StatelessWidget {
-  const _GroupHeader({required this.group});
+  const _GroupHeader({
+    required this.group,
+    required this.collapsed,
+    required this.onToggle,
+  });
 
   final TimelineGroup group;
+  final bool collapsed;
+  final VoidCallback onToggle;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.baseline,
-        textBaseline: TextBaseline.alphabetic,
-        children: <Widget>[
-          Text(
-            group.label,
-            style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w600,
+    return InkWell(
+      onTap: onToggle,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: <Widget>[
+            Text(
+              group.label,
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            '${group.entries.length} 张',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+            const SizedBox(width: 8),
+            Text(
+              '${group.entries.length} 张',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
-          ),
-        ],
+            const Spacer(),
+            AnimatedRotation(
+              turns: collapsed ? -0.25 : 0,
+              duration: const Duration(milliseconds: 150),
+              child: Icon(
+                Icons.expand_more,
+                size: 20,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _PhotoCell extends StatelessWidget {
+class _PhotoCell extends StatefulWidget {
   const _PhotoCell({
     required this.controller,
     required this.entry,
@@ -392,102 +418,120 @@ class _PhotoCell extends StatelessWidget {
   final VoidCallback? onLongPress;
 
   @override
+  State<_PhotoCell> createState() => _PhotoCellState();
+}
+
+class _PhotoCellState extends State<_PhotoCell> {
+  bool _hovering = false;
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return KeyedSubtree(
-      key: cellKey,
-      child: GestureDetector(
-        onTap: onTap,
-        onLongPress: onLongPress,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(desktop ? 6 : 2),
-          child: Stack(
-            fit: StackFit.expand,
-            children: <Widget>[
-              ColoredBox(
-                color: scheme.surfaceContainerHighest,
-                child: _ThumbnailView(controller: controller, entry: entry),
-              ),
-              // 云朵角标：有角标 = 原图未缓存本机。
-              ValueListenableBuilder<Set<String>>(
-                valueListenable: controller.cachedKeysListenable,
-                builder: (context, cached, _) {
-                  if (cached.contains(entry.key)) return const SizedBox.shrink();
-                  return Positioned(
-                    left: 6,
+      key: widget.cellKey,
+      child: MouseRegion(
+        onEnter:
+            widget.desktop ? (_) => setState(() => _hovering = true) : null,
+        onExit:
+            widget.desktop ? (_) => setState(() => _hovering = false) : null,
+        child: GestureDetector(
+          onTap: widget.onTap,
+          onLongPress: widget.onLongPress,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(widget.desktop ? 6 : 2),
+            child: Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                ColoredBox(
+                  color: scheme.surfaceContainerHighest,
+                  child: _ThumbnailView(
+                      controller: widget.controller, entry: widget.entry),
+                ),
+                // 云朵角标：有角标 = 原图未缓存本机。
+                ValueListenableBuilder<Set<String>>(
+                  valueListenable: widget.controller.cachedKeysListenable,
+                  builder: (context, cached, _) {
+                    if (cached.contains(widget.entry.key)) {
+                      return const SizedBox.shrink();
+                    }
+                    return Positioned(
+                      left: 6,
+                      bottom: 6,
+                      child: _CloudBadge(),
+                    );
+                  },
+                ),
+                if (widget.entry.mediaType == PhotoMediaType.video)
+                  Positioned(
+                    right: 6,
                     bottom: 6,
-                    child: _CloudBadge(),
-                  );
-                },
-              ),
-              if (entry.mediaType == PhotoMediaType.video)
-                Positioned(
-                  right: 6,
-                  bottom: 6,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 5, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.55),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: const Icon(
-                      Icons.videocam,
-                      size: 12,
-                      color: Colors.white,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 5, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.55),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Icon(
+                        Icons.videocam,
+                        size: 12,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
-                ),
-              ValueListenableBuilder<Set<String>>(
-                valueListenable: controller.selectionListenable,
-                builder: (context, selected, _) {
-                  final isSelected = selected.contains(entry.key);
-                  final selecting = selected.isNotEmpty;
-                  if (!isSelected && !selecting && !desktop) {
-                    return const SizedBox.shrink();
-                  }
-                  return Positioned(
-                    top: 6,
-                    left: 6,
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 120),
-                      width: 20,
-                      height: 20,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: isSelected
-                            ? scheme.primary
-                            : Colors.black.withValues(alpha: 0.35),
-                        border: isSelected
-                            ? null
-                            : Border.all(color: Colors.white, width: 1.5),
-                      ),
-                      child: isSelected
-                          ? const Icon(Icons.check,
-                              size: 14, color: Colors.white)
-                          : null,
-                    ),
-                  );
-                },
-              ),
-              ValueListenableBuilder<Set<String>>(
-                valueListenable: controller.selectionListenable,
-                builder: (context, selected, _) {
-                  return IgnorePointer(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        border: selected.contains(entry.key)
-                            ? Border.all(
-                                color: scheme.primary,
-                                width: 2.5,
-                              )
+                ValueListenableBuilder<Set<String>>(
+                  valueListenable: widget.controller.selectionListenable,
+                  builder: (context, selected, _) {
+                    final isSelected = selected.contains(widget.entry.key);
+                    final selecting = selected.isNotEmpty;
+                    if (!isSelected &&
+                        !selecting &&
+                        !(_hovering && widget.desktop)) {
+                      return const SizedBox.shrink();
+                    }
+                    return Positioned(
+                      top: 6,
+                      left: 6,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 120),
+                        width: 20,
+                        height: 20,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: isSelected
+                              ? scheme.primary
+                              : Colors.black.withValues(alpha: 0.35),
+                          border: isSelected
+                              ? null
+                              : Border.all(color: Colors.white, width: 1.5),
+                        ),
+                        child: isSelected
+                            ? const Icon(Icons.check,
+                                size: 14, color: Colors.white)
                             : null,
                       ),
-                    ),
-                  );
-                },
-              ),
-            ],
+                    );
+                  },
+                ),
+                ValueListenableBuilder<Set<String>>(
+                  valueListenable: widget.controller.selectionListenable,
+                  builder: (context, selected, _) {
+                    return IgnorePointer(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          border: selected.contains(widget.entry.key)
+                              ? Border.all(
+                                  color: scheme.primary,
+                                  width: 2.5,
+                                )
+                              : null,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -507,18 +551,27 @@ class _ThumbnailView extends StatefulWidget {
 
 class _ThumbnailViewState extends State<_ThumbnailView> {
   late Future<List<int>?> _future;
+  String? _fetchedThumbKey;
 
   @override
   void initState() {
     super.initState();
+    _startFetch();
+  }
+
+  void _startFetch() {
+    _fetchedThumbKey = widget.entry.thumbKey;
     _future = widget.controller.loadGridThumbnail(widget.entry);
   }
 
   @override
   void didUpdateWidget(covariant _ThumbnailView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.entry.key != widget.entry.key) {
-      _future = widget.controller.loadGridThumbnail(widget.entry);
+    // key 或缩略图映射变化都重载：存量缩略图补齐完成后，同一 key 的
+    // 条目会从"无映射"变为"有映射"，需要重试加载。
+    if (oldWidget.entry.key != widget.entry.key ||
+        widget.entry.thumbKey != _fetchedThumbKey) {
+      _startFetch();
     }
   }
 
@@ -626,7 +679,8 @@ class _MobileBatchBar extends StatelessWidget {
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
           border: Border(
-            top: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+            top:
+                BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
           ),
         ),
         child: Row(
@@ -769,18 +823,21 @@ class _DesktopSelectionBar extends StatelessWidget {
                 onPressed: controller.selectAll,
                 child: const Text('全选'),
               ),
-              TextButton(
-                onPressed: () async {
-                  final entries = selected
-                      .map(controller.entryOfKey)
-                      .whereType<PhotoEntry>();
-                  final error = await controller.copyToClipboard(entries);
-                  if (context.mounted) {
-                    AppFeedback.showSnack(
-                        context, error ?? '已复制 ${entries.length} 张原图到剪贴板');
-                  }
-                },
-                child: const Text('复制'),
+              ValueListenableBuilder<bool>(
+                valueListenable: controller.clipboardCopiedListenable,
+                builder: (context, copied, _) => TextButton(
+                  onPressed: () async {
+                    final entries = selected
+                        .map(controller.entryOfKey)
+                        .whereType<PhotoEntry>();
+                    final error = await controller.copyToClipboard(entries);
+                    if (context.mounted) {
+                      AppFeedback.showSnack(
+                          context, error ?? '已复制 ${entries.length} 张原图到剪贴板');
+                    }
+                  },
+                  child: Text(copied ? '已复制' : '复制'),
+                ),
               ),
               TextButton(
                 onPressed: () {
@@ -905,9 +962,7 @@ class _ScanProgressView extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                total > 0
-                    ? '已处理 $processed / $total 张'
-                    : '正在扫描网盘中的照片和视频',
+                total > 0 ? '已处理 $processed / $total 张' : '正在扫描网盘中的照片和视频',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),

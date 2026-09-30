@@ -98,6 +98,8 @@ private final class DownloadStreamDelegate: NSObject, URLSessionDataDelegate {
 
 public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private var client: Client?
+    private var processedObjectClient: Client?
+    private var sessionValues: OssBridgeContract.SessionValues?
     private var bucket: String?
     private var eventSink: FlutterEventSink?
     private var transfers: [String: Task<Void, Never>] = [:]
@@ -171,6 +173,7 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
 
     private func configure(_ arguments: [String: Any]) throws {
         let values = try OssBridgeContract.session(arguments)
+        sessionValues = values
         // 登录下发的 pdd-client 长期 AccessKey，直接签名请求，不使用 SecurityToken。
         let credentials = StaticCredentialsProvider(
             accessKeyId: values.accessKeyId,
@@ -188,6 +191,8 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
         transfers.values.forEach { $0.cancel() }
         transfers.removeAll()
         client = nil
+        processedObjectClient = nil
+        sessionValues = nil
         bucket = nil
     }
 
@@ -409,10 +414,13 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
             key: key,
             range: arguments["range"] as? String
         )
+        var ossClient = client
         if let process = arguments["process"] as? String, !process.isEmpty {
             request.addParameter("x-oss-process", process)
+            let (processedClient, _) = try processedSession()
+            ossClient = processedClient
         }
-        let response = try await client.getObject(request)
+        let response = try await ossClient.getObject(request)
         if let length = response.contentLength, length > maxBytes {
             throw OssBridgeContract.BridgeError.contentTooLarge
         }
@@ -493,6 +501,29 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
             throw OssBridgeContract.BridgeError.notConfigured
         }
         return (client, bucket)
+    }
+
+    /// 带 x-oss-process 的 GET 走独立客户端：OSS 对 video/snapshot 返回
+    /// 的是原视频的 CRC 而非截帧结果的 CRC，SDK 的下载 CRC 校验必然
+    /// 失败（InconsistentError）。SDK 0.4.0 把 getObject 的校验挂在
+    /// 上传校验开关上，这里仅对该客户端关闭，常规下载/上传校验不变。
+    private func processedSession() throws -> (Client, String) {
+        guard let values = sessionValues, let bucket else {
+            throw OssBridgeContract.BridgeError.notConfigured
+        }
+        if processedObjectClient == nil {
+            let credentials = StaticCredentialsProvider(
+                accessKeyId: values.accessKeyId,
+                accessKeySecret: values.accessKeySecret
+            )
+            let configuration = Configuration.default()
+                .withCredentialsProvider(credentials)
+                .withRegion(values.region)
+                .withEndpoint(values.endpoint)
+                .withUploadCRC64Validation(false)
+            processedObjectClient = Client(configuration)
+        }
+        return (processedObjectClient!, bucket)
     }
 
     private func emitProgress(_ taskId: String, _ direction: String, _ transferred: Int64, _ total: Int64) {

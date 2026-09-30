@@ -9,6 +9,7 @@ import '../../../core/errors/app_error.dart';
 import '../../auth/domain/user_session.dart';
 import '../../workspace/infrastructure/oss_client.dart';
 import '../domain/gallery_config.dart';
+import '../domain/photo_date_hints.dart';
 import '../domain/photo_entry.dart';
 import '../domain/photo_manifest.dart';
 import 'gallery_database.dart';
@@ -70,7 +71,11 @@ class PhotoIndexRepository {
     final key = manifestKey(session);
     final page = await _ossClient.listAllObjects(key, session);
     if (page.isEmpty) return null;
-    final bytes = await _ossClient.download(key, session);
+    final bytes = await _ossClient.download(
+      key,
+      session,
+      maxBytes: GalleryConfig.manifestMaxBytes,
+    );
     final manifest = PhotoManifest.decode(utf8.decode(bytes));
     final etag = page.firstWhere((object) => object.key == key).etag;
     return (manifest, etag ?? '');
@@ -101,6 +106,7 @@ class PhotoIndexRepository {
               scannedAt: null,
               needsRepair: false,
               entries: const <PhotoEntry>[],
+              formatVersion: PhotoManifest.currentFormatVersion,
             );
       } on FormatException {
         return ManifestWriteResult.conflictExceeded;
@@ -112,6 +118,7 @@ class PhotoIndexRepository {
           scannedAt: next.scannedAt,
           needsRepair: next.needsRepair,
           entries: next.entries,
+          formatVersion: next.formatVersion,
         );
       }
       // 写入前复查 ETag：变化说明期间有并发写入，退避重试。
@@ -158,23 +165,51 @@ class PhotoIndexRepository {
     }
     onProgress?.call(0, mediaObjects.length);
 
-    final entries = <PhotoEntry>[];
-    for (var start = 0;
-        start < mediaObjects.length;
-        start += GalleryConfig.scanExifConcurrency) {
-      final chunk = mediaObjects.sublist(
-        start,
-        min(start + GalleryConfig.scanExifConcurrency, mediaObjects.length),
-      );
-      final parsed = await Future.wait(chunk.map(
-        (object) => _scanEntry(session, object),
-      ));
-      for (final entry in parsed) {
-        if (entry != null) entries.add(entry);
+    // 断点续扫：上次扫描（含中途退出）已写入本地副本的条目，
+    // 若对象大小与修改时间未变则直接复用，跳过 EXIF 请求。
+    final existingEntries = <String, PhotoEntry>{
+      for (final entry in await _database.readAllEntries()) entry.key: entry,
+    };
+    bool reusable(PhotoEntry entry, OssNativeObject object) {
+      if (entry.size != object.size ||
+          entry.modifiedMs != object.lastModifiedMilliseconds) {
+        return false;
       }
-      onProgress?.call(min(start + chunk.length, mediaObjects.length),
-          mediaObjects.length);
+      // 早期版本把无 EXIF 条目的拍摄时间直接写成上传时间；拍摄时间
+      // 与上传时间一致的条目重扫一次，让文件名/目录日期推断生效。
+      return entry.takenAt.millisecondsSinceEpoch !=
+          (object.lastModifiedMilliseconds ??
+              entry.takenAt.millisecondsSinceEpoch);
     }
+
+    // 工作池模式：N 个常驻 worker 领完一个立刻领下一个，避免
+    // 分批栅栏下单个慢请求阻塞整批。Dart 单线程模型下 cursor
+    // 自增与 entries 追加不存在数据竞争。
+    final entries = <PhotoEntry>[];
+    var cursor = 0;
+    var processed = 0;
+    Future<void> worker() async {
+      while (cursor < mediaObjects.length) {
+        final object = mediaObjects[cursor++];
+        final cached = existingEntries[object.key];
+        final reused = cached != null && reusable(cached, object);
+        final entry =
+            reused ? cached : await _scanEntry(session, object, cached: cached);
+        if (entry != null) {
+          entries.add(entry);
+          if (!reused) {
+            // 中途退出也能保留已解析条目，下次扫描直接复用。
+            await _database.upsertEntries(<PhotoEntry>[entry]);
+          }
+        }
+        onProgress?.call(++processed, mediaObjects.length);
+      }
+    }
+
+    await Future.wait(List.generate(
+      min(GalleryConfig.scanExifConcurrency, mediaObjects.length),
+      (_) => worker(),
+    ));
     entries.sort((left, right) => right.takenAt.compareTo(left.takenAt));
 
     final manifest = PhotoManifest(
@@ -182,6 +217,7 @@ class PhotoIndexRepository {
       scannedAt: DateTime.now(),
       needsRepair: false,
       entries: entries,
+      formatVersion: PhotoManifest.currentFormatVersion,
     );
     await _database.replaceEntries(entries);
     await _database.writeIndexMeta(PhotoIndexMeta(
@@ -214,13 +250,36 @@ class PhotoIndexRepository {
       scannedAt: manifest.scannedAt,
       needsRepair: finalMeta?.needsRepair ?? false,
       entries: entries,
+      formatVersion: manifest.formatVersion,
     );
   }
 
+  /// 单条目扫描：限流或瞬时失败时退避重试，避免高并发下
+  /// 把照片静默跳过出索引。[cached] 用于对象未变化的重扫保留
+  /// 已有缩略图映射，避免重复截帧上传。
   Future<PhotoEntry?> _scanEntry(
     UserSession session,
-    OssNativeObject object,
-  ) async {
+    OssNativeObject object, {
+    PhotoEntry? cached,
+  }) async {
+    for (var attempt = 0;; attempt++) {
+      try {
+        return await _scanEntryOnce(session, object, cached: cached);
+      } catch (error) {
+        if (attempt >= 2) {
+          debugPrint('[gallery] 扫描对象 ${object.key} 失败: $error');
+          return null;
+        }
+        await Future<void>.delayed(Duration(milliseconds: 500 << attempt));
+      }
+    }
+  }
+
+  Future<PhotoEntry?> _scanEntryOnce(
+    UserSession session,
+    OssNativeObject object, {
+    PhotoEntry? cached,
+  }) async {
     final key = object.key;
     final directory = key.substring(0, key.lastIndexOf('/') + 1);
     final name = key.substring(key.lastIndexOf('/') + 1);
@@ -229,34 +288,41 @@ class PhotoIndexRepository {
     final fileTime = modified == null
         ? DateTime.now()
         : DateTime.fromMillisecondsSinceEpoch(modified, isUtc: true).toLocal();
-    try {
-      if (mediaType == PhotoMediaType.image) {
-        final exif = await _ossClient.readImageExif(key, session);
-        return PhotoEntry(
-          key: key,
-          mediaType: mediaType,
-          takenAt: exif.takenAt ?? fileTime,
-          size: object.size,
-          directory: directory,
-          modifiedMs: modified,
-          width: exif.width,
-          height: exif.height,
-          latitude: exif.latitude,
-          longitude: exif.longitude,
-        );
-      }
+    // 仅当对象未变化时保留旧缩略图映射；对象被覆盖说明缩略图也已重传。
+    final thumbKey = cached != null &&
+            cached.size == object.size &&
+            cached.modifiedMs == modified
+        ? cached.thumbKey
+        : null;
+    if (mediaType == PhotoMediaType.image) {
+      final exif = await _ossClient.readImageExif(key, session);
       return PhotoEntry(
         key: key,
         mediaType: mediaType,
-        takenAt: fileTime,
+        takenAt: exif.takenAt ??
+            inferTakenAtFromName(fileName: name, directory: directory) ??
+            fileTime,
         size: object.size,
         directory: directory,
+        thumbKey: thumbKey,
         modifiedMs: modified,
+        width: exif.width,
+        height: exif.height,
+        latitude: exif.latitude,
+        longitude: exif.longitude,
       );
-    } catch (error) {
-      debugPrint('[gallery] 扫描对象 $key 失败: $error');
-      return null;
     }
+    return PhotoEntry(
+      key: key,
+      mediaType: mediaType,
+      takenAt:
+          inferTakenAtFromName(fileName: name, directory: directory) ??
+              fileTime,
+      size: object.size,
+      directory: directory,
+      thumbKey: thumbKey,
+      modifiedMs: modified,
+    );
   }
 
   /// 上传成功后的索引增量更新。
@@ -277,7 +343,7 @@ class PhotoIndexRepository {
     final fileTime = await localFile.lastModified();
 
     String? thumbKey;
-    if (mediaType == PhotoMediaType.video && thumbLocalPath != null) {
+    if (thumbLocalPath != null) {
       try {
         thumbKey = thumbKeyFor(session, objectPath);
         await _ossClient.uploadFile(
@@ -287,7 +353,7 @@ class PhotoIndexRepository {
           taskId: 'thumb-${DateTime.now().microsecondsSinceEpoch}',
         );
       } catch (error) {
-        debugPrint('[gallery] 视频缩略图上传失败（不阻塞）: $error');
+        debugPrint('[gallery] 缩略图上传失败（不阻塞）: $error');
         thumbKey = null;
       }
     }
@@ -300,19 +366,37 @@ class PhotoIndexRepository {
     if (mediaType == PhotoMediaType.image) {
       try {
         final exif = await _ossClient.readLocalImageExif(localFile);
-        takenAt = exif.takenAt ?? fileTime;
+        takenAt = exif.takenAt ??
+            inferTakenAtFromName(
+              fileName: name,
+              directory: directory,
+            ) ??
+            fileTime;
         width = exif.width;
         height = exif.height;
         latitude = exif.latitude;
         longitude = exif.longitude;
       } catch (_) {
-        takenAt = fileTime;
+        takenAt = inferTakenAtFromName(
+              fileName: name,
+              directory: directory,
+            ) ??
+            fileTime;
       }
     } else {
       try {
-        takenAt = await _mediaBridge.readVideoTakenAt(localPath) ?? fileTime;
+        takenAt = await _mediaBridge.readVideoTakenAt(localPath) ??
+            inferTakenAtFromName(
+              fileName: name,
+              directory: directory,
+            ) ??
+            fileTime;
       } catch (_) {
-        takenAt = fileTime;
+        takenAt = inferTakenAtFromName(
+              fileName: name,
+              directory: directory,
+            ) ??
+            fileTime;
       }
     }
 
@@ -351,6 +435,7 @@ class PhotoIndexRepository {
           scannedAt: current.scannedAt,
           needsRepair: false,
           entries: kept,
+          formatVersion: current.formatVersion,
         );
       });
       if (result == ManifestWriteResult.conflictExceeded) {
@@ -360,6 +445,136 @@ class PhotoIndexRepository {
       debugPrint('[gallery] 索引增量更新失败: $error');
     }
     return entry;
+  }
+
+  /// 存量缩略图补齐：为无缩略图映射的视频请求 OSS 服务端截帧；为
+  /// 超过 OSS 图片处理大小限制的图片下载原图、本地缩放后上传，均存
+  /// 为独立缩略图对象。逐个处理、单个失败跳过（不阻塞其余）。成功
+  /// 条目先更新本地副本，最后一次性写回清单。返回补齐成功的条目数。
+  Future<int> backfillMissingThumbnails(
+    UserSession session, {
+    void Function(PhotoEntry entry)? onEntryUpdated,
+  }) async {
+    final all = await _database.readAllEntries();
+    final missing = all
+        .where((entry) =>
+            entry.thumbKey == null &&
+            (entry.mediaType == PhotoMediaType.video ||
+                (entry.mediaType == PhotoMediaType.image &&
+                    entry.size > GalleryConfig.oversizedImageLimit)))
+        .toList();
+    if (missing.isEmpty) return 0;
+
+    final updated = <PhotoEntry>[];
+    for (final entry in missing) {
+      try {
+        String tempPath;
+        if (entry.mediaType == PhotoMediaType.video) {
+          final bytes =
+              await _ossClient.downloadVideoSnapshot(entry.key, session);
+          final temp = File(
+            '${Directory.systemTemp.path}'
+            '/thumb-backfill-${DateTime.now().microsecondsSinceEpoch}.jpg',
+          );
+          await temp.writeAsBytes(bytes, flush: true);
+          tempPath = temp.path;
+        } else {
+          tempPath = await _resizeOriginalThumbnail(session, entry);
+          if (tempPath.isEmpty) continue;
+        }
+        final thumbKey = thumbKeyFor(session, entry.key);
+        try {
+          await _ossClient.uploadFile(
+            thumbKey,
+            tempPath,
+            session,
+            taskId: 'thumb-${DateTime.now().microsecondsSinceEpoch}',
+          );
+        } finally {
+          final temp = File(tempPath);
+          if (await temp.exists()) await temp.delete();
+        }
+        final next = PhotoEntry(
+          key: entry.key,
+          mediaType: entry.mediaType,
+          takenAt: entry.takenAt,
+          size: entry.size,
+          directory: entry.directory,
+          thumbKey: thumbKey,
+          modifiedMs: entry.modifiedMs,
+          width: entry.width,
+          height: entry.height,
+          latitude: entry.latitude,
+          longitude: entry.longitude,
+          device: entry.device,
+        );
+        updated.add(next);
+        await _database.upsertEntries(<PhotoEntry>[next]);
+        onEntryUpdated?.call(next);
+      } catch (error) {
+        debugPrint('[gallery] 缩略图补齐失败 ${entry.key}: $error');
+      }
+    }
+
+    if (updated.isNotEmpty) {
+      try {
+        final result = await updateManifest(session, (current) {
+          final byKey = <String, PhotoEntry>{
+            for (final candidate in current.entries) candidate.key: candidate,
+          };
+          for (final entry in updated) {
+            byKey[entry.key] = entry;
+          }
+          final kept = byKey.values.toList()
+            ..sort((left, right) => right.takenAt.compareTo(left.takenAt));
+          return PhotoManifest(
+            version: current.version,
+            scannedAt: current.scannedAt,
+            needsRepair: false,
+            entries: kept,
+            formatVersion: current.formatVersion,
+          );
+        });
+        if (result == ManifestWriteResult.conflictExceeded) {
+          await _markNeedsRepair();
+        }
+      } catch (error) {
+        debugPrint('[gallery] 缩略图清单写回失败: $error');
+      }
+    }
+    return updated.length;
+  }
+
+  /// 超大图缩略图补齐的原图处理：下载原图到临时文件，本地缩放为
+  /// JPEG 后删除原图。失败返回空字符串（调用方跳过该条目）。
+  Future<String> _resizeOriginalThumbnail(
+    UserSession session,
+    PhotoEntry entry,
+  ) async {
+    final original = File(
+      '${Directory.systemTemp.path}'
+      '/thumb-backfill-original-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    try {
+      await _ossClient.downloadToFile(
+        entry.key,
+        session,
+        original,
+        taskId: 'thumb-backfill-${DateTime.now().microsecondsSinceEpoch}',
+        onProgress: (_, __) {},
+        isCanceled: () => false,
+      );
+      final bytes = await _mediaBridge.resizeImage(original.path);
+      if (bytes == null) return '';
+      final thumb = File(
+        '${Directory.systemTemp.path}'
+        '/thumb-backfill-${DateTime.now().microsecondsSinceEpoch}.jpg',
+      );
+      await thumb.writeAsBytes(bytes, flush: true);
+      return thumb.path;
+    } finally {
+      if (await original.exists()) await original.delete();
+    }
   }
 
   /// 媒体删除后的索引增量清理：移除清单条目与本地副本，删除视频
@@ -373,7 +588,6 @@ class PhotoIndexRepository {
     await _database.removeEntries(mediaKeys);
 
     for (final key in mediaKeys) {
-      if (!isVideoKey(key)) continue;
       try {
         await _ossClient.delete(thumbKeyFor(session, key), session);
       } catch (error) {
@@ -392,6 +606,7 @@ class PhotoIndexRepository {
           scannedAt: current.scannedAt,
           needsRepair: false,
           entries: kept,
+          formatVersion: current.formatVersion,
         );
       });
       if (result == ManifestWriteResult.conflictExceeded) {
@@ -438,6 +653,7 @@ class PhotoIndexRepository {
           scannedAt: current.scannedAt,
           needsRepair: false,
           entries: kept,
+          formatVersion: current.formatVersion,
         );
       });
       if (result == ManifestWriteResult.conflictExceeded) {
@@ -451,11 +667,6 @@ class PhotoIndexRepository {
   bool isMediaKey(String key) {
     final name = key.substring(key.lastIndexOf('/') + 1);
     return isMediaFileName(name);
-  }
-
-  bool isVideoKey(String key) {
-    final name = key.substring(key.lastIndexOf('/') + 1);
-    return isVideoFileName(name);
   }
 
   Future<void> _markNeedsRepair() async {

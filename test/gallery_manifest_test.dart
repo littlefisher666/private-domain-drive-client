@@ -34,7 +34,11 @@ class _FakeManifestOss extends OssClient {
   }
 
   @override
-  Future<List<int>> download(String path, UserSession session) async {
+  Future<List<int>> download(
+    String path,
+    UserSession session, {
+    int? maxBytes,
+  }) async {
     final raw = content;
     if (raw == null) throw StateError('清单对象不存在');
     return utf8.encode(raw);

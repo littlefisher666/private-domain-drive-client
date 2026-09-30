@@ -76,6 +76,20 @@ class MainFlutterWindow: NSWindow {
             DispatchQueue.main.async { result(nil) }
           }
         }
+      case "imageThumbnail":
+        guard let args = call.arguments as? [String: Any],
+              let path = args["path"] as? String else {
+          result(FlutterError(code: "INVALID_ARGUMENT", message: "缺少图片路径", details: nil))
+          return
+        }
+        let maxWidth = (args["maxWidth"] as? NSNumber)?.doubleValue ?? 512
+        DispatchQueue.global(qos: .userInitiated).async {
+          if let data = Self.imageThumbnail(path: path, maxWidth: maxWidth) {
+            DispatchQueue.main.async { result(FlutterStandardTypedData(bytes: data)) }
+          } else {
+            DispatchQueue.main.async { result(nil) }
+          }
+        }
       case "videoMetadata":
         guard let args = call.arguments as? [String: Any],
               let path = args["path"] as? String else {
@@ -103,6 +117,25 @@ class MainFlutterWindow: NSWindow {
     }
     let bitmap = NSBitmapImageRep(cgImage: frame)
     return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
+  }
+
+  /// 超大原图的本地缩略图：ImageIO 解码（按最长边缩放、应用 EXIF
+  /// 方向）后编码为 JPEG。NSImage/NSGraphicsContext 绘制在后台线程
+  /// 会产出全黑图，不可用。
+  private static func imageThumbnail(path: String, maxWidth: Double) -> Data? {
+    guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else {
+      return nil
+    }
+    let options: [CFString: Any] = [
+      kCGImageSourceCreateThumbnailFromImageAlways: true,
+      kCGImageSourceCreateThumbnailWithTransform: true,
+      kCGImageSourceThumbnailMaxPixelSize: maxWidth,
+    ]
+    guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) else {
+      return nil
+    }
+    let rep = NSBitmapImageRep(cgImage: cg)
+    return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
   }
 
   private static func readVideoMetadata(path: String) -> [String: Any] {
