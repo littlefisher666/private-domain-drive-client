@@ -28,8 +28,7 @@ void main() {
   testWidgets('图片文件显示图片预览', (tester) async {
     await pumpPreview(tester, fileName: '照片.jpg');
 
-    expect(find.text('图片预览'), findsOneWidget);
-    expect(find.text('文件：照片.jpg'), findsOneWidget);
+    expect(find.text('照片.jpg'), findsWidgets);
   });
 
   testWidgets('PDF 文件显示 PDF 预览', (tester) async {

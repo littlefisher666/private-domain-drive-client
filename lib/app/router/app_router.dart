@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../features/auth/presentation/login_page.dart';
 import '../../features/auth/presentation/change_password_page.dart';
 import '../../features/auth/presentation/splash_page.dart';
+import '../../features/gallery/presentation/gallery_viewer_page.dart';
 import '../../features/preview/presentation/preview_page.dart';
 import '../../features/settings/presentation/settings_page.dart';
 import '../../features/transfer/presentation/transfer_tasks_page.dart';
@@ -52,6 +53,21 @@ class AppRouter {
         final fileItem = settings.arguments as PreviewPageArguments?;
         return MaterialPageRoute<void>(
           builder: (_) => PreviewPage(arguments: fileItem),
+          settings: settings,
+        );
+      case RouteNames.galleryViewer:
+        final arguments = settings.arguments is GalleryViewerArguments
+            ? settings.arguments as GalleryViewerArguments
+            : null;
+        if (arguments == null) {
+          return MaterialPageRoute<void>(
+            builder: (_) => const Scaffold(body: SizedBox.shrink()),
+            settings: settings,
+          );
+        }
+        return MaterialPageRoute<void>(
+          fullscreenDialog: true,
+          builder: (_) => GalleryViewerPage(arguments: arguments),
           settings: settings,
         );
       case RouteNames.transfers:

@@ -21,6 +21,8 @@ dependencies:
   private_domain_oss:
     path: packages/private_domain_oss
   shared_preferences: ^2.3.2
+  sqflite: ^2.4.4
+  share_plus: ^13.3.0
 
 dev_dependencies:
   flutter_test:

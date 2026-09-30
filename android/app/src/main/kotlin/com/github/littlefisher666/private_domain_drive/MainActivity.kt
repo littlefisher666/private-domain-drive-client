@@ -3,6 +3,8 @@ package com.github.littlefisher666.private_domain_drive
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.database.Cursor
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
@@ -14,6 +16,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
@@ -25,6 +28,7 @@ class MainActivity : FlutterActivity() {
         private const val DOWNLOAD_DIRECTORY = "private_domain_drive/download_directory_picker"
         private const val APP_UPDATE = "private_domain_drive/app_update"
         private const val SYSTEM_PROXY = "private_domain_drive/system_proxy"
+        private const val MEDIA = "private_domain_drive/media"
         private const val DOWNLOAD_DIRECTORY_REQUEST = 702
     }
 
@@ -91,6 +95,30 @@ class MainActivity : FlutterActivity() {
                 if (host.isNullOrBlank()) return@setMethodCallHandler result.success(null)
                 result.success(mapOf("host" to host, "port" to proxy.port))
             }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MEDIA)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "videoThumbnail" -> {
+                        val path = call.argument<String>("path")
+                        if (path == null) {
+                            result.error("INVALID_ARGUMENT", "缺少视频路径", null)
+                            return@setMethodCallHandler
+                        }
+                        val maxWidth = (call.argument<Number>("maxWidth"))?.toInt() ?: 512
+                        val bytes = captureVideoThumbnail(path, maxWidth)
+                        if (bytes == null) result.success(null) else result.success(bytes)
+                    }
+                    "videoMetadata" -> {
+                        val path = call.argument<String>("path")
+                        if (path == null) {
+                            result.error("INVALID_ARGUMENT", "缺少视频路径", null)
+                            return@setMethodCallHandler
+                        }
+                        result.success(readVideoMetadata(path))
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         receiveShareIntent(intent, emit = false)
     }
 
@@ -140,6 +168,61 @@ class MainActivity : FlutterActivity() {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         })
         return true
+    }
+
+    private fun captureVideoThumbnail(path: String, maxWidth: Int): ByteArray? {
+        return runCatching {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(path)
+                val frame = retriever.getFrameAtTime(0) ?: return null
+                val scaled = if (frame.width > maxWidth) {
+                    val ratio = maxWidth.toFloat() / frame.width
+                    Bitmap.createScaledBitmap(
+                        frame,
+                        maxWidth,
+                        (frame.height * ratio).toInt().coerceAtLeast(1),
+                        true,
+                    )
+                } else {
+                    frame
+                }
+                val output = ByteArrayOutputStream()
+                scaled.compress(Bitmap.CompressFormat.JPEG, 85, output)
+                output.toByteArray()
+            } finally {
+                retriever.release()
+            }
+        }.getOrNull()
+    }
+
+    private fun readVideoMetadata(path: String): Map<String, Any> {
+        val metadata = linkedMapOf<String, Any>()
+        runCatching {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(path)
+                val takenAt = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
+                if (!takenAt.isNullOrBlank()) {
+                    // 格式形如 20260930T123015+0800 或 UTC。
+                    val regex = Regex("(\\d{4})(\\d{2})(\\d{2})T(\\d{2})(\\d{2})(\\d{2})")
+                    val match = regex.find(takenAt)
+                    if (match != null) {
+                        val (year, month, day, hour, minute, second) = match.destructured
+                        val calendar = java.util.Calendar.getInstance()
+                        calendar.clear()
+                        calendar.set(
+                            year.toInt(), month.toInt() - 1, day.toInt(),
+                            hour.toInt(), minute.toInt(), second.toInt(),
+                        )
+                        metadata["takenAtMs"] = calendar.timeInMillis
+                    }
+                }
+            } finally {
+                retriever.release()
+            }
+        }
+        return metadata
     }
 
     private fun copySharedFiles(intent: Intent): List<Map<String, Any>> {

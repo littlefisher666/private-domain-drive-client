@@ -7,6 +7,7 @@ class RouteNames {
   static const home = '/home';
   static const workspace = '/workspace';
   static const preview = '/preview';
+  static const galleryViewer = '/gallery-viewer';
   static const transfers = '/transfers';
   static const settings = '/settings';
   static const recycleBin = '/recycle-bin';

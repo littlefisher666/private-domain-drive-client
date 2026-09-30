@@ -112,6 +112,27 @@ class TransferBatchSummary {
   final int failed;
 }
 
+/// 相册功能在传输与删除生命周期中的挂钩点。
+/// 由 gallery 模块实现并在启动时注入；未注入时全部为空操作。
+abstract interface class GalleryIndexHooks {
+  /// 视频上传前启动本地截帧（与上传并行）；返回截帧 JPEG 的本地路径，
+  /// 截帧失败返回 null，不阻塞上传。
+  Future<String?> prepareVideoThumbnail(String objectPath, String localPath);
+
+  /// 媒体上传成功后触发索引增量更新（非媒体文件由实现方过滤）。
+  Future<void> onMediaUploaded({
+    required String objectPath,
+    required String localPath,
+    String? thumbLocalPath,
+  });
+
+  /// 对象删除成功后触发索引增量清理（对象 key，含目录展开结果）。
+  Future<void> onObjectsDeleted(Set<String> objectKeys);
+
+  /// 对象从回收站还原后重新纳入索引。
+  Future<void> onObjectsRestored(Set<String> objectKeys);
+}
+
 /// 应用状态控制器。会话与权限来自已部署的 FC，不在生产路径伪造身份。
 class AppController extends ChangeNotifier {
   AppController(
@@ -127,7 +148,16 @@ class AppController extends ChangeNotifier {
 
   final SessionRepository _sessionRepository;
   final OssClient _ossClient;
+
+  /// 相册等模块与主控制器共用同一个 OSS 客户端（凭证配置状态共享）。
+  OssClient get ossClient => _ossClient;
   final SavedCredentialsStore _savedCredentialsStore;
+  GalleryIndexHooks? _galleryHooks;
+
+  /// 注入相册索引挂钩（上传增量更新、删除清理、还原恢复）。
+  void setGalleryHooks(GalleryIndexHooks? hooks) {
+    _galleryHooks = hooks;
+  }
 
   static const rootPrefix = 'shared/';
   static const _transferConcurrencyKey = 'transfer_concurrency';
@@ -138,6 +168,9 @@ class AppController extends ChangeNotifier {
   static const _themeModeKey = 'theme_mode';
   static const _thumbnailSizeKey = 'thumbnail_size';
   static const _takenAtCachePrefix = 'image_taken_at:v5:';
+  static const _videoFileExtensions = <String>{
+    'mp4', 'mov', 'm4v', 'mkv', 'avi', 'webm', '3gp',
+  };
   static const _minTransferConcurrency = 1;
   static const _maxTransferConcurrency = 5;
 
@@ -695,7 +728,9 @@ class AppController extends ChangeNotifier {
 
     DateTime? takenAt;
     try {
-      takenAt = await _ossClient.readImageTakenAt(item.path, session);
+      takenAt = await _ossClient
+          .readImageExif(item.path, session)
+          .then((info) => info.takenAt);
     } catch (_) {
       // OSS 图片处理异常时不缓存，后续进入详情或排序时允许重新尝试。
       return item;
@@ -968,6 +1003,7 @@ class AppController extends ChangeNotifier {
     if (selectedItemListenable.value?.path == item.path) {
       selectedItemListenable.value = null;
     }
+    unawaited(_galleryHooks?.onObjectsDeleted(paths));
     notifyListeners();
   }
 
@@ -1017,6 +1053,7 @@ class AppController extends ChangeNotifier {
       }
       _treeRevision++;
       selectedItemListenable.value = null;
+      unawaited(_galleryHooks?.onObjectsDeleted(deleted.toSet()));
       notifyListeners();
     }
     return BatchDeleteSummary(deletedPaths: deleted, failedPaths: failed);
@@ -1115,6 +1152,7 @@ class AppController extends ChangeNotifier {
     }
     _treeRevision++;
     _clearDirectorySizeCache();
+    unawaited(_galleryHooks?.onObjectsRestored(restored.values.toSet()));
     notifyListeners();
   }
 
@@ -1187,8 +1225,16 @@ class AppController extends ChangeNotifier {
       _QueuedTransfer((report, isCanceled) async {
         if (isCanceled()) throw const TransferCanceledException();
         await ensureSessionReady();
+        final objectPath = '$dir$fileName';
+        // 视频上传前启动截帧，与上传并行准备；失败不影响上传本身。
+        Future<String?>? thumbnailFuture;
+        final extension = fileName.split('.').last.toLowerCase();
+        if (_videoFileExtensions.contains(extension)) {
+          thumbnailFuture =
+              _galleryHooks?.prepareVideoThumbnail(objectPath, localPath);
+        }
         await _ossClient.uploadFile(
-          '$dir$fileName',
+          objectPath,
           localPath,
           _requireSession(),
           taskId: taskId,
@@ -1198,6 +1244,24 @@ class AppController extends ChangeNotifier {
         _treeRevision++;
         _clearDirectorySizeCache();
         notifyListeners();
+        // 上传成功后触发索引增量更新；挂钩异常不影响任务成功状态。
+        if (_galleryHooks != null) {
+          String? thumbPath;
+          try {
+            thumbPath = await thumbnailFuture;
+          } catch (_) {
+            thumbPath = null;
+          }
+          try {
+            await _galleryHooks!.onMediaUploaded(
+              objectPath: objectPath,
+              localPath: localPath,
+              thumbLocalPath: thumbPath,
+            );
+          } catch (error) {
+            debugPrint('[gallery] 索引增量更新挂钩失败: $error');
+          }
+        }
       }),
     );
   }
@@ -1285,6 +1349,56 @@ class AppController extends ChangeNotifier {
           await temporary.rename(destination.path);
           _replaceTask(
               taskId, (task) => task.copyWith(target: destination.path));
+        } catch (_) {
+          if (await temporary.exists()) await temporary.delete();
+          rethrow;
+        }
+      }),
+    );
+    return taskId;
+  }
+
+  /// 相册原图按需下载：写入相册专用缓存目录，完成后由回调写入缓存记录。
+  /// 走现有传输队列，进度、取消与重试与普通下载一致。
+  String enqueueOriginalDownload({
+    required String path,
+    required String name,
+    required int? totalBytes,
+    required File target,
+    required Future<void> Function(File target) onCompleted,
+  }) {
+    if (!capabilities.download) {
+      throw StateError('当前身份没有下载权限');
+    }
+    _ensureWithinRoot(path);
+    final taskId = _newTransferId('download');
+    _enqueueTransfer(
+      TransferTask(
+        id: taskId,
+        name: name,
+        type: TransferTaskType.download,
+        status: TransferTaskStatus.pending,
+        progress: 0,
+        target: '相册缓存',
+        sourcePath: path,
+        totalBytes: totalBytes,
+      ),
+      _QueuedTransfer((report, isCanceled) async {
+        await ensureSessionReady();
+        if (isCanceled()) throw const TransferCanceledException();
+        final temporary = File('${target.path}.$taskId.part');
+        try {
+          await _ossClient.downloadToFile(
+            path,
+            _requireSession(),
+            temporary,
+            taskId: taskId,
+            onProgress: report,
+            isCanceled: isCanceled,
+          );
+          if (isCanceled()) throw const TransferCanceledException();
+          await temporary.rename(target.path);
+          await onCompleted(target);
         } catch (_) {
           if (await temporary.exists()) await temporary.delete();
           rethrow;

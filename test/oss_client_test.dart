@@ -81,13 +81,13 @@ void main() {
         ),
       );
 
-    final takenAt = await OssClient(native: native).readImageTakenAt(
+    final info = await OssClient(native: native).readImageExif(
       'shared/相册/test.jpg',
       _session(),
     );
 
-    expect(takenAt, DateTime(2026, 9, 8, 19, 25, 41));
-    expect(native.lastProcess, 'image/exif');
+    expect(info.takenAt, DateTime(2026, 9, 8, 19, 25, 41));
+    expect(native.processes, contains('image/exif'));
   });
 
   test('图片处理未返回 EXIF 时从 JPEG 文件头读取拍摄时间', () async {
@@ -95,12 +95,12 @@ void main() {
       ..processedBytesError = PlatformException(code: 'invalidRequest')
       ..bytesResult = _jpegHeaderWithTakenAt('2026:09:08 19:25:41');
 
-    final takenAt = await OssClient(native: native).readImageTakenAt(
+    final info = await OssClient(native: native).readImageExif(
       'shared/相册/test.jpg',
       _session(),
     );
 
-    expect(takenAt, DateTime(2026, 9, 8, 19, 25, 41));
+    expect(info.takenAt, DateTime(2026, 9, 8, 19, 25, 41));
     expect(native.processes, <String?>['image/exif', 'image/exif', null]);
     expect(native.maxBytesRequests.last, 2 * 1024);
   });
