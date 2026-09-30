@@ -763,7 +763,11 @@ class _FakeOssClient extends OssClient {
   }
 
   @override
-  Future<List<int>> download(String path, UserSession session) async =>
+  Future<List<int>> download(
+    String path,
+    UserSession session, {
+    int? maxBytes,
+  }) async =>
       downloadResult;
 
   @override

@@ -119,6 +119,10 @@ abstract interface class GalleryIndexHooks {
   /// 截帧失败返回 null，不阻塞上传。
   Future<String?> prepareVideoThumbnail(String objectPath, String localPath);
 
+  /// 超大图片上传前本地生成缩略图（与上传并行）；非超大图或生成失败
+  /// 返回 null，不阻塞上传。
+  Future<String?> prepareImageThumbnail(String objectPath, String localPath);
+
   /// 媒体上传成功后触发索引增量更新（非媒体文件由实现方过滤）。
   Future<void> onMediaUploaded({
     required String objectPath,
@@ -170,6 +174,9 @@ class AppController extends ChangeNotifier {
   static const _takenAtCachePrefix = 'image_taken_at:v5:';
   static const _videoFileExtensions = <String>{
     'mp4', 'mov', 'm4v', 'mkv', 'avi', 'webm', '3gp',
+  };
+  static const _imageFileExtensions = <String>{
+    'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'bmp',
   };
   static const _minTransferConcurrency = 1;
   static const _maxTransferConcurrency = 5;
@@ -1226,12 +1233,16 @@ class AppController extends ChangeNotifier {
         if (isCanceled()) throw const TransferCanceledException();
         await ensureSessionReady();
         final objectPath = '$dir$fileName';
-        // 视频上传前启动截帧，与上传并行准备；失败不影响上传本身。
+        // 视频上传前启动截帧，超大图片上传前本地生成缩略图，均与上传
+        // 并行准备；失败不影响上传本身。
         Future<String?>? thumbnailFuture;
         final extension = fileName.split('.').last.toLowerCase();
         if (_videoFileExtensions.contains(extension)) {
           thumbnailFuture =
               _galleryHooks?.prepareVideoThumbnail(objectPath, localPath);
+        } else if (_imageFileExtensions.contains(extension)) {
+          thumbnailFuture =
+              _galleryHooks?.prepareImageThumbnail(objectPath, localPath);
         }
         await _ossClient.uploadFile(
           objectPath,

@@ -13,6 +13,7 @@ import '../../workspace/domain/file_item.dart';
 import '../../workspace/infrastructure/oss_client.dart';
 import '../domain/gallery_config.dart';
 import '../domain/photo_entry.dart';
+import '../domain/photo_manifest.dart';
 import '../domain/timeline_group.dart';
 import '../infrastructure/gallery_database.dart';
 import '../infrastructure/media_bridge.dart';
@@ -50,11 +51,17 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   late final PhotoIndexRepository _repository;
   late final OriginalCacheStore _cacheStore;
 
+  /// 复制成功的瞬时反馈：按钮与 ⌘C 共用，2 秒后自动复位。
+  final ValueNotifier<bool> clipboardCopiedListenable =
+      ValueNotifier<bool>(false);
+  Timer? _copyFeedbackTimer;
+
   GalleryPhase _phase = GalleryPhase.idle;
   String? _errorMessage;
   String? _accountKey;
   List<PhotoEntry> _entries = const <PhotoEntry>[];
   String? _repairNotice;
+  bool _thumbBackfillStarted = false;
 
   /// 已缓存原图的对象 key 集合（角标与秒开判断依据）。
   final ValueNotifier<Set<String>> cachedKeysListenable =
@@ -88,10 +95,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
     return _entries.where((entry) => !cached.contains(entry.key)).length;
   }
 
-  List<TimelineGroup> timelineGroups() => groupTimeline(
-        _entries,
-        byDay: !isDesktop,
-      );
+  List<TimelineGroup> timelineGroups() => groupTimeline(_entries);
 
   /// 进入相册页时的索引装载入口。
   Future<void> load() async {
@@ -131,6 +135,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
         debugPrint('[gallery] 打开元数据库失败: $error');
       }
       _accountKey = accountKey;
+      _thumbBackfillStarted = false;
       await _refreshCachedKeys();
     }
 
@@ -145,6 +150,13 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
     _entries = await _database.readAllEntries();
     final meta = await _database.readIndexMeta();
     if (meta == null) {
+      // 其他设备可能已完成全量扫描：优先复用 OSS 清单，避免重复解析。
+      if (await _tryAdoptRemoteManifest(current)) {
+        _phase = GalleryPhase.ready;
+        notifyListeners();
+        unawaited(_backfillMissingThumbnails(current));
+        return;
+      }
       _phase = GalleryPhase.scanning;
       scanProgressListenable.value = (0, 0);
       notifyListeners();
@@ -164,6 +176,34 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
     _phase = GalleryPhase.ready;
     notifyListeners();
     unawaited(_syncFromRemote(current, meta));
+    unawaited(_backfillMissingThumbnails(current));
+  }
+
+  /// 新设备首次进相册时采纳远端清单：本地不再重复全量扫描。
+  /// 清单缺失或标记待修复时返回 false，走全量扫描。
+  Future<bool> _tryAdoptRemoteManifest(UserSession session) async {
+    try {
+      final loaded = await _repository.loadManifest(session);
+      if (loaded == null) return false;
+      final (manifest, _) = loaded;
+      if (manifest.needsRepair) return false;
+      // 旧格式清单的拍摄时间可能有缺陷（fv < 当前版本），重扫以生成
+      // 新格式，避免旧数据被永久采纳。
+      if (manifest.formatVersion < PhotoManifest.currentFormatVersion) {
+        return false;
+      }
+      await _database.replaceEntries(manifest.entries);
+      await _database.writeIndexMeta(PhotoIndexMeta(
+        version: manifest.version,
+        scannedAt: manifest.scannedAt,
+        needsRepair: false,
+      ));
+      _entries = manifest.entries;
+      return true;
+    } catch (error) {
+      debugPrint('[gallery] 复用远端清单失败: $error');
+      return false;
+    }
   }
 
   Future<void> _runFullScan(UserSession session) async {
@@ -185,6 +225,37 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
       scanProgressListenable.value = null;
       await _refreshCachedKeys();
       notifyListeners();
+      if (_phase == GalleryPhase.ready) {
+        unawaited(_backfillMissingThumbnails(session));
+      }
+    }
+  }
+
+  /// 存量缩略图补齐（视频截帧/超大图本地缩放）：每次会话最多执行
+  /// 一次，失败条目留待下次进入相册页自动重试。
+  Future<void> _backfillMissingThumbnails(UserSession session) async {
+    if (_thumbBackfillStarted) return;
+    _thumbBackfillStarted = true;
+    try {
+      final count = await _repository.backfillMissingThumbnails(
+        session,
+        // 单张补齐完成即更新内存列表并刷新，网格无需等整批结束。
+        onEntryUpdated: (entry) {
+          _entries = <PhotoEntry>[
+            for (final item in _entries)
+              if (item.key == entry.key) entry else item,
+          ];
+          notifyListeners();
+        },
+      );
+      if (count > 0) {
+        _entries = await _database.readAllEntries();
+        await _refreshCachedKeys();
+        notifyListeners();
+        debugPrint('[gallery] 缩略图补齐完成: $count');
+      }
+    } catch (error) {
+      debugPrint('[gallery] 缩略图补齐失败: $error');
     }
   }
 
@@ -204,6 +275,19 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
         return;
       }
       final (manifest, _) = loaded;
+      // 旧格式清单的拍摄时间可能有缺陷（fv < 当前版本），触发重扫
+      // 生成新格式，避免旧数据被同步回本地。
+      if (manifest.formatVersion < PhotoManifest.currentFormatVersion) {
+        await _database.writeIndexMeta(PhotoIndexMeta(
+          version: meta.version,
+          scannedAt: meta.scannedAt,
+          needsRepair: true,
+        ));
+        _repairNotice = '照片索引需要修复，正在后台重建…';
+        notifyListeners();
+        await _runFullScan(session);
+        return;
+      }
       if (manifest.version > meta.version) {
         await _database.replaceEntries(manifest.entries);
         await _database.writeIndexMeta(PhotoIndexMeta(
@@ -248,8 +332,9 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
         process: 'gallery-grid',
       );
 
-  /// 相册网格缩略图：图片走 OSS 图片处理参数，视频走索引映射的
-  /// 截帧对象；无映射返回 null，由界面展示占位图。
+  /// 相册网格缩略图：有索引缩略图映射（视频截帧/超大图本地生成）优先
+  /// 走缩略图对象，其余图片走 OSS 图片处理参数；无映射返回 null，
+  /// 由界面展示占位图。
   Future<List<int>?> loadGridThumbnail(PhotoEntry entry) async {
     final cached = await DiskImageCache.instance.read(
       DiskImageCacheKind.thumbnails,
@@ -260,15 +345,15 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
     if (session == null) return null;
     try {
       final List<int> bytes;
-      if (entry.mediaType == PhotoMediaType.image) {
+      if (entry.thumbKey != null) {
+        bytes = await _ossClient.download(entry.thumbKey!, session);
+      } else if (entry.mediaType == PhotoMediaType.image) {
         bytes = await _ossClient.downloadThumbnail(
           entry.key,
           session,
           width: GalleryConfig.listThumbnailSize,
           height: GalleryConfig.listThumbnailSize,
         );
-      } else if (entry.thumbKey != null) {
-        bytes = await _ossClient.download(entry.thumbKey!, session);
       } else {
         return null;
       }
@@ -329,6 +414,11 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
     if (cached != null) return cached;
     final session = _app.session;
     if (session == null) return null;
+    // 超大图 OSS 图片处理不支持（ImageTooLarge），直接用本地生成的
+    // 缩略图对象放大展示。
+    if (entry.size > GalleryConfig.oversizedImageLimit) {
+      return loadThumbObject(entry.thumbKey);
+    }
     try {
       final bytes = await _ossClient.downloadImagePreview(
         entry.key,
@@ -401,6 +491,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   /// 通过传输队列后台下载原图到相册缓存；完成后角标即时消失。
   /// 返回传输任务 id。
   Future<String> downloadOriginal(PhotoEntry entry) async {
+    await _cleanOverCapacityQuietly();
     final target = await _cacheStore.fileFor(entry.key);
     return _app.enqueueOriginalDownload(
       path: entry.key,
@@ -449,6 +540,15 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
     }
   }
 
+  /// 下载前容量预检：超限时 LRU 清理至阈值以下；失败不阻塞下载。
+  Future<void> _cleanOverCapacityQuietly() async {
+    try {
+      await _cacheStore.cleanOverCapacity();
+    } catch (error) {
+      debugPrint('[gallery] 缓存容量清理失败: $error');
+    }
+  }
+
   /// macOS 复制所选原图到系统剪贴板；未缓存条目先下载后复制。
   /// 返回错误信息（null 表示成功）。
   Future<String?> copyToClipboard(Iterable<PhotoEntry> selected) async {
@@ -463,7 +563,16 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
       }
     }
     final ok = await _clipboard.copyImageFiles(files.map((file) => file.path));
+    if (ok) _markClipboardCopied();
     return ok ? null : '写入剪贴板失败';
+  }
+
+  void _markClipboardCopied() {
+    _copyFeedbackTimer?.cancel();
+    clipboardCopiedListenable.value = true;
+    _copyFeedbackTimer = Timer(const Duration(seconds: 2), () {
+      clipboardCopiedListenable.value = false;
+    });
   }
 
   /// macOS 相册页粘贴上传：读取剪贴板图片写临时文件走现有上传管线。
@@ -514,6 +623,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   }) async {
     final existing = await _cacheStore.readOriginal(entry.key);
     if (existing != null) return existing;
+    await _cleanOverCapacityQuietly();
     final session = _app.session;
     if (session == null || !session.isRemote) {
       throw StateError('请先登录');
@@ -564,6 +674,32 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   }
 
   @override
+  Future<String?> prepareImageThumbnail(
+      String objectPath, String localPath) async {
+    try {
+      final file = File(localPath);
+      if (await file.length() <= GalleryConfig.oversizedImageLimit) {
+        return null;
+      }
+      final bytes = await _mediaBridge.resizeImage(localPath);
+      if (bytes == null) return null;
+      final temp = await getTemporaryDirectory();
+      final directory =
+          Directory('${temp.path}${Platform.pathSeparator}gallery_thumbs');
+      await directory.create(recursive: true);
+      final thumb = File(
+        '${directory.path}${Platform.pathSeparator}'
+        '${DateTime.now().microsecondsSinceEpoch}.jpg',
+      );
+      await thumb.writeAsBytes(bytes, flush: true);
+      return thumb.path;
+    } catch (error) {
+      debugPrint('[gallery] 超大图缩略图生成失败（不阻塞）: $error');
+      return null;
+    }
+  }
+
+  @override
   Future<void> onMediaUploaded({
     required String objectPath,
     required String localPath,
@@ -604,9 +740,11 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
 
   @override
   void dispose() {
+    _copyFeedbackTimer?.cancel();
     cachedKeysListenable.dispose();
     scanProgressListenable.dispose();
     selectionListenable.dispose();
+    clipboardCopiedListenable.dispose();
     unawaited(_database.close());
     super.dispose();
   }

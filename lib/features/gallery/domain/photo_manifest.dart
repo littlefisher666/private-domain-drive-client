@@ -9,6 +9,7 @@ class PhotoManifest {
     required this.scannedAt,
     required this.needsRepair,
     required this.entries,
+    this.formatVersion = 0,
   });
 
   final int version;
@@ -16,8 +17,18 @@ class PhotoManifest {
   final bool needsRepair;
   final List<PhotoEntry> entries;
 
+  /// 清单生成器版本。0 = 旧版生成（拍摄时间解析有缺陷，不允许被
+  /// 新设备直接采纳）；2 = 文件头优先解析修复后生成；
+  /// 3 = 无 EXIF 时回退文件名/目录日期推断生成；
+  /// 4 = 上传路径补齐同一推断（修复存量条目拍摄时间等于上传时间）。
+  final int formatVersion;
+
+  /// 当前生成器写出的格式版本。
+  static const int currentFormatVersion = 4;
+
   Map<String, Object?> toJson() => <String, Object?>{
         'version': version,
+        'fv': formatVersion,
         'scannedAt': scannedAt?.millisecondsSinceEpoch,
         'needsRepair': needsRepair,
         'photos': entries
@@ -82,6 +93,9 @@ class PhotoManifest {
     return PhotoManifest(
       version: decoded['version'] is num
           ? (decoded['version'] as num).toInt()
+          : 0,
+      formatVersion: decoded['fv'] is num
+          ? (decoded['fv'] as num).toInt()
           : 0,
       scannedAt: decoded['scannedAt'] is num
           ? DateTime.fromMillisecondsSinceEpoch(

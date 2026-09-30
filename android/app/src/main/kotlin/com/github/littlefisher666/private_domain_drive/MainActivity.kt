@@ -108,6 +108,16 @@ class MainActivity : FlutterActivity() {
                         val bytes = captureVideoThumbnail(path, maxWidth)
                         if (bytes == null) result.success(null) else result.success(bytes)
                     }
+                    "imageThumbnail" -> {
+                        val path = call.argument<String>("path")
+                        if (path == null) {
+                            result.error("INVALID_ARGUMENT", "缺少图片路径", null)
+                            return@setMethodCallHandler
+                        }
+                        val maxWidth = (call.argument<Number>("maxWidth"))?.toInt() ?: 512
+                        val bytes = imageThumbnail(path, maxWidth)
+                        if (bytes == null) result.success(null) else result.success(bytes)
+                    }
                     "videoMetadata" -> {
                         val path = call.argument<String>("path")
                         if (path == null) {
@@ -193,6 +203,32 @@ class MainActivity : FlutterActivity() {
             } finally {
                 retriever.release()
             }
+        }.getOrNull()
+    }
+
+    private fun imageThumbnail(path: String, maxWidth: Int): ByteArray? {
+        return runCatching {
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, options)
+            if (options.outWidth <= 0 || options.outHeight <= 0) return null
+            var sampleSize = 1
+            while (options.outWidth / (sampleSize * 2) >= maxWidth) sampleSize *= 2
+            val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+            val decoded = BitmapFactory.decodeFile(path, decodeOptions) ?: return null
+            val scaled = if (decoded.width > maxWidth) {
+                val ratio = maxWidth.toFloat() / decoded.width
+                Bitmap.createScaledBitmap(
+                    decoded,
+                    maxWidth,
+                    (decoded.height * ratio).toInt().coerceAtLeast(1),
+                    true,
+                )
+            } else {
+                decoded
+            }
+            val output = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.JPEG, 85, output)
+            output.toByteArray()
         }.getOrNull()
     }
 

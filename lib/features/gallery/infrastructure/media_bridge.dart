@@ -35,6 +35,30 @@ class MediaBridge {
     }
   }
 
+  /// 将本地图片缩放为最长边不超过 maxWidth 的 JPEG 字节；
+  /// 失败返回 null（不阻塞上传）。超大原图（OSS 图片处理不支持）
+  /// 的缩略图生成本地完成。
+  Future<List<int>?> resizeImage(
+    String imagePath, {
+    int maxWidth = 512,
+  }) async {
+    try {
+      final result = await _channel.invokeMethod<List<dynamic>>(
+        'imageThumbnail',
+        <String, Object?>{
+          'path': imagePath,
+          'maxWidth': maxWidth,
+        },
+      );
+      if (result == null) return null;
+      return result.cast<int>();
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   /// 读取视频拍摄时间（媒体元数据），缺失或失败返回 null。
   Future<DateTime?> readVideoTakenAt(String videoPath) async {
     try {

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -39,16 +40,9 @@ class _GalleryViewerPageState extends State<GalleryViewerPage> {
     _currentKey = widget.arguments.initialKey;
   }
 
-  /// 当前分组内的照片连续浏览序列（视频不参与切换）。
+  /// 全库媒体连续浏览序列（按拍摄时间排序，图片与视频混合切换）。
   List<PhotoEntry> _sequenceOf(GalleryController gallery) {
-    for (final group in gallery.timelineGroups()) {
-      if (group.entries.any((entry) => entry.key == _currentKey)) {
-        return group.entries
-            .where((entry) => entry.mediaType == PhotoMediaType.image)
-            .toList(growable: false);
-      }
-    }
-    return const <PhotoEntry>[];
+    return gallery.entries.toList(growable: false);
   }
 
   PhotoEntry? _resolveCurrent(GalleryController gallery) {
@@ -115,9 +109,7 @@ class _GalleryViewerPageState extends State<GalleryViewerPage> {
       });
       return const Scaffold(backgroundColor: Colors.black);
     }
-    final sequence = entry.mediaType == PhotoMediaType.image
-        ? _sequenceOf(gallery)
-        : const <PhotoEntry>[];
+    final sequence = _sequenceOf(gallery);
 
     if (gallery.isDesktop) {
       return _DesktopViewer(
@@ -129,7 +121,6 @@ class _GalleryViewerPageState extends State<GalleryViewerPage> {
         onNext: () => _goNext(gallery),
         onPrev: () => _goNext(gallery, forward: false),
         onDelete: () => _deleteCurrent(gallery),
-        onCopy: () => _copyCurrent(gallery, entry),
       );
     }
     return _MobileViewer(
@@ -142,14 +133,6 @@ class _GalleryViewerPageState extends State<GalleryViewerPage> {
       onDelete: () => _deleteCurrent(gallery),
       onShare: () => _shareCurrent(gallery, entry),
     );
-  }
-
-  Future<void> _copyCurrent(
-      GalleryController gallery, PhotoEntry entry) async {
-    final error = await gallery.copyToClipboard(<PhotoEntry>[entry]);
-    if (mounted) {
-      AppFeedback.showSnack(context, error ?? '已复制原图到剪贴板');
-    }
   }
 
   Future<void> _shareCurrent(GalleryController gallery, PhotoEntry entry) async {
@@ -372,7 +355,6 @@ class _DesktopViewer extends StatefulWidget {
     required this.onNext,
     required this.onPrev,
     required this.onDelete,
-    required this.onCopy,
   });
 
   final GalleryController gallery;
@@ -383,7 +365,6 @@ class _DesktopViewer extends StatefulWidget {
   final VoidCallback onNext;
   final VoidCallback onPrev;
   final VoidCallback onDelete;
-  final VoidCallback onCopy;
 
   @override
   State<_DesktopViewer> createState() => _DesktopViewerState();
@@ -392,8 +373,26 @@ class _DesktopViewer extends StatefulWidget {
 class _DesktopViewerState extends State<_DesktopViewer> {
   bool _overlaysVisible = true;
   bool _pointerInOverlay = false;
+  bool _copied = false;
   Timer? _hideTimer;
+  Timer? _copiedTimer;
   final TransformationController _transform = TransformationController();
+
+  void _markCopied() {
+    _copiedTimer?.cancel();
+    setState(() => _copied = true);
+    _copiedTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
+
+  Future<void> _copyCurrent() async {
+    final error =
+        await widget.gallery.copyToClipboard(<PhotoEntry>[widget.entry]);
+    if (!mounted) return;
+    AppFeedback.showSnack(context, error ?? '已复制原图到剪贴板');
+    if (error == null) _markCopied();
+  }
 
   void _wake() {
     _hideTimer?.cancel();
@@ -432,6 +431,7 @@ class _DesktopViewerState extends State<_DesktopViewer> {
   @override
   void dispose() {
     _hideTimer?.cancel();
+    _copiedTimer?.cancel();
     _transform.dispose();
     super.dispose();
   }
@@ -450,6 +450,9 @@ class _DesktopViewerState extends State<_DesktopViewer> {
           const SingleActivator(LogicalKeyboardKey.arrowLeft): widget.onPrev,
           const SingleActivator(LogicalKeyboardKey.arrowRight): widget.onNext,
           const SingleActivator(LogicalKeyboardKey.escape): widget.onBack,
+          const SingleActivator(LogicalKeyboardKey.keyC, meta: true): () {
+            _copyCurrent();
+          },
         },
         child: Focus(
           autofocus: true,
@@ -501,7 +504,14 @@ class _DesktopViewerState extends State<_DesktopViewer> {
                             opacity: _overlaysVisible ? 1 : 0,
                             duration: const Duration(milliseconds: 250),
                             child: Container(
-                              padding: const EdgeInsets.fromLTRB(8, 8, 12, 12),
+                              // macOS 红绿灯悬于内容区左上角，顶栏下移避让。
+                              padding: defaultTargetPlatform ==
+                                      TargetPlatform.macOS
+                                  ? const EdgeInsets.fromLTRB(8, 8, 12, 12)
+                                      .copyWith(
+                                      top: 32,
+                                    )
+                                  : const EdgeInsets.fromLTRB(8, 8, 12, 12),
                               decoration: const BoxDecoration(
                                 gradient: LinearGradient(
                                   begin: Alignment.topCenter,
@@ -565,8 +575,8 @@ class _DesktopViewerState extends State<_DesktopViewer> {
                                 children: <Widget>[
                                   _OverlayAction(
                                     icon: Icons.copy_outlined,
-                                    label: '复制',
-                                    onTap: widget.onCopy,
+                                    label: _copied ? '已复制' : '复制',
+                                    onTap: _copyCurrent,
                                   ),
                                   const SizedBox(width: 26),
                                   _DownloadOverlayAction(
@@ -771,7 +781,10 @@ class _InfoPanel extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: <Widget>[
           const Text('本机缓存',
-              style: TextStyle(fontSize: 12.5, color: Color(0xFF8D93A1))),
+              style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.35,
+                  color: Color(0xFF8D93A1))),
           Row(
             children: <Widget>[
               Icon(
@@ -783,8 +796,11 @@ class _InfoPanel extends StatelessWidget {
               const SizedBox(width: 5),
               Text(
                 cached ? '已缓存' : '未缓存',
-                style:
-                    const TextStyle(fontSize: 12.5, color: Color(0xFFE8EAEF)),
+                style: const TextStyle(
+                    fontSize: 12.5,
+                    height: 1.35,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFFE8EAEF)),
               ),
             ],
           ),
@@ -819,16 +835,24 @@ class _InfoPanel extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(key,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: const Color(0xFF8D93A1))),
-                  const Spacer(),
-                  Flexible(
+                  Text(
+                    key,
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      height: 1.35,
+                      color: Color(0xFF8D93A1),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
                     child: Text(
                       value,
                       textAlign: TextAlign.right,
                       style: const TextStyle(
-                          fontSize: 12.5, color: Color(0xFFE8EAEF)),
+                        fontSize: 12.5,
+                        height: 1.35,
+                        color: Color(0xFFE8EAEF),
+                      ),
                     ),
                   ),
                 ],
@@ -874,6 +898,9 @@ class _ViewerImageState extends State<_ViewerImage>
   bool _downloadKicked = false;
   bool _fileLoadFailed = false;
 
+  /// 当前显示内容是否已是原图文件（区别于缩略图/预览降级内容）。
+  bool _displayingOriginal = false;
+
   Uint8List? _displayedBytes;
   String? _displayedKey;
   Uint8List? _outgoingBytes;
@@ -894,15 +921,18 @@ class _ViewerImageState extends State<_ViewerImage>
   void didUpdateWidget(covariant _ViewerImage oldWidget) {
     super.didUpdateWidget(oldWidget);
     final keyChanged = oldWidget.entry.key != widget.entry.key;
-    final cachedChanged = _gallery.isCached(widget.entry.key) &&
-        _displayedKey != widget.entry.key &&
-        !_fileLoadFailed;
     if (keyChanged) {
       _downloadKicked = false;
       _fileLoadFailed = false;
-    }
-    if (keyChanged || cachedChanged) {
+      _displayingOriginal = false;
       _loadFor(widget.entry);
+      return;
+    }
+    // 原图下载完成后无缝替换当前降级内容（缩略图/预览）。
+    if (!_displayingOriginal &&
+        !_fileLoadFailed &&
+        _gallery.isCached(widget.entry.key)) {
+      _upgradeToOriginal(widget.entry);
     }
   }
 
@@ -931,6 +961,7 @@ class _ViewerImageState extends State<_ViewerImage>
         final bytes = file == null ? null : await file.readAsBytes();
         if (!mounted || seq != _seq) return;
         if (bytes != null) {
+          _displayingOriginal = true;
           _applyBytes(entry.key, bytes, animate: animate);
           return;
         }
@@ -943,8 +974,41 @@ class _ViewerImageState extends State<_ViewerImage>
       return;
     }
 
-    await _loadDegraded(entry, seq, animate: animate);
+    // 未缓存原图：先秒上网格缩略图（通常已在本地缓存），随后后台
+    // 下载原图；高清预览到达后无缝替换缩略图。
+    final thumb = await _gallery.loadGridThumbnail(entry);
+    if (!mounted || seq != _seq) return;
+    if (thumb != null && thumb.isNotEmpty) {
+      _applyBytes(entry.key, Uint8List.fromList(thumb), animate: animate);
+    }
     _kickDownload(entry);
+    final preview = await _gallery.loadDegradedPreview(entry);
+    if (!mounted || seq != _seq) return;
+    if (preview != null &&
+        preview.isNotEmpty &&
+        !_gallery.isCached(entry.key)) {
+      _applyBytes(entry.key, Uint8List.fromList(preview), animate: false);
+    }
+  }
+
+  /// 原图下载完成后的原地升级：读取本地缓存原图替换降级内容，
+  /// 不做滑动动画。
+  Future<void> _upgradeToOriginal(PhotoEntry entry) async {
+    final seq = ++_seq;
+    try {
+      final file = await _gallery.resolveOriginalFile(entry);
+      final bytes = file == null ? null : await file.readAsBytes();
+      if (!mounted || seq != _seq) return;
+      if (bytes != null) {
+        _displayingOriginal = true;
+        _applyBytes(entry.key, bytes, animate: false);
+      } else {
+        _fileLoadFailed = true;
+      }
+    } catch (_) {
+      if (!mounted || seq != _seq) return;
+      _fileLoadFailed = true;
+    }
   }
 
   Future<void> _loadDegraded(
