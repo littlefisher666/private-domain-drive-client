@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../../../app/router/route_names.dart';
 import '../../../shared/state/app_controller.dart';
 import '../../../shared/state/app_scope.dart';
 import '../../../shared/widgets/app_feedback.dart';
 import '../../../shared/widgets/file_icon.dart';
 import '../../../shared/widgets/file_sort_sheet.dart';
+import '../../preview/domain/preview_type.dart';
+import '../../preview/presentation/preview_page.dart';
 import '../domain/file_item.dart';
 import '../domain/recycle_bin_entry.dart';
 import 'workspace_page.dart';
@@ -25,6 +28,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       ValueNotifier<Map<String, DirectorySizeState>>(const {});
   bool _initialized = false;
   Map<String, RecycleBinEntry> _itemEntries = <String, RecycleBinEntry>{};
+  List<FileItem> _visibleItems = const <FileItem>[];
 
   bool get _desktop => MediaQuery.sizeOf(context).width >= 960;
 
@@ -101,9 +105,52 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
   }
 
   void _open(FileItem item) {
-    if (!item.isDirectory) return;
-    AppScope.of(context).setRecycleBinPath(_folder(item.path));
-    _selected.value = null;
+    if (item.isDirectory) {
+      AppScope.of(context).setRecycleBinPath(_folder(item.path));
+      _selected.value = null;
+      return;
+    }
+    _openPreview(item);
+  }
+
+  /// 回收站文件的真实存储位置在批次 payload 下，
+  /// 预览按批次内对象路径加载，界面展示仍用原位置。
+  void _openPreview(FileItem item) {
+    if (item.isDirectory) return;
+    if (PreviewTypeResolver.fromFileName(item.name) != PreviewType.image) {
+      return;
+    }
+    final tappedTrashPath = _itemEntries[item.path]?.objects[item.path];
+    if (tappedTrashPath == null) return;
+    final imageFiles = <FileItem>[];
+    final displayPaths = <String, String>{};
+    for (final file in _visibleItems) {
+      if (file.isDirectory) continue;
+      if (PreviewTypeResolver.fromFileName(file.name) != PreviewType.image) {
+        continue;
+      }
+      final trashPath = _itemEntries[file.path]?.objects[file.path];
+      if (trashPath == null) continue;
+      imageFiles.add(
+        FileItem(
+          path: trashPath,
+          name: file.name,
+          isDirectory: false,
+          updatedAt: file.updatedAt,
+        ),
+      );
+      displayPaths[trashPath] = file.path;
+    }
+    if (imageFiles.isEmpty) return;
+    Navigator.of(context).pushNamed(
+      RouteNames.preview,
+      arguments: PreviewPageArguments(
+        fileName: item.name,
+        filePath: tappedTrashPath,
+        imageFiles: imageFiles,
+        displayPaths: displayPaths,
+      ),
+    );
   }
 
   Future<void> _showItemActions(FileItem item) async {
@@ -231,6 +278,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
 
   Widget _itemsArea(List<FileItem> items, AppController controller) {
     if (items.isEmpty) return const Center(child: Text('回收站为空'));
+    _visibleItems = items;
     final common = <String, Object?>{
       'selectedPath': _selected.value?.path,
     };
@@ -279,7 +327,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       onSelect: (item) => _selected.value = item,
       onToggle: (_) {},
       onMarqueeSelectionChanged: (_) {},
-      onPreview: (_) {},
+      onPreview: _openPreview,
       onDownload: (_) {},
       onRename: (_) {},
       renamingPath: null,
@@ -366,7 +414,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
               onThumbnailSizeChanged: controller.setThumbnailSize,
               onSortChanged: controller.setFileSortOption,
               onOpen: _open,
-              onPreview: (_) {},
+              onPreview: _openPreview,
               onDownload: (_) {},
               onDelete: (_) {},
               detailBuilder: _details,

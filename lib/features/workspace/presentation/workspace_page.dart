@@ -16,6 +16,7 @@ import '../../../shared/state/app_scope.dart';
 import '../../../shared/widgets/app_feedback.dart';
 import '../../../shared/widgets/file_icon.dart';
 import '../../../shared/widgets/file_sort_sheet.dart';
+import '../../preview/domain/preview_type.dart';
 import '../../preview/presentation/preview_page.dart';
 import '../domain/file_item.dart';
 
@@ -146,6 +147,7 @@ Future<void> pickAndUploadDirectory(BuildContext context) async {
 
 class _WorkspacePageState extends State<WorkspacePage> {
   late Future<List<FileItem>> _itemsFuture;
+  List<FileItem> _visibleItems = const <FileItem>[];
   final FocusNode _itemsFocusNode = FocusNode(
     debugLabel: 'workspace-items',
   );
@@ -260,6 +262,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
         }
 
         final items = snapshot.data ?? const <FileItem>[];
+        _visibleItems = items;
         if (desktop) {
           _ensureDefaultSelection(items);
         }
@@ -551,9 +554,18 @@ class _WorkspacePageState extends State<WorkspacePage> {
   }
 
   void _openPreview(FileItem item) {
+    final imageFiles = _visibleItems
+        .where((file) =>
+            !file.isDirectory &&
+            PreviewTypeResolver.fromFileName(file.name) == PreviewType.image)
+        .toList(growable: false);
     Navigator.of(context).pushNamed(
       RouteNames.preview,
-      arguments: PreviewPageArguments(fileName: item.name, filePath: item.path),
+      arguments: PreviewPageArguments(
+        fileName: item.name,
+        filePath: item.path,
+        imageFiles: imageFiles,
+      ),
     );
   }
 
