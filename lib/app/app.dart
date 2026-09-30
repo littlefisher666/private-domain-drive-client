@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'bootstrap/app_bootstrap.dart';
+import '../features/gallery/presentation/gallery_scope.dart';
 import '../features/share_import/infrastructure/android_share_import_bridge.dart';
 import '../features/share_import/presentation/share_target_dialog.dart';
 import '../shared/state/app_controller.dart';
@@ -134,7 +136,9 @@ class _PrivateDomainDriveAppState extends State<PrivateDomainDriveApp> {
     final isMacOS = defaultTargetPlatform == TargetPlatform.macOS;
     return AppScope(
       controller: widget.controller,
-      child: AnimatedBuilder(
+      child: GalleryScope(
+        controller: AppBootstrap.galleryController,
+        child: AnimatedBuilder(
         animation: widget.controller,
         builder: (context, _) {
           _showShareTargetDialogIfNeeded();
@@ -150,6 +154,7 @@ class _PrivateDomainDriveAppState extends State<PrivateDomainDriveApp> {
             onGenerateRoute: AppRouter.onGenerateRoute,
           );
         },
+        ),
       ),
     );
   }

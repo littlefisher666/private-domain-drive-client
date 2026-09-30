@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -18,6 +19,23 @@ const _jpegExifProbeSizes = <int>[
   32 * 1024,
 ];
 const _recycleBinPrefix = 'shared/.trash/';
+
+/// 图片 EXIF 解析结果：拍摄时间、GPS 坐标与像素尺寸。
+class ImageExifInfo {
+  const ImageExifInfo({
+    this.takenAt,
+    this.latitude,
+    this.longitude,
+    this.width,
+    this.height,
+  });
+
+  final DateTime? takenAt;
+  final double? latitude;
+  final double? longitude;
+  final int? width;
+  final int? height;
+}
 
 /// 统一 OSS 基础设施入口。所有对象协议均由当前平台的阿里云官方 SDK执行。
 class OssClient {
@@ -42,7 +60,9 @@ class OssClient {
     );
     final folders = <FileItem>[
       for (final key in page.commonPrefixes)
-        if (key != prefix && key != _recycleBinPrefix)
+        if (key != prefix &&
+            key != _recycleBinPrefix &&
+            !_isInternalPrefix(key, session))
           FileItem(
             path: key,
             name: key.substring(prefix.length).replaceFirst(RegExp(r'/$'), ''),
@@ -69,7 +89,8 @@ class OssClient {
               ),
       for (final object in page.objects)
         if (object.key != prefix &&
-            !object.key.substring(prefix.length).contains('/'))
+            !object.key.substring(prefix.length).contains('/') &&
+            !_isInternalObject(object.key, session))
           FileItem(
             path: object.key,
             name: object.key.substring(prefix.length),
@@ -268,6 +289,47 @@ class OssClient {
         page.commonPrefixes.any((prefix) => prefix == path);
   }
 
+  /// 递归列出前缀下全部对象（含子目录），返回完整对象元数据。
+  Future<List<OssNativeObject>> listAllObjects(
+    String path,
+    UserSession session,
+  ) async {
+    await _ensureConfigured(session);
+    final objects = <OssNativeObject>[];
+    String? marker;
+    do {
+      final page = await _platform(
+        () => _native.listObjects(
+          prefix: path,
+          marker: marker,
+          maxKeys: 1000,
+        ),
+      );
+      objects.addAll(page.objects);
+      marker = page.isTruncated ? page.nextMarker : null;
+      if (page.isTruncated && (marker == null || marker.isEmpty)) {
+        throw AppError('OSS 分页响应缺少下一页标识', code: 'OSS_INVALID_RESPONSE');
+      }
+    } while (marker != null && marker.isNotEmpty);
+    return objects;
+  }
+
+  /// 相册客户端约定对象：会话根下的索引清单与视频缩略图目录，
+  /// 不应出现在用户的文件浏览视图中。
+  bool _isInternalPrefix(String key, UserSession session) {
+    final root = session.rootPrefix;
+    return root.isNotEmpty &&
+        key.startsWith(root) &&
+        (key == '${root}index/' || key == '${root}thumbs/');
+  }
+
+  bool _isInternalObject(String key, UserSession session) {
+    final root = session.rootPrefix;
+    return root.isNotEmpty &&
+        key.startsWith(root) &&
+        key == '${root}index/photos.json';
+  }
+
   Future<List<int>> download(String path, UserSession session) async {
     await _ensureConfigured(session);
     return _platform(
@@ -313,8 +375,13 @@ class OssClient {
     );
   }
 
-  /// 通过 OSS 图片处理读取原图 EXIF；不支持或不含 EXIF 的图片返回 null。
-  Future<DateTime?> readImageTakenAt(String path, UserSession session) async {
+  /// 通过 OSS 图片处理与 JPEG 文件头探测读取图片 EXIF。
+  /// 不支持或不含 EXIF 的图片返回空信息。
+  Future<ImageExifInfo> readImageExif(
+    String path,
+    UserSession session,
+  ) async {
+    DateTime? takenAt;
     try {
       final bytes = await _getProcessedObject(
         path,
@@ -332,7 +399,10 @@ class OssClient {
           final raw = _findExifValue(value, key);
           if (raw is! String) continue;
           final parsed = _parseExifDate(raw);
-          if (parsed != null) return parsed;
+          if (parsed != null) {
+            takenAt = parsed;
+            break;
+          }
         }
       }
     } catch (_) {
@@ -347,15 +417,38 @@ class OssClient {
         endByte: targetSize - 1,
       );
       header.addAll(chunk);
-      final takenAt = _parseJpegExifTakenAt(header);
-      if (takenAt != null) return takenAt;
+      final info = _parseImageHeaderInfo(header);
+      if (info != null) {
+        return ImageExifInfo(
+          takenAt: info.takenAt ?? takenAt,
+          latitude: info.latitude,
+          longitude: info.longitude,
+          width: info.width,
+          height: info.height,
+        );
+      }
       // JPEG 的所有 EXIF 都位于 SOS（图像数据开始）之前；已越过该位置
       // 仍未找到日期，即可确定没有可用 EXIF，无需读满最大范围。
-      if (_isJpegMetadataComplete(header)) return null;
+      if (_isJpegMetadataComplete(header)) break;
       // 已到文件末尾仍未读到拍摄日期，无需继续扩大范围。
-      if (header.length < targetSize) return null;
+      if (header.length < targetSize) break;
     }
-    return null;
+    return ImageExifInfo(takenAt: takenAt);
+  }
+
+  /// 解析本地图片文件的文件头（前 256 KB），提取拍摄时间、GPS 与尺寸。
+  /// 解析失败或格式不支持时返回空信息，由调用方回退文件时间。
+  Future<ImageExifInfo> readLocalImageExif(File file) async {
+    try {
+      final length = await file.length();
+      final header = await file.openRead(0, min(length, 256 * 1024)).fold(
+            <int>[],
+            (buffer, chunk) => buffer..addAll(chunk),
+          );
+      return _parseImageHeaderInfo(header) ?? const ImageExifInfo();
+    } catch (_) {
+      return const ImageExifInfo();
+    }
   }
 
   Future<void> downloadToFile(
@@ -630,9 +723,34 @@ Object? _findExifValue(Map<dynamic, dynamic> values, String targetKey) {
   return null;
 }
 
-DateTime? _parseJpegExifTakenAt(List<int> bytes) {
+ImageExifInfo? _parseImageHeaderInfo(List<int> bytes) {
+  final jpeg = _parseJpegSegments(bytes);
+  if (jpeg != null) return jpeg;
+  // PNG：固定 8 字节签名 + IHDR 宽高位于第 16-24 字节。
+  if (bytes.length >= 24 &&
+      bytes[0] == 0x89 &&
+      bytes[1] == 0x50 &&
+      bytes[2] == 0x4e &&
+      bytes[3] == 0x47) {
+    int read32(int offset) =>
+        (bytes[offset] << 24) |
+        (bytes[offset + 1] << 16) |
+        (bytes[offset + 2] << 8) |
+        bytes[offset + 3];
+    return ImageExifInfo(width: read32(16), height: read32(20));
+  }
+  return null;
+}
+
+ImageExifInfo? _parseJpegSegments(List<int> bytes) {
   if (bytes.length < 4 || bytes[0] != 0xff || bytes[1] != 0xd8) return null;
   var offset = 2;
+  DateTime? takenAt;
+  int? width;
+  int? height;
+  double? latitude;
+  double? longitude;
+  var foundExif = false;
   while (offset + 4 <= bytes.length) {
     if (bytes[offset] != 0xff) {
       offset++;
@@ -641,13 +759,13 @@ DateTime? _parseJpegExifTakenAt(List<int> bytes) {
     while (offset < bytes.length && bytes[offset] == 0xff) {
       offset++;
     }
-    if (offset >= bytes.length) return null;
+    if (offset >= bytes.length) break;
     final marker = bytes[offset++];
-    if (marker == 0xd9 || marker == 0xda) return null;
+    if (marker == 0xd9 || marker == 0xda) break;
     if ((marker >= 0xd0 && marker <= 0xd7) || marker == 0x01) continue;
-    if (offset + 2 > bytes.length) return null;
+    if (offset + 2 > bytes.length) break;
     final length = (bytes[offset] << 8) | bytes[offset + 1];
-    if (length < 2 || offset + length > bytes.length) return null;
+    if (length < 2 || offset + length > bytes.length) break;
     if (marker == 0xe1 &&
         length >= 8 &&
         bytes[offset + 2] == 0x45 &&
@@ -656,11 +774,24 @@ DateTime? _parseJpegExifTakenAt(List<int> bytes) {
         bytes[offset + 5] == 0x66 &&
         bytes[offset + 6] == 0 &&
         bytes[offset + 7] == 0) {
-      return _parseTiffExifDate(bytes, offset + 8, offset + length);
+      foundExif = true;
+      final info = _parseTiffExif(bytes, offset + 8, offset + length);
+      takenAt ??= info.takenAt;
+      width ??= info.width;
+      height ??= info.height;
+      latitude ??= info.latitude;
+      longitude ??= info.longitude;
     }
     offset += length;
   }
-  return null;
+  if (!foundExif) return null;
+  return ImageExifInfo(
+    takenAt: takenAt,
+    latitude: latitude,
+    longitude: longitude,
+    width: width,
+    height: height,
+  );
 }
 
 bool _isJpegMetadataComplete(List<int> bytes) {
@@ -684,11 +815,12 @@ bool _isJpegMetadataComplete(List<int> bytes) {
   return false;
 }
 
-DateTime? _parseTiffExifDate(List<int> bytes, int start, int end) {
-  if (start + 8 > end) return null;
+ImageExifInfo _parseTiffExif(List<int> bytes, int start, int end) {
+  const empty = ImageExifInfo();
+  if (start + 8 > end) return empty;
   final littleEndian = bytes[start] == 0x49 && bytes[start + 1] == 0x49;
   final bigEndian = bytes[start] == 0x4d && bytes[start + 1] == 0x4d;
-  if (!littleEndian && !bigEndian) return null;
+  if (!littleEndian && !bigEndian) return empty;
 
   int read16(int offset) {
     if (offset + 2 > end) return -1;
@@ -720,9 +852,25 @@ DateTime? _parseTiffExifDate(List<int> bytes, int start, int end) {
         .replaceFirst(RegExp(r'\x00.*$'), '');
   }
 
+  /// 读取 RATIONAL（两个 32 位无符号整数之商）。
+  double? readRational(int offset) {
+    if (offset + 8 > end) return null;
+    final numerator = read32(offset);
+    final denominator = read32(offset + 4);
+    if (numerator < 0 || denominator <= 0) return null;
+    return numerator / denominator;
+  }
+
   int? exifOffset;
-  String? dateTime;
-  void scanIfd(int ifdOffset, {bool exif = false}) {
+  int? gpsOffset;
+  DateTime? dateTime;
+  int? width;
+  int? height;
+  double? latitudeValue;
+  double? longitudeValue;
+  var latitudeSign = 1;
+  var longitudeSign = 1;
+  void scanIfd(int ifdOffset, {bool exif = false, bool gps = false}) {
     final count = read16(ifdOffset);
     if (count < 0 || ifdOffset + 2 + count * 12 > end) return;
     for (var index = 0; index < count; index++) {
@@ -730,13 +878,50 @@ DateTime? _parseTiffExifDate(List<int> bytes, int start, int end) {
       final tag = read16(entry);
       final type = read16(entry + 2);
       final valueCount = read32(entry + 4);
+      if (gps) {
+        // GPS IFD：纬度/经度基准与三个 RATIONAL 分量。
+        if (tag == 0x0001 && type == 2 && valueCount == 2) {
+          if (readAscii(entry, 2) == 'S') latitudeSign = -1;
+        }
+        if (tag == 0x0003 && type == 2 && valueCount == 2) {
+          if (readAscii(entry, 2) == 'W') longitudeSign = -1;
+        }
+        if ((tag == 0x0002 || tag == 0x0004) && type == 5 && valueCount == 3) {
+          final valueOffset = start + read32(entry + 8);
+          final degrees = readRational(valueOffset);
+          final minutes = readRational(valueOffset + 8);
+          final seconds = readRational(valueOffset + 16);
+          if (degrees != null && minutes != null && seconds != null) {
+            final value = degrees + minutes / 60 + seconds / 3600;
+            if (tag == 0x0002) {
+              latitudeValue = value;
+            } else {
+              longitudeValue = value;
+            }
+          }
+        }
+        continue;
+      }
       if (tag == 0x8769 && type == 4 && valueCount == 1) {
         exifOffset = start + read32(entry + 8);
+      }
+      if (tag == 0x8825 && type == 4 && valueCount == 1) {
+        gpsOffset = start + read32(entry + 8);
+      }
+      if (exif && tag == 0xa002 && (type == 3 || type == 4)) {
+        final value = type == 3 ? read16(entry + 8) : read32(entry + 8);
+        if (value > 0) width = value;
+      }
+      if (exif && tag == 0xa003 && (type == 3 || type == 4)) {
+        final value = type == 3 ? read16(entry + 8) : read32(entry + 8);
+        if (value > 0) height = value;
       }
       if ((exif && (tag == 0x9003 || tag == 0x9004)) ||
           (!exif && tag == 0x0132)) {
         if (type == 2 && valueCount > 0) {
-          dateTime ??= readAscii(entry, valueCount);
+          final raw = readAscii(entry, valueCount);
+          final parsed = raw == null ? null : _parseExifDate(raw);
+          if (parsed != null) dateTime ??= parsed;
         }
       }
     }
@@ -745,7 +930,17 @@ DateTime? _parseTiffExifDate(List<int> bytes, int start, int end) {
   final firstIfd = start + read32(start + 4);
   scanIfd(firstIfd);
   if (exifOffset != null) scanIfd(exifOffset!, exif: true);
-  return dateTime == null ? null : _parseExifDate(dateTime!);
+  if (gpsOffset != null) scanIfd(gpsOffset!, gps: true);
+  final latitude = latitudeValue == null ? null : latitudeSign * latitudeValue!;
+  final longitude =
+      longitudeValue == null ? null : longitudeSign * longitudeValue!;
+  return ImageExifInfo(
+    takenAt: dateTime,
+    latitude: (latitude != null && latitude.abs() <= 90) ? latitude : null,
+    longitude: (longitude != null && longitude.abs() <= 180) ? longitude : null,
+    width: width,
+    height: height,
+  );
 }
 
 class TransferCanceledException implements Exception {

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../../app/theme/cupertino_desktop.dart';
 import '../../../shared/state/app_controller.dart';
 import '../../../shared/state/app_scope.dart';
+import '../../gallery/presentation/gallery_page.dart';
 import '../../settings/presentation/settings_page.dart';
 import '../../transfer/presentation/transfer_tasks_page.dart';
 import 'workspace_page.dart';
@@ -19,16 +20,16 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
-  late int _index = widget.initialIndex.clamp(0, 3);
+  late int _index = widget.initialIndex.clamp(0, 4);
   int _settingsVisit = 0;
   int _recycleBinVisit = 0;
 
   void _select(int value) {
-    if (value == 2) {
+    if (value == 3) {
       _recycleBinVisit++;
       AppScope.of(context).setRecycleBinPath(AppController.rootPrefix);
     }
-    if (value == 3) _settingsVisit++;
+    if (value == 4) _settingsVisit++;
     setState(() => _index = value);
   }
 
@@ -57,7 +58,7 @@ class _HomeShellState extends State<HomeShell> {
         if (didPop) {
           return;
         }
-        if (_index == 2) {
+        if (_index == 3) {
           if (controller.recycleBinPath != AppController.rootPrefix) {
             controller.setRecycleBinPath(
               controller.parentPath(controller.recycleBinPath),
@@ -79,9 +80,10 @@ class _HomeShellState extends State<HomeShell> {
       },
       child: Scaffold(
         body: IndexedStack(
-          index: _index.clamp(0, 3),
+          index: _index.clamp(0, 4),
           children: <Widget>[
             const WorkspacePage(),
+            GalleryPage(key: ValueKey<String>('gallery-mobile')),
             const TransferTasksPage(embedded: true),
             RecycleBinPage(
               key: ValueKey<String>('recycle-bin-mobile-$_recycleBinVisit'),
@@ -99,6 +101,11 @@ class _HomeShellState extends State<HomeShell> {
               icon: Icon(Icons.folder_outlined),
               selectedIcon: Icon(Icons.folder),
               label: '文件',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.photo_outlined),
+              selectedIcon: Icon(Icons.photo),
+              label: '相册',
             ),
             NavigationDestination(
               icon: Icon(Icons.swap_vert_circle_outlined),
@@ -147,9 +154,10 @@ class _DesktopShell extends StatelessWidget {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final title = switch (index) {
-      1 => '传输中心',
-      2 => '回收站',
-      3 => '我的',
+      1 => '相册',
+      2 => '传输中心',
+      3 => '回收站',
+      4 => '我的',
       _ => '私域网盘',
     };
 
@@ -184,20 +192,26 @@ class _DesktopShell extends StatelessWidget {
                             _SideNavItem(
                               selected: index == 0,
                               icon: Icons.folder_outlined,
-                              label: '共享空间',
+                              label: '文件',
                               onTap: () => _selectPage(0),
                             ),
                             _SideNavItem(
                               selected: index == 1,
-                              icon: Icons.swap_vert,
-                              label: '传输中心',
+                              icon: Icons.photo_outlined,
+                              label: '相册',
                               onTap: () => _selectPage(1),
                             ),
                             _SideNavItem(
                               selected: index == 2,
+                              icon: Icons.swap_vert,
+                              label: '传输中心',
+                              onTap: () => _selectPage(2),
+                            ),
+                            _SideNavItem(
+                              selected: index == 3,
                               icon: CupertinoIcons.trash,
                               label: '回收站',
-                              onTap: () => _selectPage(2),
+                              onTap: () => _selectPage(3),
                             ),
                             const SizedBox(height: 14),
                             Text('目录', style: theme.textTheme.labelLarge),
@@ -232,7 +246,7 @@ class _DesktopShell extends StatelessWidget {
                               ),
                               child: InkWell(
                                 borderRadius: BorderRadius.circular(14),
-                                onTap: () => _selectPage(3),
+                                onTap: () => _selectPage(4),
                                 child: Padding(
                                   padding: const EdgeInsets.all(12),
                                   child: Column(
@@ -270,6 +284,10 @@ class _DesktopShell extends StatelessWidget {
                       index: index,
                       children: <Widget>[
                         const WorkspacePage(desktopChrome: true),
+                        GalleryPage(
+                          key: const ValueKey<String>('gallery-desktop'),
+                          desktopChrome: true,
+                        ),
                         const TransferTasksPage(
                           embedded: true,
                           desktopChrome: true,
