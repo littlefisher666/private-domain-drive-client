@@ -174,8 +174,12 @@ class _SettingsPageState extends State<SettingsPage> {
               child: Column(
                 children: <Widget>[
                   ListTile(
-                    contentPadding: _mobileTilePadding(desktop),
-                    minVerticalPadding: _mobileTileVerticalPadding(desktop),
+                    contentPadding: EdgeInsets.fromLTRB(
+                      16,
+                      desktop ? 10 : 4,
+                      16,
+                      desktop ? 10 : 4,
+                    ),
                     leading: CircleAvatar(
                       radius: desktop ? 26 : 18,
                       backgroundColor:
@@ -193,7 +197,8 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                     title: Text(
                       session?.displayName ?? '未登录',
-                      style: desktop ? null : theme.textTheme.titleMedium,
+                      style: (theme.textTheme.titleMedium ?? const TextStyle())
+                          .copyWith(fontWeight: FontWeight.w600),
                     ),
                     subtitle:
                         session == null ? const Text('请先登录') : null,
@@ -338,14 +343,21 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   String get _updateSubtitle {
+    if (_checkingUpdate) return '正在检查最新版本…';
     final result = _updateCheck;
-    if (_checkingUpdate && result == null) return '正在检查最新版本…';
     if (result == null) return '从 GitHub Releases 获取稳定版';
     if (result.latestVersion.isEmpty) return '暂未发现本平台的发布版本';
     return '最新版本 ${result.latestVersion}';
   }
 
-  Widget? get _updateBadge {
+  Widget? get _updateTrailing {
+    if (_checkingUpdate) {
+      return const SizedBox(
+        width: 18,
+        height: 18,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      );
+    }
     if (_updateCheck?.availableUpdate == null) return null;
     return const Chip(
       label: Text('有新版本'),
