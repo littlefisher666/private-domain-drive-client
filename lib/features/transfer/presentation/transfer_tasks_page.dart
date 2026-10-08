@@ -202,8 +202,7 @@ class _TransferTypeFilter extends StatelessWidget {
         borderRadius: BorderRadius.circular(6),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-          child: Text(label,
-              style: selected ? selectedStyle : unselectedStyle),
+          child: Text(label, style: selected ? selectedStyle : unselectedStyle),
         ),
       );
     }
@@ -218,8 +217,7 @@ class _TransferTypeFilter extends StatelessWidget {
       child: Row(
         children: <Widget>[
           tab('全部 ${tasks.length}', null),
-          tab('上传 ${count(TransferTaskType.upload)}',
-              TransferTaskType.upload),
+          tab('上传 ${count(TransferTaskType.upload)}', TransferTaskType.upload),
           tab('下载 ${count(TransferTaskType.download)}',
               TransferTaskType.download),
         ],
@@ -671,15 +669,15 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
             task.status == TransferTaskStatus.running ||
             task.status == TransferTaskStatus.pending)
         .toList(growable: false);
-    final unfinishedTotalBytes = unfinishedTasks
-        .fold<int>(0, (sum, task) => sum + (task.totalBytes ?? 0));
-    final unfinishedTransferredBytes = unfinishedTasks
-        .fold<int>(0, (sum, task) => sum + task.transferredBytes);
+    final unfinishedTotalBytes = unfinishedTasks.fold<int>(
+        0, (sum, task) => sum + (task.totalBytes ?? 0));
+    final unfinishedTransferredBytes = unfinishedTasks.fold<int>(
+        0, (sum, task) => sum + task.transferredBytes);
     final globalSpeed = unfinishedTasks
         .where((task) => task.status == TransferTaskStatus.running)
         .fold<double>(0, (sum, task) => sum + (task.bytesPerSecond ?? 0));
-    final statsStyle =
-        theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    final statsStyle = theme.textTheme.bodySmall
+        ?.copyWith(color: theme.colorScheme.onSurfaceVariant);
     // 任务总数由下方筛选 Tab 展示，这里不再重复，避免长文本截断进度。
     final statsText = tasks.isEmpty
         ? '上传、下载、重试与取消'
@@ -781,10 +779,15 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
     final canCancel = task.status == TransferTaskStatus.running ||
         task.status == TransferTaskStatus.pending;
     final transferDetails = _transferDetails(task);
+    // 状态徽章已展示「进行中/已完成」等文案，这里跳过重复的 message，
+    // 避免「60% · 100.5 MB / 166.2 MB · 2.0 MB/s · 进行中」超宽被省略号截断。
+    final statusLabel = _labelForStatus(task.status);
+    final message = (task.message == null || task.message == statusLabel)
+        ? null
+        : task.message;
     final progressText = <String>[
-      progressLabel,
       if (transferDetails != null) transferDetails,
-      if (task.message != null) task.message!,
+      if (message != null) message,
     ].join(' · ');
     return Card(
       child: Padding(
@@ -801,14 +804,8 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                     borderRadius: BorderRadius.circular(9),
                     gradient: LinearGradient(
                       colors: task.type == TransferTaskType.upload
-                          ? const <Color>[
-                              Color(0xFF5EEAD4),
-                              Color(0xFF0EA5A4)
-                            ]
-                          : const <Color>[
-                              Color(0xFF7DD3FC),
-                              Color(0xFF2563EB)
-                            ],
+                          ? const <Color>[Color(0xFF5EEAD4), Color(0xFF0EA5A4)]
+                          : const <Color>[Color(0xFF7DD3FC), Color(0xFF2563EB)],
                     ),
                   ),
                   child: Icon(_iconForType(task.type),
@@ -827,8 +824,8 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                 ),
                 const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 6, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
                     color: _colorForStatus(context, task.status)
                         .withValues(alpha: 0.12),
@@ -856,61 +853,77 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
               ),
             ],
             const SizedBox(height: 8),
-            LinearProgressIndicator(
-              value: task.progress.clamp(0.0, 1.0),
-              minHeight: 4,
-              borderRadius: BorderRadius.circular(999),
-              color: task.status == TransferTaskStatus.success
-                  ? CupertinoDesktopTokens.success
-                  : null,
-              backgroundColor: task.status == TransferTaskStatus.success
-                  ? CupertinoDesktopTokens.success
-                      .withValues(alpha: 0.16)
-                  : null,
-            ),
-            const SizedBox(height: 4),
             Row(
               children: <Widget>[
                 Expanded(
+                  child: LinearProgressIndicator(
+                    value: task.progress.clamp(0.0, 1.0),
+                    minHeight: 4,
+                    borderRadius: BorderRadius.circular(999),
+                    color: task.status == TransferTaskStatus.success
+                        ? CupertinoDesktopTokens.success
+                        : null,
+                    backgroundColor: task.status == TransferTaskStatus.success
+                        ? CupertinoDesktopTokens.success.withValues(alpha: 0.16)
+                        : null,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 38,
                   child: Text(
-                    progressText,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    progressLabel,
+                    textAlign: TextAlign.end,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
                 ),
-                if (canRetry)
-                  IconButton(
-                    tooltip: '重试',
-                    visualDensity: VisualDensity.compact,
-                    constraints: const BoxConstraints.tightFor(
-                        width: 32, height: 32),
-                    padding: EdgeInsets.zero,
-                    onPressed: () {
-                      controller.retryTask(task.id);
-                      AppFeedback.showSnack(
-                          context, '已重新开始 ${task.name}');
-                    },
-                    icon: const Icon(Icons.refresh_rounded, size: 18),
-                  ),
-                if (canCancel)
-                  IconButton(
-                    tooltip: '取消传输',
-                    visualDensity: VisualDensity.compact,
-                    constraints: const BoxConstraints.tightFor(
-                        width: 32, height: 32),
-                    padding: EdgeInsets.zero,
-                    onPressed: () {
-                      controller.cancelTask(task.id);
-                      AppFeedback.showSnack(
-                          context, '已取消 ${task.name}');
-                    },
-                    icon: const Icon(Icons.close_rounded, size: 18),
-                  ),
               ],
             ),
+            if (progressText.isNotEmpty || canRetry || canCancel) ...<Widget>[
+              const SizedBox(height: 4),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      progressText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  if (canRetry)
+                    IconButton(
+                      tooltip: '重试',
+                      visualDensity: VisualDensity.compact,
+                      constraints:
+                          const BoxConstraints.tightFor(width: 32, height: 32),
+                      padding: EdgeInsets.zero,
+                      onPressed: () {
+                        controller.retryTask(task.id);
+                        AppFeedback.showSnack(context, '已重新开始 ${task.name}');
+                      },
+                      icon: const Icon(Icons.refresh_rounded, size: 18),
+                    ),
+                  if (canCancel)
+                    IconButton(
+                      tooltip: '取消传输',
+                      visualDensity: VisualDensity.compact,
+                      constraints:
+                          const BoxConstraints.tightFor(width: 32, height: 32),
+                      padding: EdgeInsets.zero,
+                      onPressed: () {
+                        controller.cancelTask(task.id);
+                        AppFeedback.showSnack(context, '已取消 ${task.name}');
+                      },
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                    ),
+                ],
+              ),
+            ],
           ],
         ),
       ),

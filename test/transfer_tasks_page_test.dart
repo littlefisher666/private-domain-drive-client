@@ -229,7 +229,7 @@ void main() {
     expect(find.text(statsText), findsOneWidget);
   });
 
-  testWidgets('移动端进行中任务展示大小与速度', (tester) async {
+  testWidgets('移动端进行中任务展示大小与速度，百分比在进度条右侧', (tester) async {
     await pumpMobileTasks(
       tester,
       const <TransferTask>[
@@ -247,10 +247,17 @@ void main() {
       ],
     );
 
+    // 与状态徽章重复的「进行中」不再拼进底部文字行。
+    expect(find.text('5.0 MB / 10.0 MB · 2.0 MB/s'), findsOneWidget);
+    expect(find.text('50%'), findsOneWidget);
+    final progressCenter =
+        tester.getCenter(find.byType(LinearProgressIndicator));
+    final percentCenter = tester.getCenter(find.text('50%'));
+    expect(percentCenter.dx, greaterThan(progressCenter.dx));
     expect(
-      find.text('50% · 5.0 MB / 10.0 MB · 2.0 MB/s · 进行中'),
-      findsOneWidget,
-    );
+        percentCenter.dx,
+        greaterThan(
+            tester.getCenter(find.text('5.0 MB / 10.0 MB · 2.0 MB/s')).dx));
   });
 
   testWidgets('移动端总字节未知时仅展示已传输量', (tester) async {
@@ -269,10 +276,44 @@ void main() {
       ],
     );
 
-    expect(find.text('0% · 2.0 KB · 进行中'), findsOneWidget);
+    expect(find.text('2.0 KB'), findsOneWidget);
+    expect(find.text('0%'), findsOneWidget);
+  });
+
+  testWidgets('移动端已完成卡片保留不重复的附加信息', (tester) async {
+    await pumpMobileTasks(
+      tester,
+      const <TransferTask>[
+        TransferTask(
+          id: 'upload-1',
+          name: '照片.jpg',
+          type: TransferTaskType.upload,
+          status: TransferTaskStatus.success,
+          progress: 1,
+          message: '已存在，跳过',
+        ),
+        TransferTask(
+          id: 'upload-2',
+          name: '视频.mp4',
+          type: TransferTaskType.upload,
+          status: TransferTaskStatus.success,
+          progress: 1,
+          message: '已完成',
+        ),
+      ],
+    );
+
+    expect(find.text('已存在，跳过'), findsOneWidget);
+    expect(find.text('100%'), findsNWidgets(2));
   });
 
   testWidgets('任务按状态优先级排列，同状态内新任务在前', (tester) async {
+    // 进度条行含百分比文字后卡片变高，默认 800x600 视口装不下 5 张卡片；
+    // 宽度须低于 960 以保持移动端布局。
+    tester.view.physicalSize = const Size(420, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     await pumpMobileTasks(
       tester,
       <TransferTask>[
