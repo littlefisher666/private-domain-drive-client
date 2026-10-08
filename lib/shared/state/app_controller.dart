@@ -94,22 +94,15 @@ class DirectorySizeState {
   final bool isLoading;
 }
 
-class TransferBatchSummary {
-  const TransferBatchSummary({
-    required this.id,
-    required this.total,
-    required this.pending,
-    required this.running,
-    required this.success,
-    required this.failed,
-  });
+/// 上传目标已存在时的用户处置决策。
+enum UploadConflictResolution { skip, overwrite, keepBoth }
 
-  final String id;
-  final int total;
-  final int pending;
-  final int running;
-  final int success;
-  final int failed;
+typedef _UploadConflictDecision
+    = ({UploadConflictResolution resolution, bool applyToBatch});
+
+/// 任务因「已存在，跳过」而未发起上传时抛出，由传输执行器标记为完成。
+class _UploadSkippedException implements Exception {
+  const _UploadSkippedException();
 }
 
 /// 相册功能在传输与删除生命周期中的挂钩点。
@@ -162,6 +155,21 @@ class AppController extends ChangeNotifier {
   void setGalleryHooks(GalleryIndexHooks? hooks) {
     _galleryHooks = hooks;
   }
+
+  /// 全局 Navigator Key，供传输队列内弹出上传冲突处置对话框。
+  GlobalKey<NavigatorState>? _navigatorKey;
+
+  void setNavigatorKey(GlobalKey<NavigatorState>? key) {
+    _navigatorKey = key;
+  }
+
+  /// 批次级「整批应用」决策；同批其余已存在任务直接复用。
+  final Map<String, UploadConflictResolution> _batchConflictResolutions =
+      <String, UploadConflictResolution>{};
+
+  /// 正在等待批次决策的任务共享同一个 Completer，保证一批只弹一次对话框。
+  final Map<String, Completer<_UploadConflictDecision?>>
+      _batchConflictWaiters = <String, Completer<_UploadConflictDecision?>>{};
 
   static const rootPrefix = 'shared/';
   static const _transferConcurrencyKey = 'transfer_concurrency';
@@ -268,26 +276,6 @@ class AppController extends ChangeNotifier {
   int get transferConcurrency => transferConcurrencyListenable.value;
   int get runningTransferCount => _runningTransferIds.length;
   int get pendingTransferCount => _pendingTransferIds.length;
-  List<TransferBatchSummary> get transferBatches {
-    final grouped = <String, List<TransferTask>>{};
-    for (final task in tasks) {
-      final batchId = task.batchId;
-      if (batchId != null) (grouped[batchId] ??= <TransferTask>[]).add(task);
-    }
-    return grouped.entries.map((entry) {
-      final values = entry.value;
-      int count(TransferTaskStatus status) =>
-          values.where((task) => task.status == status).length;
-      return TransferBatchSummary(
-        id: entry.key,
-        total: values.length,
-        pending: count(TransferTaskStatus.pending),
-        running: count(TransferTaskStatus.running),
-        success: count(TransferTaskStatus.success),
-        failed: count(TransferTaskStatus.failed),
-      );
-    }).toList(growable: false);
-  }
 
   List<ShareImportItem> get pendingShareItems =>
       List<ShareImportItem>.unmodifiable(_pendingShareItems);
@@ -411,6 +399,7 @@ class AppController extends ChangeNotifier {
     clearMultiSelection();
     _pendingShareItems = const <ShareImportItem>[];
     _pendingTransferIds.clear();
+    _batchConflictResolutions.clear();
     notifyListeners();
   }
 
@@ -1214,7 +1203,8 @@ class AppController extends ChangeNotifier {
       {required String fileName,
       required String localPath,
       required int fileSize,
-      String? targetPath}) async {
+      String? targetPath,
+      String? batchId}) async {
     _ensureUploadCapability();
     final dir = _normalizeDir(targetPath ?? _currentPath);
     final taskId = _newTransferId('upload');
@@ -1227,12 +1217,32 @@ class AppController extends ChangeNotifier {
         progress: 0,
         target: displayPath(dir),
         sourcePath: localPath,
+        batchId: batchId,
         totalBytes: fileSize,
       ),
       _QueuedTransfer((report, isCanceled) async {
         if (isCanceled()) throw const TransferCanceledException();
         await ensureSessionReady();
-        final objectPath = '$dir$fileName';
+        final session = _requireSession();
+        var objectPath = '$dir$fileName';
+        // 上传前校验目标是否已存在；放在队列闭包内使重试同样经过校验。
+        if (await _ossClient.objectExists(objectPath, session)) {
+          final resolution = await _resolveUploadConflict(
+            batchId: batchId,
+            fileName: fileName,
+            targetDisplayPath: displayPath(dir),
+          );
+          if (isCanceled()) throw const TransferCanceledException();
+          switch (resolution) {
+            case UploadConflictResolution.skip:
+              throw const _UploadSkippedException();
+            case UploadConflictResolution.overwrite:
+              break;
+            case UploadConflictResolution.keepBoth:
+              objectPath = await _availableUploadPath(objectPath, session);
+          }
+        }
+        if (isCanceled()) throw const TransferCanceledException();
         // 视频上传前启动截帧，超大图片上传前本地生成缩略图，均与上传
         // 并行准备；失败不影响上传本身。
         Future<String?>? thumbnailFuture;
@@ -1247,7 +1257,7 @@ class AppController extends ChangeNotifier {
         await _ossClient.uploadFile(
           objectPath,
           localPath,
-          _requireSession(),
+          session,
           taskId: taskId,
           onProgress: report,
         );
@@ -1275,6 +1285,160 @@ class AppController extends ChangeNotifier {
         }
       }),
     );
+  }
+
+  /// 解析上传冲突的处置决策；同批任务通过共享 Completer 保证只弹一次对话框。
+  Future<UploadConflictResolution> _resolveUploadConflict({
+    required String? batchId,
+    required String fileName,
+    required String targetDisplayPath,
+  }) async {
+    final decision = await _requestUploadConflictDecision(
+      batchId: batchId,
+      fileName: fileName,
+      targetDisplayPath: targetDisplayPath,
+    );
+    return decision.resolution;
+  }
+
+  Future<_UploadConflictDecision> _requestUploadConflictDecision({
+    required String? batchId,
+    required String fileName,
+    required String targetDisplayPath,
+  }) async {
+    if (batchId == null) {
+      final result = await _showUploadConflictDialog(
+        fileName: fileName,
+        targetDisplayPath: targetDisplayPath,
+        batchPendingCount: null,
+      );
+      // 对话框不可用或被系统返回键关闭时按跳过处理，不做覆盖性写入。
+      return result ??
+          (resolution: UploadConflictResolution.skip, applyToBatch: false);
+    }
+    final cached = _batchConflictResolutions[batchId];
+    if (cached != null) {
+      return (resolution: cached, applyToBatch: true);
+    }
+    final isFirstAsker = !_batchConflictWaiters.containsKey(batchId);
+    final waiter = _batchConflictWaiters.putIfAbsent(
+      batchId,
+      () => Completer<_UploadConflictDecision?>(),
+    );
+    if (!isFirstAsker) {
+      final result = await waiter.future;
+      if (result != null) return result;
+      // 未勾选整批应用时该批次无统一决策，为当前任务重新询问。
+      return _requestUploadConflictDecision(
+        batchId: batchId,
+        fileName: fileName,
+        targetDisplayPath: targetDisplayPath,
+      );
+    }
+    final batchPendingCount = tasks
+            .where((task) =>
+                task.batchId == batchId &&
+                task.status != TransferTaskStatus.success &&
+                task.status != TransferTaskStatus.failed &&
+                task.status != TransferTaskStatus.canceled)
+            .length -
+        1;
+    final result = await _showUploadConflictDialog(
+      fileName: fileName,
+      targetDisplayPath: targetDisplayPath,
+      batchPendingCount: batchPendingCount <= 0 ? null : batchPendingCount,
+    );
+    if (result != null && result.applyToBatch) {
+      _batchConflictResolutions[batchId] = result.resolution;
+    }
+    _batchConflictWaiters.remove(batchId);
+    waiter.complete(result != null && result.applyToBatch ? result : null);
+    return result ??
+        (resolution: UploadConflictResolution.skip, applyToBatch: false);
+  }
+
+  Future<_UploadConflictDecision?> _showUploadConflictDialog({
+    required String fileName,
+    required String targetDisplayPath,
+    required int? batchPendingCount,
+  }) async {
+    final context = _navigatorKey?.currentContext;
+    if (context == null) return null;
+    var selected = UploadConflictResolution.keepBoth;
+    var applyToBatch = false;
+    return showDialog<_UploadConflictDecision>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setState) => AlertDialog(
+          title: const Text('云端已存在同名文件'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text('「$fileName」在「$targetDisplayPath」已存在，请选择处理方式。'),
+              RadioGroup<UploadConflictResolution>(
+                groupValue: selected,
+                onChanged: (value) =>
+                    setState(() => selected = value ?? selected),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    RadioListTile<UploadConflictResolution>(
+                      title: const Text('保留两者'),
+                      subtitle: const Text('自动追加序号后上传，云端原文件保持不变'),
+                      value: UploadConflictResolution.keepBoth,
+                    ),
+                    RadioListTile<UploadConflictResolution>(
+                      title: const Text('覆盖'),
+                      subtitle: const Text('替换云端已有的同名文件'),
+                      value: UploadConflictResolution.overwrite,
+                    ),
+                    RadioListTile<UploadConflictResolution>(
+                      title: const Text('跳过'),
+                      subtitle: const Text('不上传，任务直接标记完成'),
+                      value: UploadConflictResolution.skip,
+                    ),
+                  ],
+                ),
+              ),
+              if (batchPendingCount != null)
+                CheckboxListTile(
+                  value: applyToBatch,
+                  onChanged: (value) =>
+                      setState(() => applyToBatch = value ?? false),
+                  title: Text('同批其余 $batchPendingCount 个文件应用相同处理'),
+                  controlAffinity: ListTileControlAffinity.leading,
+                  contentPadding: EdgeInsets.zero,
+                ),
+            ],
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(
+                (resolution: selected, applyToBatch: applyToBatch),
+              ),
+              child: const Text('确认'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 探测「文件名（1）」样式的可用对象键，用于保留两者上传。
+  Future<String> _availableUploadPath(
+      String desired, UserSession session) async {
+    final directory = parentPath(desired);
+    final name = desired.substring(directory.length);
+    final dot = name.lastIndexOf('.');
+    final stem = dot > 0 ? name.substring(0, dot) : name;
+    final extension = dot > 0 ? name.substring(dot) : '';
+    for (var number = 1;; number++) {
+      final candidate = '$directory$stem（$number）$extension';
+      if (!await _ossClient.objectExists(candidate, session)) return candidate;
+    }
   }
 
   Future<List<int>> downloadBytes(FileItem item) async {
@@ -1565,12 +1729,6 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  void cancelBatch(String batchId) {
-    cancelTasks(
-      tasks.where((task) => task.batchId == batchId).map((task) => task.id),
-    );
-  }
-
   void clearCompletedTasks() {
     _setTasks(
       tasksListenable.value
@@ -1609,12 +1767,17 @@ class AppController extends ChangeNotifier {
     }
     _pendingShareItems = const <ShareImportItem>[];
     notifyListeners();
+    // 多文件分享导入归属同一批次，传输中心可展示整批上传汇总。
+    final batchId = items.length > 1
+        ? 'batch-${DateTime.now().microsecondsSinceEpoch}'
+        : null;
     for (final item in items) {
       await uploadFile(
         fileName: item.name,
         localPath: item.localPath,
         fileSize: item.size,
         targetPath: _shareTargetPath,
+        batchId: batchId,
       );
     }
   }
@@ -1711,6 +1874,15 @@ class AppController extends ChangeNotifier {
           (task) => task.copyWith(
                 status: TransferTaskStatus.canceled,
                 message: '已取消',
+              ));
+    } on _UploadSkippedException {
+      _replaceTask(
+          taskId,
+          (task) => task.copyWith(
+                status: TransferTaskStatus.success,
+                progress: 1,
+                bytesPerSecond: null,
+                message: '已存在，跳过',
               ));
     } catch (error) {
       _replaceTask(
