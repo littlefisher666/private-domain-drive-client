@@ -83,6 +83,7 @@ class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                 "uploadFile" -> uploadFile(call, result)
                 "downloadFile" -> downloadFile(call, result)
                 "getObjectBytes" -> getObjectBytes(call, result)
+                "presignGetObjectUrl" -> presignGetObjectUrl(call, result)
                 "cancelTransfer" -> cancelTransfer(call, result)
                 else -> result.notImplemented()
             }
@@ -351,6 +352,15 @@ class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
         }
         return applicationContext.contentResolver.insert(uri, values)
             ?: throw IllegalStateException("无法创建系统媒体文件")
+    }
+
+    /// 预签名 URL 等同于访问凭证，仅经方法通道回传内存使用，
+    /// 不落盘、不写日志。
+    private fun presignGetObjectUrl(call: MethodCall, result: MethodChannel.Result) {
+        val (oss, bucketName) = requireSession()
+        val seconds = call.argument<Number>("expiresSeconds")?.toLong() ?: 3600L
+        val presigned = oss.presignConstrainedURL(bucketName, call.requiredString("key"), seconds)
+        succeed(result, presigned.signedUrl)
     }
 
     private fun cancelTransfer(call: MethodCall, result: MethodChannel.Result) {
