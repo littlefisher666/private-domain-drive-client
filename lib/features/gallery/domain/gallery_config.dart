@@ -38,4 +38,16 @@ class GalleryConfig {
   /// 受原生 OSS SDK 并发稳定性约束，过高会在原生 HTTP 客户端
   /// 会话释放时触发段错误（实测 96 必崩，32 稳定）。
   static const int scanExifConcurrency = 32;
+
+  /// 存量缩略图补齐的并发 worker 数。截帧/缩放/上传均为轻量请求，
+  /// 低于扫描并发以避免与用户主动传输争用带宽。
+  static const int thumbBackfillConcurrency = 4;
+
+  /// 单条缩略图补齐的整体超时：截帧、下载、缩放或上传任一环节挂起
+  /// 时放弃该条、继续处理队列其余条目；被放弃条目下次进入相册页
+  /// 自动重试。
+  static const Duration thumbBackfillEntryTimeout = Duration(seconds: 90);
+
+  /// 缩略图补齐遇到网络瞬断（OSS_NETWORKUNAVAILABLE）时的重试次数。
+  static const int thumbBackfillRetryAttempts = 3;
 }

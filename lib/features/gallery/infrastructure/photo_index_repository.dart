@@ -448,8 +448,9 @@ class PhotoIndexRepository {
 
   /// 存量缩略图补齐：为无缩略图映射的视频请求 OSS 服务端截帧；为
   /// 超过 OSS 图片处理大小限制的图片下载原图、本地缩放后上传，均存
-  /// 为独立缩略图对象。逐个处理、单个失败跳过（不阻塞其余）。成功
-  /// 条目先更新本地副本，最后一次性写回清单。返回补齐成功的条目数。
+  /// 为独立缩略图对象。工作池并发处理；单条超时或失败跳过（不阻塞
+  /// 其余）。成功条目先更新本地副本，最后一次性写回清单。返回补齐
+  /// 成功的条目数。
   Future<int> backfillMissingThumbnails(
     UserSession session, {
     void Function(PhotoEntry entry)? onEntryUpdated,
@@ -465,55 +466,32 @@ class PhotoIndexRepository {
     if (missing.isEmpty) return 0;
 
     final updated = <PhotoEntry>[];
-    for (final entry in missing) {
-      try {
-        String tempPath;
-        if (entry.mediaType == PhotoMediaType.video) {
-          final bytes =
-              await _ossClient.downloadVideoSnapshot(entry.key, session);
-          final temp = File(
-            '${Directory.systemTemp.path}'
-            '/thumb-backfill-${DateTime.now().microsecondsSinceEpoch}.jpg',
-          );
-          await temp.writeAsBytes(bytes, flush: true);
-          tempPath = temp.path;
-        } else {
-          tempPath = await _resizeOriginalThumbnail(session, entry);
-          if (tempPath.isEmpty) continue;
-        }
-        final thumbKey = thumbKeyFor(session, entry.key);
+    var cursor = 0;
+    Future<void> worker() async {
+      while (true) {
+        final index = cursor++;
+        if (index >= missing.length) return;
+        final entry = missing[index];
         try {
-          await _ossClient.uploadFile(
-            thumbKey,
-            tempPath,
-            session,
-            taskId: 'thumb-${DateTime.now().microsecondsSinceEpoch}',
-          );
-        } finally {
-          final temp = File(tempPath);
-          if (await temp.exists()) await temp.delete();
+          // 单条整体限时：任一环节（截帧/下载/缩放/上传）挂起时放弃
+          // 该条继续队列，避免一个无响应请求堵死后续全部条目。
+          final next = await _backfillEntryWithRetry(session, entry)
+              .timeout(GalleryConfig.thumbBackfillEntryTimeout,
+                  onTimeout: () => null);
+          if (next == null) continue;
+          updated.add(next);
+          await _database.upsertEntries(<PhotoEntry>[next]);
+          onEntryUpdated?.call(next);
+        } catch (error) {
+          debugPrint('[gallery] 缩略图补齐失败 ${entry.key}: $error');
         }
-        final next = PhotoEntry(
-          key: entry.key,
-          mediaType: entry.mediaType,
-          takenAt: entry.takenAt,
-          size: entry.size,
-          directory: entry.directory,
-          thumbKey: thumbKey,
-          modifiedMs: entry.modifiedMs,
-          width: entry.width,
-          height: entry.height,
-          latitude: entry.latitude,
-          longitude: entry.longitude,
-          device: entry.device,
-        );
-        updated.add(next);
-        await _database.upsertEntries(<PhotoEntry>[next]);
-        onEntryUpdated?.call(next);
-      } catch (error) {
-        debugPrint('[gallery] 缩略图补齐失败 ${entry.key}: $error');
       }
     }
+
+    await Future.wait(List.generate(
+      min(GalleryConfig.thumbBackfillConcurrency, missing.length),
+      (_) => worker(),
+    ));
 
     if (updated.isNotEmpty) {
       try {
@@ -542,6 +520,74 @@ class PhotoIndexRepository {
       }
     }
     return updated.length;
+  }
+
+  /// 补齐单条（含网络瞬断重试）：本机到 OSS 的直连链路偶发 SSL
+  /// 握手超时，仅对该类错误退避重试，其余错误原样抛出由调用方跳过。
+  Future<PhotoEntry?> _backfillEntryWithRetry(
+    UserSession session,
+    PhotoEntry entry,
+  ) async {
+    for (var attempt = 0;; attempt++) {
+      try {
+        return await _backfillEntry(session, entry);
+      } on AppError catch (error) {
+        if (attempt >= GalleryConfig.thumbBackfillRetryAttempts ||
+            error.code != 'OSS_NETWORKUNAVAILABLE') {
+          rethrow;
+        }
+        await Future<void>.delayed(
+          Duration(seconds: 1 << attempt),
+        );
+      }
+    }
+  }
+
+  /// 补齐单条：生成缩略图并上传为独立对象，返回更新后的条目；
+  /// 生成不了（如超大图缩放失败）返回 null。
+  Future<PhotoEntry?> _backfillEntry(
+    UserSession session,
+    PhotoEntry entry,
+  ) async {
+    String tempPath;
+    if (entry.mediaType == PhotoMediaType.video) {
+      final bytes = await _ossClient.downloadVideoSnapshot(entry.key, session);
+      final temp = File(
+        '${Directory.systemTemp.path}'
+        '/thumb-backfill-${DateTime.now().microsecondsSinceEpoch}.jpg',
+      );
+      await temp.writeAsBytes(bytes, flush: true);
+      tempPath = temp.path;
+    } else {
+      tempPath = await _resizeOriginalThumbnail(session, entry);
+      if (tempPath.isEmpty) return null;
+    }
+    final thumbKey = thumbKeyFor(session, entry.key);
+    try {
+      await _ossClient.uploadFile(
+        thumbKey,
+        tempPath,
+        session,
+        taskId: 'thumb-${DateTime.now().microsecondsSinceEpoch}',
+      );
+    } finally {
+      final temp = File(tempPath);
+      if (await temp.exists()) await temp.delete();
+    }
+    return PhotoEntry(
+      key: entry.key,
+      mediaType: entry.mediaType,
+      takenAt: entry.takenAt,
+      size: entry.size,
+      directory: entry.directory,
+      thumbKey: thumbKey,
+      modifiedMs: entry.modifiedMs,
+      width: entry.width,
+      height: entry.height,
+      latitude: entry.latitude,
+      longitude: entry.longitude,
+      device: entry.device,
+    );
   }
 
   /// 超大图缩略图补齐的原图处理：下载原图到临时文件，本地缩放为
