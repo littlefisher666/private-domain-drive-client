@@ -50,13 +50,19 @@ class PhotoIndexRepository {
     required OssClient ossClient,
     required GalleryDatabase database,
     MediaBridge? mediaBridge,
+    Duration thumbBackfillEntryTimeout = GalleryConfig.thumbBackfillEntryTimeout,
+    Duration thumbBackfillRetryBaseDelay = const Duration(seconds: 1),
   })  : _ossClient = ossClient,
         _database = database,
-        _mediaBridge = mediaBridge ?? MediaBridge();
+        _mediaBridge = mediaBridge ?? MediaBridge(),
+        _thumbBackfillEntryTimeout = thumbBackfillEntryTimeout,
+        _thumbBackfillRetryBaseDelay = thumbBackfillRetryBaseDelay;
 
   final OssClient _ossClient;
   final GalleryDatabase _database;
   final MediaBridge _mediaBridge;
+  final Duration _thumbBackfillEntryTimeout;
+  final Duration _thumbBackfillRetryBaseDelay;
 
   String manifestKey(UserSession session) =>
       '${session.rootPrefix}${GalleryConfig.manifestRelativeKey}';
@@ -476,7 +482,7 @@ class PhotoIndexRepository {
           // 单条整体限时：任一环节（截帧/下载/缩放/上传）挂起时放弃
           // 该条继续队列，避免一个无响应请求堵死后续全部条目。
           final next = await _backfillEntryWithRetry(session, entry)
-              .timeout(GalleryConfig.thumbBackfillEntryTimeout,
+              .timeout(_thumbBackfillEntryTimeout,
                   onTimeout: () => null);
           if (next == null) continue;
           updated.add(next);
@@ -537,7 +543,7 @@ class PhotoIndexRepository {
           rethrow;
         }
         await Future<void>.delayed(
-          Duration(seconds: 1 << attempt),
+          _thumbBackfillRetryBaseDelay * (1 << attempt),
         );
       }
     }
