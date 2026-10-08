@@ -163,6 +163,8 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
                 perform(result) {
                     FlutterStandardTypedData(bytes: try await self.getObjectBytes(arguments))
                 }
+            case "presignGetObjectUrl":
+                perform(result) { try await self.presignGetObjectUrl(arguments) }
             default:
                 result(FlutterMethodNotImplemented)
             }
@@ -452,6 +454,19 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
             throw OssBridgeContract.BridgeError.contentTooLarge
         }
         return data
+    }
+
+    /// 预签名 URL 等同于访问凭证，仅经方法通道回传内存使用，
+    /// 不落盘、不写日志。
+    private func presignGetObjectUrl(_ arguments: [String: Any]) async throws -> String {
+        let (client, bucket) = try session()
+        let seconds = (arguments["expiresSeconds"] as? NSNumber)?.int64Value ?? 3600
+        let expiration = Date().addingTimeInterval(TimeInterval(seconds))
+        let presigned = try await client.presign(GetObjectRequest(
+            bucket: bucket,
+            key: try OssBridgeContract.string(arguments, "key")
+        ), expiration)
+        return presigned.url
     }
 
     private func startTransfer(

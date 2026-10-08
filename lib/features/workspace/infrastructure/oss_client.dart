@@ -550,6 +550,19 @@ class OssClient {
     );
   }
 
+  /// 生成 GetObject 预签名 URL（纯本地签名）。URL 等同于访问凭证，
+  /// 仅限内存中短期使用（如流式播放），不得落盘或写日志。
+  Future<String> presignGetObjectUrl(
+    String path,
+    UserSession session, {
+    Duration expires = const Duration(hours: 1),
+  }) async {
+    await _ensureConfigured(session);
+    return _platform(
+      () => _native.presignGetObjectUrl(path, expires: expires),
+    );
+  }
+
   Future<void> copy(String from, String to, UserSession session) async {
     await _ensureConfigured(session);
     await _platform(() => _native.copyObject(from: from, to: to));

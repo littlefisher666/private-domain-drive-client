@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 
 import '../../../shared/state/app_controller.dart';
 import '../../../shared/state/app_scope.dart';
@@ -228,7 +230,7 @@ class _MobileViewerState extends State<_MobileViewer> {
               onVerticalDragEnd: (details) =>
                   _handleSwipe(details.velocity.pixelsPerSecond.dy, true),
               child: isVideo
-                  ? _VideoStillView(gallery: widget.gallery, entry: entry)
+                  ? _VideoPlayerView(gallery: widget.gallery, entry: entry)
                   : _ViewerImage(
                       gallery: widget.gallery,
                       entry: entry,
@@ -629,7 +631,7 @@ class _DesktopViewerState extends State<_DesktopViewer> {
                           scaleEnabled: !isVideo,
                           child: Center(
                             child: isVideo
-                                ? _VideoStillView(
+                                ? _VideoPlayerView(
                                     gallery: widget.gallery,
                                     entry: entry,
                                   )
@@ -1255,77 +1257,244 @@ class _ViewerImageState extends State<_ViewerImage>
     );
   }}
 
-/// 视频条目：展示截帧缩略图并提示不支持在线播放，仅提供下载。
-class _VideoStillView extends StatefulWidget {
-  const _VideoStillView({required this.gallery, required this.entry});
+/// 视频条目内嵌播放视图：默认展示截帧缩略图封面与播放按钮（不自动
+/// 播放），点击后生成 OSS 预签名 URL 流式播放；失败时展示兜底面板
+/// （重新播放 + 下载原图）。播放器与条目绑定，切换条目或退出查看器
+/// 时停止播放并释放资源，避免后台持续拉流。
+class _VideoPlayerView extends StatefulWidget {
+  const _VideoPlayerView({required this.gallery, required this.entry});
 
   final GalleryController gallery;
   final PhotoEntry entry;
 
   @override
-  State<_VideoStillView> createState() => _VideoStillViewState();
+  State<_VideoPlayerView> createState() => _VideoPlayerViewState();
 }
 
-class _VideoStillViewState extends State<_VideoStillView> {
+class _VideoPlayerViewState extends State<_VideoPlayerView> {
   Uint8List? _frameBytes;
+  bool _loading = false;
+  String? _errorText;
+
+  Player? _player;
+  VideoController? _videoController;
+  StreamSubscription<String>? _errorSubscription;
+  Timer? _speedTimer;
+  String? _speedText;
+  bool _disposed = false;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _loadThumb();
   }
 
   @override
-  void didUpdateWidget(covariant _VideoStillView oldWidget) {
+  void didUpdateWidget(covariant _VideoPlayerView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.entry.key != widget.entry.key) {
-      setState(() => _frameBytes = null);
-      _load();
+      _teardownPlayer();
+      setState(() {
+        _frameBytes = null;
+        _loading = false;
+        _errorText = null;
+      });
+      _loadThumb();
     }
   }
 
-  Future<void> _load() async {
+  @override
+  void dispose() {
+    _disposed = true;
+    _errorSubscription?.cancel();
+    final player = _player;
+    _player = null;
+    player?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadThumb() async {
     final bytes = await widget.gallery.loadThumbObject(widget.entry.thumbKey);
-    if (mounted) {
-      setState(() => _frameBytes = bytes == null ? null : Uint8List.fromList(bytes));
+    if (_disposed) return;
+    setState(() {
+      _frameBytes = bytes == null ? null : Uint8List.fromList(bytes);
+    });
+  }
+
+  Future<void> _startPlayback() async {
+    if (_loading || _player != null) return;
+    setState(() {
+      _loading = true;
+      _errorText = null;
+    });
+    // 预签名 URL 仅在内存中短期使用，不落盘、不写日志。
+    final url = await widget.gallery.presignVideoUrl(widget.entry);
+    if (_disposed) return;
+    if (url == null) {
+      setState(() {
+        _loading = false;
+        _errorText = '生成播放地址失败，请重试';
+      });
+      return;
+    }
+    final player = Player();
+    final subscription = player.stream.error.listen(_onPlayerError);
+    try {
+      await player.open(Media(url));
+    } catch (error) {
+      // 预签名 URL 携带签名参数，不得写入日志，先整体脱敏再输出。
+      debugPrint('[gallery] 视频播放器打开失败: $error');
+      unawaited(player.dispose());
+      unawaited(subscription.cancel());
+      if (_disposed) return;
+      setState(() {
+        _loading = false;
+        _errorText = '视频播放失败，可重新尝试或下载原图播放';
+      });
+      return;
+    }
+    if (_disposed) {
+      await subscription.cancel();
+      await player.dispose();
+      return;
+    }
+    if (mounted && _errorText == null) {
+      setState(() {
+        _player = player;
+        _videoController = VideoController(player);
+        _loading = false;
+        _errorSubscription = subscription;
+      });
+    } else {
+      await subscription.cancel();
+      await player.dispose();
+    }
+  }
+
+  void _onPlayerError(String error) {
+    if (_disposed || !mounted) return;
+    // 播放出错（解码失败、网络错误、URL 过期等）时回退兜底面板。
+    // mpv 的错误信息可能内嵌完整播放 URL（含签名参数），日志前先脱敏。
+    final sanitized = error.replaceAll(RegExp(r'https?://\S+'), '<oss-url>');
+    debugPrint('[gallery] 视频播放错误: $sanitized');
+    _teardownPlayer();
+    setState(() {
+      _loading = false;
+      _errorText = '视频播放失败，可重新尝试或下载原图播放';
+    });
+  }
+
+  void _teardownPlayer() {
+    _errorSubscription?.cancel();
+    _errorSubscription = null;
+    final player = _player;
+    _player = null;
+    _videoController = null;
+    if (player != null) {
+      // 先暂停释放网络流，dispose 收尾；错误回调中可能已在卸载阶段。
+      unawaited(player.dispose());
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final controller = _videoController;
+    if (controller != null) {
+      return Video(
+        controller: controller,
+        controls: AdaptiveVideoControls,
+      );
+    }
+    return Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        _buildCover(),
+        if (_errorText != null) _buildErrorPanel(),
+      ],
+    );
+  }
+
+  Widget _buildCover() {
     final bytes = _frameBytes;
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      child: Stack(
+        alignment: Alignment.center,
         children: <Widget>[
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: bytes == null || bytes.isEmpty
-                  ? Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white10,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Center(
-                        child: Icon(Icons.videocam_outlined,
-                            size: 64, color: Colors.white38),
-                      ),
-                    )
-                  : ClipRRect(
+          Padding(
+            padding: const EdgeInsets.all(24),
+            child: bytes == null || bytes.isEmpty
+                ? Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white10,
                       borderRadius: BorderRadius.circular(12),
-                      child: Image.memory(
-                          Uint8List.fromList(bytes), fit: BoxFit.contain),
                     ),
+                    child: const Center(
+                      child: Icon(Icons.videocam_outlined,
+                          size: 64, color: Colors.white38),
+                    ),
+                  )
+                : ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.memory(Uint8List.fromList(bytes),
+                        fit: BoxFit.contain),
+                  ),
+          ),
+          if (_loading)
+            const CircularProgressIndicator(color: Colors.white70)
+          else
+            IconButton.filled(
+              onPressed: _startPlayback,
+              iconSize: 36,
+              style: IconButton.styleFrom(
+                backgroundColor: Colors.black54,
+                foregroundColor: Colors.white,
+              ),
+              icon: const Icon(Icons.play_arrow_rounded),
             ),
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            '视频不支持在线播放，可下载原图后本地播放',
-            style: TextStyle(color: Colors.white70, fontSize: 12.5),
-          ),
-          const SizedBox(height: 16),
         ],
+      ),
+    );
+  }
+
+  Widget _buildErrorPanel() {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black54,
+        alignment: Alignment.center,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const Icon(Icons.error_outline, color: Colors.white70, size: 40),
+            const SizedBox(height: 12),
+            Text(
+              _errorText!,
+              style: const TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                OutlinedButton.icon(
+                  onPressed: _startPlayback,
+                  icon: const Icon(Icons.refresh, color: Colors.white),
+                  label: const Text('重新播放',
+                      style: TextStyle(color: Colors.white)),
+                ),
+                const SizedBox(width: 16),
+                OutlinedButton.icon(
+                  onPressed: () =>
+                      widget.gallery.downloadOriginal(widget.entry),
+                  icon: const Icon(Icons.download_outlined,
+                      color: Colors.white),
+                  label: Text(
+                    '下载原图${widget.entry.size > 0 ? ' · ${FileSizeFormatterLite.format(widget.entry.size)}' : ''}',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

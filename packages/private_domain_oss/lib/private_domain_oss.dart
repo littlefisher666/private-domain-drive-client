@@ -237,6 +237,25 @@ class PrivateDomainOss {
     return data!;
   }
 
+  /// 生成 GetObject 预签名 URL（纯本地签名，无网络请求）。
+  ///
+  /// 返回的 URL 等同于访问凭证：仅允许在内存中短期使用（如媒体流式
+  /// 播放），[expires] 默认 1 小时；不得写入持久化存储，不得输出到
+  /// 日志或错误信息中。
+  Future<String> presignGetObjectUrl(
+    String objectKey, {
+    Duration expires = const Duration(hours: 1),
+  }) async {
+    final url = await _methods.invokeMethod<String>(
+      'presignGetObjectUrl',
+      <String, Object>{
+        'key': objectKey,
+        'expiresSeconds': expires.inSeconds,
+      },
+    );
+    return url!;
+  }
+
   Future<void> cancelTransfer(String taskId) => _methods.invokeMethod<void>(
         'cancelTransfer',
         <String, Object>{'taskId': taskId},
