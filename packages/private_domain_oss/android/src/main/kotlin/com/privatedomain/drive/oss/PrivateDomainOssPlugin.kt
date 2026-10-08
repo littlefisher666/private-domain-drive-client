@@ -359,8 +359,8 @@ class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
     private fun presignGetObjectUrl(call: MethodCall, result: MethodChannel.Result) {
         val (oss, bucketName) = requireSession()
         val seconds = call.argument<Number>("expiresSeconds")?.toLong() ?: 3600L
-        val presigned = oss.presignConstrainedURL(bucketName, call.requiredString("key"), seconds)
-        succeed(result, presigned.signedUrl)
+        val url = oss.presignConstrainedObjectURL(bucketName, call.requiredString("key"), seconds)
+        succeed(result, url)
     }
 
     private fun cancelTransfer(call: MethodCall, result: MethodChannel.Result) {
