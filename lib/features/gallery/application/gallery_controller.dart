@@ -179,6 +179,24 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
     unawaited(_backfillMissingThumbnails(current));
   }
 
+  /// 手动重建索引：全量重扫 OSS 媒体对象并回写远端清单，用于补齐
+  /// 旧版本上传未增量入索引的照片。
+  Future<void> rebuildIndex() async {
+    if (_phase == GalleryPhase.scanning) return;
+    final session = _app.session;
+    if (session == null || !session.isRemote) {
+      _phase = GalleryPhase.error;
+      _errorMessage = '请先登录';
+      notifyListeners();
+      return;
+    }
+    _repairNotice = null;
+    _phase = GalleryPhase.scanning;
+    scanProgressListenable.value = (0, 0);
+    notifyListeners();
+    await _runFullScan(session);
+  }
+
   /// 新设备首次进相册时采纳远端清单：本地不再重复全量扫描。
   /// 清单缺失或标记待修复时返回 false，走全量扫描。
   Future<bool> _tryAdoptRemoteManifest(UserSession session) async {
@@ -508,6 +526,21 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
         notifyListeners();
       },
     );
+  }
+
+  // ---------- 视频在线播放 ----------
+
+  /// 为视频条目生成 OSS GetObject 预签名 URL（流式播放用）。
+  /// URL 仅内存返回，不缓存、不落盘；失败返回 null，由界面提示重试。
+  Future<String?> presignVideoUrl(PhotoEntry entry) async {
+    final session = _app.session;
+    if (session == null || !session.isRemote) return null;
+    try {
+      return await _ossClient.presignGetObjectUrl(entry.key, session);
+    } catch (error) {
+      debugPrint('[gallery] 生成视频播放地址失败 ${entry.key}: $error');
+      return null;
+    }
   }
 
   // ---------- 批量操作 ----------

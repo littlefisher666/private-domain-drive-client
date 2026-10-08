@@ -654,6 +654,23 @@ class _MobileAppBar extends StatelessWidget implements PreferredSizeWidget {
                 tooltip: '全选',
                 icon: const Icon(Icons.select_all),
                 onPressed: controller.selectAll,
+              )
+            else
+              PopupMenuButton<String>(
+                tooltip: '更多操作',
+                onSelected: (value) {
+                  if (value == 'rebuild-index' &&
+                      controller.phase != GalleryPhase.scanning) {
+                    AppFeedback.showSnack(context, '正在重建照片索引…');
+                    controller.rebuildIndex();
+                  }
+                },
+                itemBuilder: (context) => <PopupMenuEntry<String>>[
+                  const PopupMenuItem<String>(
+                    value: 'rebuild-index',
+                    child: Text('重建照片索引'),
+                  ),
+                ],
               ),
           ],
         );
@@ -916,13 +933,28 @@ class _DesktopStatusLine extends StatelessWidget {
           final totalBytes =
               entries.fold<int>(0, (sum, entry) => sum + entry.size);
           final uncached = entries.where((e) => !cached.contains(e.key)).length;
-          return Text(
-            '共 ${entries.length} 张照片和视频 · 已用空间 '
-            '${FileSizeFormatter.format(totalBytes)}'
-            '${uncached > 0 ? ' · 其中 $uncached 张原图未缓存到本机' : ''}',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
+          return Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  '共 ${entries.length} 张照片和视频 · 已用空间 '
+                  '${FileSizeFormatter.format(totalBytes)}'
+                  '${uncached > 0 ? ' · 其中 $uncached 张原图未缓存到本机' : ''}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: controller.phase == GalleryPhase.scanning
+                    ? null
+                    : () {
+                        AppFeedback.showSnack(context, '正在重建照片索引…');
+                        controller.rebuildIndex();
+                      },
+                child: const Text('重建索引'),
+              ),
+            ],
           );
         },
       ),
