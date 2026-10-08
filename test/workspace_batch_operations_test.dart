@@ -348,14 +348,17 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    // 提示已展开文件夹并保留结构，且多选状态被清理。
+    // 提示已展开文件夹并保留结构，且多选状态被清理；批次仅作内部分组。
     expect(find.text('已加入 3 个下载任务，已保留文件夹结构'), findsOneWidget);
     expect(controller.isMultiSelectionMode, isFalse);
     final batchTasks = controller.tasks
         .where((task) => task.batchId != null)
         .toList(growable: false);
     expect(batchTasks, hasLength(3));
-    expect(controller.transferBatches.single.total, 3);
+    expect(
+      batchTasks.map((task) => task.batchId).toSet(),
+      hasLength(1),
+    );
   });
 
   testWidgets('批量下载空文件夹时提示没有可下载文件', (tester) async {

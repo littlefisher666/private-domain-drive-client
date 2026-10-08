@@ -47,6 +47,10 @@ Future<void> pickAndUploadFile(
       type: fromAlbum ? FileType.image : FileType.any,
     );
     if (picked.isEmpty) return;
+    // 一次提交的多个文件归属同一批次，传输中心可展示整批上传汇总。
+    final batchId = picked.length > 1
+        ? 'batch-${DateTime.now().microsecondsSinceEpoch}'
+        : null;
     for (final file in picked) {
       final localPath = file.path;
       if (localPath == null || localPath.isEmpty) {
@@ -56,6 +60,7 @@ Future<void> pickAndUploadFile(
         fileName: file.name,
         localPath: localPath,
         fileSize: (await file.length()) ?? 0,
+        batchId: batchId,
       );
     }
     if (context.mounted) {
@@ -117,6 +122,10 @@ Future<void> pickAndUploadDirectory(BuildContext context) async {
           relativePath.isEmpty ? folderName : '$folderName/$relativePath';
       await controller.createFolder(name, targetPath: uploadRoot);
     }
+    // 整个文件夹作为一次提交归属同一批次。
+    final batchId = files.length > 1
+        ? 'batch-${DateTime.now().microsecondsSinceEpoch}'
+        : null;
     for (final file in files) {
       final relativePath = file.path.replaceAll('\\', '/').substring(
             rootPath.length + 1,
@@ -130,6 +139,7 @@ Future<void> pickAndUploadDirectory(BuildContext context) async {
         localPath: file.path,
         fileSize: await file.length(),
         targetPath: '$uploadRoot$parent/',
+        batchId: batchId,
       );
     }
     if (context.mounted) {

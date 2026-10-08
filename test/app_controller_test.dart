@@ -441,10 +441,165 @@ void main() {
         ),
       ];
 
-      final summary = controller.transferBatches.single;
-      expect(summary.total, 2);
-      expect(summary.success, 1);
-      expect(summary.pending, 1);
+      // 批次不再有界面汇总；batchId 仅作为冲突处置整批应用的内部分组。
+      expect(controller.tasks.where((task) => task.batchId == 'batch-1'),
+          hasLength(2));
+    });
+
+    test('分享导入多文件归属同一上传批次', () async {
+      final controller = await _controller();
+      final directory = await Directory.systemTemp.createTemp('pdd-share-');
+      addTearDown(() => directory.delete(recursive: true));
+      final fileA = File('${directory.path}/a.jpg');
+      final fileB = File('${directory.path}/b.jpg');
+      await fileA.writeAsBytes(<int>[1]);
+      await fileB.writeAsBytes(<int>[2]);
+
+      controller.prepareShareImport(items: <ShareImportItem>[
+        ShareImportItem(id: '1', name: 'a.jpg', size: 1, localPath: fileA.path),
+        ShareImportItem(id: '2', name: 'b.jpg', size: 1, localPath: fileB.path),
+      ]);
+      await controller.confirmShareUpload();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      final batchIds = controller.tasks.map((task) => task.batchId).toSet();
+      expect(controller.tasks, hasLength(2));
+      expect(batchIds, hasLength(1));
+      expect(batchIds.single, isNotNull);
+    });
+
+    test('上传目标已存在且无对话框上下文时按跳过处理', () async {
+      final oss = _FakeOssClient()..existingPaths.add('shared/已存在.txt');
+      final controller = await _controller(oss: oss);
+
+      await controller.uploadFile(
+        fileName: '已存在.txt',
+        localPath: '/fake/已存在.txt',
+        fileSize: 1,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      final task = controller.tasks.single;
+      expect(task.status, TransferTaskStatus.success);
+      expect(task.message, '已存在，跳过');
+      expect(oss.uploads, isEmpty);
+    });
+
+    testWidgets('上传已存在文件弹出处置对话框并支持整批应用', (tester) async {
+      final oss = _FakeOssClient()
+        ..existingPaths.addAll(<String>['shared/a.txt', 'shared/b.txt']);
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final controller = AppController(
+        sessionRepository: _FakeSessionRepository(_remoteSession()),
+        ossClient: oss,
+      );
+      await controller.bootstrap();
+      addTearDown(controller.dispose);
+      final navigatorKey = GlobalKey<NavigatorState>();
+      controller.setNavigatorKey(navigatorKey);
+      await tester.pumpWidget(
+        MaterialApp(navigatorKey: navigatorKey, home: const Scaffold()),
+      );
+
+      await controller.uploadFile(
+        fileName: 'a.txt',
+        localPath: '/fake/a.txt',
+        fileSize: 1,
+        batchId: 'batch-1',
+      );
+      await controller.uploadFile(
+        fileName: 'b.txt',
+        localPath: '/fake/b.txt',
+        fileSize: 1,
+        batchId: 'batch-1',
+      );
+      await tester.pumpAndSettle();
+
+      // 同批多个已存在任务只弹一次对话框。
+      expect(find.text('云端已存在同名文件'), findsOneWidget);
+      expect(find.text('同批其余 1 个文件应用相同处理'), findsOneWidget);
+      await tester.tap(find.text('覆盖'));
+      await tester.pump();
+      await tester.tap(find.text('同批其余 1 个文件应用相同处理'));
+      await tester.pump();
+      await tester.tap(find.text('确认'));
+      await tester.pumpAndSettle();
+
+      expect(
+        oss.uploads.map((upload) => upload.path).toSet(),
+        <String>{'shared/a.txt', 'shared/b.txt'},
+      );
+      expect(
+        controller.tasks.every(
+            (task) => task.status == TransferTaskStatus.success),
+        isTrue,
+      );
+    });
+
+    testWidgets('保留两者时探测序号新键上传', (tester) async {
+      final oss = _FakeOssClient()..existingPaths.add('shared/a.txt');
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final controller = AppController(
+        sessionRepository: _FakeSessionRepository(_remoteSession()),
+        ossClient: oss,
+      );
+      await controller.bootstrap();
+      addTearDown(controller.dispose);
+      final navigatorKey = GlobalKey<NavigatorState>();
+      controller.setNavigatorKey(navigatorKey);
+      await tester.pumpWidget(
+        MaterialApp(navigatorKey: navigatorKey, home: const Scaffold()),
+      );
+
+      await controller.uploadFile(
+        fileName: 'a.txt',
+        localPath: '/fake/a.txt',
+        fileSize: 1,
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('云端已存在同名文件'), findsOneWidget);
+      // 保留两者为默认选项，直接确认。
+      await tester.tap(find.text('确认'));
+      await tester.pumpAndSettle();
+
+      expect(oss.uploads.single.path, 'shared/a（1）.txt');
+      expect(controller.tasks.single.status, TransferTaskStatus.success);
+    });
+
+    testWidgets('跳过时任务标记完成且不发起上传', (tester) async {
+      final oss = _FakeOssClient()..existingPaths.add('shared/a.txt');
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final controller = AppController(
+        sessionRepository: _FakeSessionRepository(_remoteSession()),
+        ossClient: oss,
+      );
+      await controller.bootstrap();
+      addTearDown(controller.dispose);
+      final navigatorKey = GlobalKey<NavigatorState>();
+      controller.setNavigatorKey(navigatorKey);
+      await tester.pumpWidget(
+        MaterialApp(navigatorKey: navigatorKey, home: const Scaffold()),
+      );
+
+      await controller.uploadFile(
+        fileName: 'a.txt',
+        localPath: '/fake/a.txt',
+        fileSize: 1,
+      );
+      await tester.pumpAndSettle();
+
+      // 单文件任务不提供整批应用选项。
+      expect(find.byType(CheckboxListTile), findsNothing);
+      await tester.tap(find.text('跳过'));
+      await tester.pump();
+      await tester.tap(find.text('确认'));
+      await tester.pumpAndSettle();
+
+      expect(oss.uploads, isEmpty);
+      final task = controller.tasks.single;
+      expect(task.status, TransferTaskStatus.success);
+      expect(task.message, '已存在，跳过');
     });
 
     test('下载队列遵守动态并发上限', () async {
@@ -758,8 +913,8 @@ class _FakeOssClient extends OssClient {
     void Function(int transferredBytes, int totalBytes)? onProgress,
   }) async {
     uploads.add((path: path, localPath: localPath));
-    final size = await File(localPath).length();
-    onProgress?.call(size, size);
+    // 不读取真实文件，保证 testWidgets 的 FakeAsync 环境下可完成。
+    onProgress?.call(1, 1);
   }
 
   @override

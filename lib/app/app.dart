@@ -37,6 +37,8 @@ class _PrivateDomainDriveAppState extends State<PrivateDomainDriveApp> {
   @override
   void initState() {
     super.initState();
+    // 传输队列内的上传冲突处置对话框需要全局导航上下文。
+    widget.controller.setNavigatorKey(_navigatorKey);
     if (defaultTargetPlatform == TargetPlatform.android) {
       _shareSubscription = AndroidShareImportBridge.incomingItems.listen(
         _receiveSharedItems,
@@ -49,6 +51,7 @@ class _PrivateDomainDriveAppState extends State<PrivateDomainDriveApp> {
 
   @override
   void dispose() {
+    widget.controller.setNavigatorKey(null);
     _shareSubscription?.cancel();
     super.dispose();
   }
