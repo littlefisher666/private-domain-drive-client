@@ -1306,6 +1306,7 @@ class _VideoPlayerViewState extends State<_VideoPlayerView> {
   @override
   void dispose() {
     _disposed = true;
+    _speedTimer?.cancel();
     _errorSubscription?.cancel();
     final player = _player;
     _player = null;
@@ -1365,10 +1366,30 @@ class _VideoPlayerViewState extends State<_VideoPlayerView> {
         _loading = false;
         _errorSubscription = subscription;
       });
+      _startSpeedPolling(player);
     } else {
       await subscription.cancel();
       await player.dispose();
     }
+  }
+
+  /// 每秒读取 mpv 的 cache-speed（网络拉流字节速率），在视频右上角
+  /// 展示实时下载速度，便于观察流式缓冲进度。
+  void _startSpeedPolling(Player player) {
+    _speedTimer?.cancel();
+    final native = player.platform;
+    _speedTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+      try {
+        final raw = await (native as dynamic).getProperty('cache-speed');
+        final bytes = int.tryParse('$raw') ?? 0;
+        if (_disposed || !mounted || bytes <= 0) return;
+        setState(() {
+          _speedText = '↓ ${FileSizeFormatterLite.format(bytes)}/s';
+        });
+      } catch (_) {
+        // 播放器已释放或属性不可用：保持当前显示，下轮再试。
+      }
+    });
   }
 
   void _onPlayerError(String error) {
@@ -1385,6 +1406,9 @@ class _VideoPlayerViewState extends State<_VideoPlayerView> {
   }
 
   void _teardownPlayer() {
+    _speedTimer?.cancel();
+    _speedTimer = null;
+    _speedText = null;
     _errorSubscription?.cancel();
     _errorSubscription = null;
     final player = _player;
@@ -1399,10 +1423,38 @@ class _VideoPlayerViewState extends State<_VideoPlayerView> {
   @override
   Widget build(BuildContext context) {
     final controller = _videoController;
-    if (controller != null) {
-      return Video(
-        controller: controller,
-        controls: AdaptiveVideoControls,
+    final player = _player;
+    if (controller != null && player != null) {
+      return Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          Video(
+            controller: controller,
+            // 移动端用自定义控制层：默认控制层会吞掉查看器的四方向
+            // 滑动手势（亮度/音量滑动），导致播放中无法切换条目。
+            controls: widget.gallery.isDesktop
+                ? AdaptiveVideoControls
+                : (state) => _MobileVideoControls(player: player),
+          ),
+          if (_speedText != null)
+            Positioned(
+              top: 12,
+              right: 12,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  _speedText!,
+                  style: const TextStyle(
+                      color: Colors.white70, fontSize: 12),
+                ),
+              ),
+            ),
+        ],
       );
     }
     return Stack(
@@ -1498,6 +1550,164 @@ class _VideoPlayerViewState extends State<_VideoPlayerView> {
       ),
     );
   }
+}
+
+/// 移动端视频控制层：点按切换播放/暂停，底部提供进度条拖动与时长。
+/// 不拦截四方向滑动，保留查看器的条目切换与详情面板手势。
+class _MobileVideoControls extends StatefulWidget {
+  const _MobileVideoControls({required this.player});
+
+  final Player player;
+
+  @override
+  State<_MobileVideoControls> createState() => _MobileVideoControlsState();
+}
+
+class _MobileVideoControlsState extends State<_MobileVideoControls> {
+  bool _seeking = false;
+  double _seekValue = 0;
+
+  Player get _player => widget.player;
+
+  void _togglePlay() {
+    final playing = _player.state.playing;
+    if (playing) {
+      _player.pause();
+    } else {
+      _player.play();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: <Widget>[
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _togglePlay,
+          ),
+        ),
+        Positioned(
+          left: 16,
+          right: 16,
+          bottom: 16,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.55),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Row(
+              children: <Widget>[
+                StreamBuilder<bool>(
+                  stream: _player.stream.playing,
+                  initialData: _player.state.playing,
+                  builder: (context, snapshot) {
+                    final playing = snapshot.data ?? false;
+                    return IconButton(
+                      onPressed: _togglePlay,
+                      iconSize: 24,
+                      visualDensity: VisualDensity.compact,
+                      color: Colors.white,
+                      icon: Icon(
+                        playing
+                            ? Icons.pause_rounded
+                            : Icons.play_arrow_rounded,
+                      ),
+                    );
+                  },
+                ),
+                Expanded(
+                  child: StreamBuilder<Duration>(
+                    stream: _player.stream.position,
+                    initialData: _player.state.position,
+                    builder: (context, positionSnap) {
+                      return StreamBuilder<Duration>(
+                        stream: _player.stream.duration,
+                        initialData: _player.state.duration,
+                        builder: (context, durationSnap) {
+                          final position = positionSnap.data ?? Duration.zero;
+                          final duration = durationSnap.data ?? Duration.zero;
+                          final totalMs = duration.inMilliseconds;
+                          final value = _seeking
+                              ? _seekValue
+                              : totalMs > 0
+                                  ? (position.inMilliseconds / totalMs)
+                                      .clamp(0.0, 1.0)
+                                  : 0.0;
+                          return SliderTheme(
+                            data: SliderTheme.of(context).copyWith(
+                              trackHeight: 3,
+                              thumbShape: const RoundSliderThumbShape(
+                                  enabledThumbRadius: 6),
+                              overlayShape: const RoundSliderOverlayShape(
+                                  overlayRadius: 12),
+                              padding: EdgeInsets.zero,
+                            ),
+                            child: Slider(
+                              value: value,
+                              onChanged: totalMs <= 0
+                                  ? null
+                                  : (newValue) {
+                                      setState(() {
+                                        _seeking = true;
+                                        _seekValue = newValue;
+                                      });
+                                    },
+                              onChangeEnd: (newValue) {
+                                _player.seek(Duration(
+                                  milliseconds:
+                                      (newValue * totalMs).round(),
+                                ));
+                                setState(() => _seeking = false);
+                              },
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+                StreamBuilder<Duration>(
+                  stream: _player.stream.duration,
+                  initialData: _player.state.duration,
+                  builder: (context, snapshot) {
+                    return Text(
+                      _formatClock(snapshot.data ?? Duration.zero),
+                      style: const TextStyle(
+                          color: Colors.white70, fontSize: 12),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+        StreamBuilder<bool>(
+          stream: _player.stream.buffering,
+          initialData: _player.state.buffering,
+          builder: (context, snapshot) {
+            if (snapshot.data != true) return const SizedBox.shrink();
+            return const Positioned.fill(
+              child: Center(
+                child: CircularProgressIndicator(color: Colors.white70),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+String _formatClock(Duration duration) {
+  final total = duration.inSeconds;
+  final h = total ~/ 3600;
+  final m = (total % 3600) ~/ 60;
+  final s = total % 60;
+  String two(int value) => value.toString().padLeft(2, '0');
+  return h > 0 ? '$h:${two(m)}:${two(s)}' : '$m:${two(s)}';
 }
 
 /// 移动端原图下载按钮（主 CTA 样式）。
