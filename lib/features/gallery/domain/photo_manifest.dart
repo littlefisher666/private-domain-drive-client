@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'photo_entry.dart';
 
-/// OSS 清单对象 `index/photos.json` 的编解码。
+/// OSS 清单对象 `.gallery/index/photos.json` 的编解码。
 class PhotoManifest {
   const PhotoManifest({
     required this.version,

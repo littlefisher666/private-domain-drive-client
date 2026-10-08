@@ -186,8 +186,13 @@ class _MobileViewer extends StatefulWidget {
 
 class _MobileViewerState extends State<_MobileViewer> {
   Offset _enterOffset = const Offset(1, 0);
+  bool _detailVisible = false;
 
   void _handleSwipe(double velocity, bool vertical) {
+    if (vertical) {
+      setState(() => _detailVisible = velocity < 0);
+      return;
+    }
     final forward = velocity < 0;
     setState(() {
       _enterOffset = forward ? const Offset(1, 0) : const Offset(-1, 0);
@@ -213,21 +218,23 @@ class _MobileViewerState extends State<_MobileViewer> {
         child: Stack(
           fit: StackFit.expand,
           children: <Widget>[
-            if (!isVideo)
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onHorizontalDragEnd: (details) =>
-                    _handleSwipe(details.velocity.pixelsPerSecond.dx, false),
-                onVerticalDragEnd: (details) =>
-                    _handleSwipe(details.velocity.pixelsPerSecond.dy, true),
-                child: _ViewerImage(
-                  gallery: widget.gallery,
-                  entry: entry,
-                  enterOffset: _enterOffset,
-                ),
-              )
-            else
-              _VideoStillView(gallery: widget.gallery, entry: entry),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _detailVisible
+                  ? () => setState(() => _detailVisible = false)
+                  : null,
+              onHorizontalDragEnd: (details) =>
+                  _handleSwipe(details.velocity.pixelsPerSecond.dx, false),
+              onVerticalDragEnd: (details) =>
+                  _handleSwipe(details.velocity.pixelsPerSecond.dy, true),
+              child: isVideo
+                  ? _VideoStillView(gallery: widget.gallery, entry: entry)
+                  : _ViewerImage(
+                      gallery: widget.gallery,
+                      entry: entry,
+                      enterOffset: _enterOffset,
+                    ),
+            ),
             Positioned(
               top: 0,
               left: 0,
@@ -336,6 +343,18 @@ class _MobileViewerState extends State<_MobileViewer> {
                   ),
                 ),
               ),
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              bottom: _detailVisible ? 0 : -320,
+              left: 0,
+              right: 0,
+              child: _MobileDetailSheet(
+                gallery: widget.gallery,
+                entry: entry,
+                onClose: () => setState(() => _detailVisible = false),
+              ),
+            ),
           ],
         ),
       ),
@@ -344,6 +363,134 @@ class _MobileViewerState extends State<_MobileViewer> {
 }
 
 // ============================== 桌面端查看器 ==============================
+
+/// 移动端照片详情面板（上滑呼出、下滑收起）。
+class _MobileDetailSheet extends StatelessWidget {
+  const _MobileDetailSheet({
+    required this.gallery,
+    required this.entry,
+    required this.onClose,
+  });
+
+  final GalleryController gallery;
+  final PhotoEntry entry;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final app = AppScope.of(context);
+    final cached = gallery.isCached(entry.key);
+    final lat = entry.latitude;
+    final lon = entry.longitude;
+
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 300),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+      decoration: const BoxDecoration(
+        color: Color(0xFF1F2128),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Center(
+            child: Container(
+              width: 36,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF4A4E5A),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          Flexible(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  _group('基础', <(String, String)>[
+                    ('拍摄时间', _formatTakenAt(entry.takenAt)),
+                    if (entry.width != null && entry.height != null)
+                      ('分辨率', '${entry.width} × ${entry.height}'),
+                    ('原始大小', FileSizeFormatterLite.format(entry.size)),
+                    ('格式', entry.extension.toUpperCase()),
+                  ]),
+                  _group('来源', <(String, String)>[
+                    ('所在目录', app.displayPath(entry.directory)),
+                    if (entry.device != null) ('上传设备', entry.device!),
+                    ('本机缓存', cached ? '已缓存' : '未缓存'),
+                  ]),
+                  if (lat != null && lon != null)
+                    _group('位置', <(String, String)>[
+                      (
+                        '拍摄地点',
+                        '${lat.abs().toStringAsFixed(4)}° ${lat >= 0 ? 'N' : 'S'}, '
+                            '${lon.abs().toStringAsFixed(4)}° ${lon >= 0 ? 'E' : 'W'}'
+                      ),
+                    ]),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: onClose,
+            child: const Text('收起',
+                style: TextStyle(color: Colors.white70, fontSize: 13)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _group(String title, List<(String, String)> rows) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Text(
+            title,
+            style: const TextStyle(
+              color: Color(0xFF7C828E),
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.6,
+            ),
+          ),
+          const SizedBox(height: 4),
+          for (final (key, value) in rows)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    key,
+                    style: const TextStyle(
+                        fontSize: 12.5, color: Color(0xFF8D93A1)),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      value,
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                          fontSize: 12.5,
+                          color: Color(0xFFE8EAEF),
+                          fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
 
 class _DesktopViewer extends StatefulWidget {
   const _DesktopViewer({

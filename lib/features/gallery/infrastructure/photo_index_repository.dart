@@ -148,8 +148,7 @@ class PhotoIndexRepository {
     void Function(int processed, int total)? onProgress,
   }) async {
     final root = session.rootPrefix;
-    final manifestKey = '$root${GalleryConfig.manifestRelativeKey}';
-    final thumbPrefix = '$root${GalleryConfig.thumbRelativePrefix}';
+    final galleryPrefix = '$root.gallery/';
     final trashPrefix = '$root.trash/';
 
     final objects = await _ossClient.listAllObjects(root, session);
@@ -157,7 +156,7 @@ class PhotoIndexRepository {
     for (final object in objects) {
       final key = object.key;
       if (key.endsWith('/')) continue;
-      if (key == manifestKey || key.startsWith(thumbPrefix)) continue;
+      if (key.startsWith(galleryPrefix)) continue;
       if (key.startsWith(trashPrefix)) continue;
       final name = key.substring(key.lastIndexOf('/') + 1);
       if (!isMediaFileName(name)) continue;

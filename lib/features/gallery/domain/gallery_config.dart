@@ -18,14 +18,15 @@ class GalleryConfig {
   static const int cacheCapacityTarget = cacheCapacityLimit - 512 * 1024 * 1024;
 
   /// 超过该大小的图片不走 OSS 图片处理（服务端限制 ImageTooLarge），
-  /// 改为客户端本地生成缩略图上传到 thumbs/。
+  /// 改为客户端本地生成缩略图上传到缩略图前缀。
   static const int oversizedImageLimit = 20 * 1024 * 1024;
 
-  /// OSS 索引清单对象（相对会话根前缀）。
-  static const String manifestRelativeKey = 'index/photos.json';
+  /// OSS 索引清单对象（相对会话根前缀）。相册内部对象统一收敛在
+  /// 点前缀目录下，避免与用户自建目录撞名。
+  static const String manifestRelativeKey = '.gallery/index/photos.json';
 
   /// OSS 视频缩略图对象前缀（相对会话根前缀）。
-  static const String thumbRelativePrefix = 'thumbs/';
+  static const String thumbRelativePrefix = '.gallery/thumbs/';
 
   /// 清单写入冲突重试上限。
   static const int manifestWriteMaxAttempts = 3;
