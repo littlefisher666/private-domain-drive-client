@@ -22,7 +22,6 @@ const _jpegExifProbeSizes = <int>[
   64 * 1024,
   128 * 1024,
 ];
-const _recycleBinPrefix = 'shared/.trash/';
 
 /// 图片 EXIF 解析结果：拍摄时间、GPS 坐标与像素尺寸。
 class ImageExifInfo {
@@ -64,9 +63,7 @@ class OssClient {
     );
     final folders = <FileItem>[
       for (final key in page.commonPrefixes)
-        if (key != prefix &&
-            key != _recycleBinPrefix &&
-            !_isInternalPrefix(key, session))
+        if (key != prefix && !_isHiddenEntry(key, prefix))
           FileItem(
             path: key,
             name: key.substring(prefix.length).replaceFirst(RegExp(r'/$'), ''),
@@ -94,7 +91,7 @@ class OssClient {
       for (final object in page.objects)
         if (object.key != prefix &&
             !object.key.substring(prefix.length).contains('/') &&
-            !_isInternalObject(object.key, session))
+            !_isHiddenEntry(object.key, prefix))
           FileItem(
             path: object.key,
             name: object.key.substring(prefix.length),
@@ -125,11 +122,14 @@ class OssClient {
           maxKeys: 1000,
         ),
       );
-      itemCount += page.commonPrefixes.where((key) => key != prefix).length;
+      itemCount += page.commonPrefixes
+          .where((key) => key != prefix && !_isHiddenEntry(key, prefix))
+          .length;
       for (final object in page.objects) {
         if (object.key == prefix) {
           updatedAt = _latestUpdatedAt(updatedAt, object);
-        } else if (!object.key.substring(prefix.length).contains('/')) {
+        } else if (!object.key.substring(prefix.length).contains('/') &&
+            !_isHiddenEntry(object.key, prefix)) {
           itemCount++;
           updatedAt = _latestUpdatedAt(updatedAt, object);
         }
@@ -318,21 +318,11 @@ class OssClient {
     return objects;
   }
 
-  /// 相册客户端约定对象：会话根下的索引清单与视频缩略图目录，
-  /// 不应出现在用户的文件浏览视图中。
-  bool _isInternalPrefix(String key, UserSession session) {
-    final root = session.rootPrefix;
-    return root.isNotEmpty &&
-        key.startsWith(root) &&
-        (key == '${root}index/' || key == '${root}thumbs/');
-  }
-
-  bool _isInternalObject(String key, UserSession session) {
-    final root = session.rootPrefix;
-    return root.isNotEmpty &&
-        key.startsWith(root) &&
-        key == '${root}index/photos.json';
-  }
+  /// 点前缀条目（回收站 .trash/、相册 .gallery/、.DS_Store 等系统或
+  /// 内部对象）在文件浏览与目录统计中默认隐藏。
+  bool _isHiddenEntry(String key, String prefix) =>
+      key.length > prefix.length &&
+      key.substring(prefix.length).startsWith('.');
 
   Future<List<int>> download(
     String path,

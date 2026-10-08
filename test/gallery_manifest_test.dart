@@ -86,7 +86,7 @@ void main() {
     final entry = _entry(
       'shared/相册/a.jpg',
       2026,
-      thumbKey: 'shared/thumbs/shared/相册/a.jpg.jpg',
+      thumbKey: 'shared/.gallery/thumbs/shared/相册/a.jpg.jpg',
     );
     final manifest = PhotoManifest(
       version: 3,
