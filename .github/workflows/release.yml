@@ -226,36 +226,9 @@ jobs:
             --target-platform android-arm64 \
             --build-name "${{ needs.prepare.outputs.android_version_name }}" \
             --build-number "${{ needs.prepare.outputs.build_number }}" \
-            --obfuscate \
-            --split-debug-info=build/symbols \
             --dart-define=FC_BASE_URL="${{ vars.FC_BASE_URL }}" \
             --dart-define=FC_ACCESS_KEY_ID="${{ secrets.PDD_FC_INVOKE_ACCESS_KEY_ID }}" \
             --dart-define=FC_ACCESS_KEY_SECRET="${{ secrets.PDD_FC_INVOKE_ACCESS_KEY_SECRET }}"
-
-      # pdfrx/media_kit 把仅供 Web 平台使用的资源无条件打进所有平台包，原生端永远不会加载。
-      # AGP 的 packaging 过滤对 Flutter 注入的 flutter_assets 不生效，只能在构建后从 APK 剔除。
-      # zip -d 重写压缩包会破坏条目对齐与签名，因此需要重新 zipalign 并重签。
-      - name: 剔除 Web 平台专用资源并重签 APK
-        env:
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          apk="build/app/outputs/flutter-apk/app-release.apk"
-          build_tools_dir="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)"
-          zip -d "$apk" \
-            "assets/flutter_assets/packages/pdfrx/assets/*" \
-            "assets/flutter_assets/packages/media_kit/assets/web/*"
-          "$build_tools_dir/zipalign" -f -p 4 "$apk" app-release-stripped.apk
-          mv app-release-stripped.apk "$apk"
-          "$build_tools_dir/apksigner" sign \
-            --ks android/upload-keystore.jks \
-            --ks-key-alias "$KEY_ALIAS" \
-            --ks-pass "pass:$KEYSTORE_PASSWORD" \
-            --key-pass "pass:$KEY_PASSWORD" \
-            "$apk"
-          "$build_tools_dir/apksigner" verify "$apk"
 
       - name: 整理 APK 发布文件
         run: cp build/app/outputs/flutter-apk/app-release.apk "private-domain-drive-android-v${{ needs.prepare.outputs.android_version_name }}.apk"
@@ -265,14 +238,6 @@ jobs:
         with:
           name: android-apk
           path: private-domain-drive-android-*.apk
-          if-no-files-found: error
-
-      # 混淆符号与构建一一对应，随流水线运行归档，用于 flutter symbolize 还原线上崩溃堆栈。
-      - name: 上传混淆符号
-        uses: actions/upload-artifact@v7
-        with:
-          name: android-symbols
-          path: build/symbols/
           if-no-files-found: error
 
   macos:
@@ -307,31 +272,9 @@ jobs:
           flutter build macos --release \
             --build-name "${{ needs.prepare.outputs.macos_version_name }}" \
             --build-number "${{ needs.prepare.outputs.build_number }}" \
-            --obfuscate \
-            --split-debug-info=build/symbols \
             --dart-define=FC_BASE_URL="${{ vars.FC_BASE_URL }}" \
             --dart-define=FC_ACCESS_KEY_ID="${{ secrets.PDD_FC_INVOKE_ACCESS_KEY_ID }}" \
             --dart-define=FC_ACCESS_KEY_SECRET="${{ secrets.PDD_FC_INVOKE_ACCESS_KEY_SECRET }}"
-
-      - name: 剔除 Web 平台专用资源
-        run: |
-          app_path="$(find build/macos/Build/Products/Release -maxdepth 1 -type d -name '*.app' -print -quit)"
-          if [[ -z "$app_path" ]]; then
-            echo "未找到 macOS 应用包（*.app）"
-            exit 1
-          fi
-          assets_dir="$app_path/Contents/Frameworks/App.framework/Resources/flutter_assets"
-          # pdfrx/media_kit 把仅供 Web 平台使用的资源无条件打进所有平台包，原生端永远不会加载。
-          rm -f "$assets_dir"/packages/pdfrx/assets/*
-          rm -f "$assets_dir"/packages/media_kit/assets/web/*.js
-
-      # 混淆符号与构建一一对应，随流水线运行归档，用于 flutter symbolize 还原线上崩溃堆栈。
-      - name: 上传混淆符号
-        uses: actions/upload-artifact@v7
-        with:
-          name: macos-symbols
-          path: build/symbols/
-          if-no-files-found: error
 
       - name: 打包 macOS 应用
         run: |
