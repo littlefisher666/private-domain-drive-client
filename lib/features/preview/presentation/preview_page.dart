@@ -1,9 +1,10 @@
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/utils/download_directory.dart';
+import '../../../app/theme/cupertino_desktop.dart';
 import '../../../shared/state/app_scope.dart';
 import '../../../shared/widgets/app_feedback.dart';
 import '../../workspace/domain/file_item.dart';
@@ -113,64 +114,74 @@ class _PreviewPageState extends State<PreviewPage> {
     final scheme = theme.colorScheme;
     // 图片预览采用相册式纯黑沉浸界面，其他类型保持常规页面样式。
     final immersive = previewType == PreviewType.image;
+    // macOS 红绿灯悬于内容区左上角（fullSizeContentView），顶栏下移避让。
+    final topInset = defaultTargetPlatform == TargetPlatform.macOS
+        ? CupertinoDesktopTokens.titleBarHeight
+        : 0.0;
 
     return Scaffold(
       backgroundColor: immersive ? Colors.black : null,
-      appBar: AppBar(
-        backgroundColor: immersive ? Colors.black : null,
-        foregroundColor: immersive ? Colors.white : null,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              currentItem.name,
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: immersive ? Colors.white : null,
-              ),
+      appBar: PreferredSize(
+        preferredSize: Size.fromHeight(kToolbarHeight + topInset),
+        child: Padding(
+          padding: EdgeInsets.only(top: topInset),
+          child: AppBar(
+            backgroundColor: immersive ? Colors.black : null,
+            foregroundColor: immersive ? Colors.white : null,
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  currentItem.name,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: immersive ? Colors.white : null,
+                  ),
+                ),
+                Text(
+                  controller.displayPath(
+                    widget.arguments?.displayPaths[currentItem.path] ??
+                        currentItem.path,
+                  ),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: immersive ? Colors.white70 : scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
             ),
-            Text(
-              controller.displayPath(
-                widget.arguments?.displayPaths[currentItem.path] ??
-                    currentItem.path,
-              ),
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: immersive ? Colors.white70 : scheme.onSurfaceVariant,
-              ),
-            ),
-          ],
+            actions: <Widget>[
+              if (controller.capabilities.download)
+                IconButton(
+                  tooltip: '下载',
+                  onPressed: () async {
+                    try {
+                      final directory = await selectDownloadDirectory();
+                      if (directory == null) return;
+                      controller.enqueueDownload(
+                        FileItem(
+                          path: currentItem.path,
+                          name: currentItem.name,
+                          isDirectory: false,
+                        ),
+                        targetDirectory: directory,
+                      );
+                      if (context.mounted) {
+                        AppFeedback.showSnack(
+                            context, '已加入下载队列：${currentItem.name}');
+                      }
+                    } catch (error) {
+                      if (context.mounted) {
+                        AppFeedback.showSnack(
+                          context,
+                          error.toString().replaceFirst('Bad state: ', ''),
+                        );
+                      }
+                    }
+                  },
+                  icon: const Icon(Icons.download_outlined),
+                ),
+            ],
+          ),
         ),
-        actions: <Widget>[
-          if (controller.capabilities.download)
-            IconButton(
-              tooltip: '下载',
-              onPressed: () async {
-                try {
-                  final directory = await selectDownloadDirectory();
-                  if (directory == null) return;
-                  controller.enqueueDownload(
-                    FileItem(
-                      path: currentItem.path,
-                      name: currentItem.name,
-                      isDirectory: false,
-                    ),
-                    targetDirectory: directory,
-                  );
-                  if (context.mounted) {
-                    AppFeedback.showSnack(
-                        context, '已加入下载队列：${currentItem.name}');
-                  }
-                } catch (error) {
-                  if (context.mounted) {
-                    AppFeedback.showSnack(
-                      context,
-                      error.toString().replaceFirst('Bad state: ', ''),
-                    );
-                  }
-                }
-              },
-              icon: const Icon(Icons.download_outlined),
-            ),
-        ],
       ),
       body: SafeArea(
         child: immersive
@@ -180,32 +191,23 @@ class _PreviewPageState extends State<PreviewPage> {
                 filePath: currentItem.path,
                 imageLoader: controller.loadImagePreview,
                 thumbnailLoader: controller.loadThumbnail,
-                imagePositionText:
-                    images.length > 1 ? '${_index + 1} / ${images.length}' : null,
+                imagePositionText: images.length > 1
+                    ? '${_index + 1} / ${images.length}'
+                    : null,
                 onImageSwipe: images.length > 1 ? _onSwipe : null,
                 imageTransitionOffset: _enterOffset,
                 documentLoader: controller.loadPdfDocument,
                 textLoaderFactory: controller.createTextPreviewLoader,
                 mediaUrlLoader: controller.presignMediaUrl,
               )
-            : Padding(
-                padding: const EdgeInsets.all(16),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(18),
-                  child: ColoredBox(
-                    color:
-                        scheme.surfaceContainerHighest.withValues(alpha: 0.45),
-                    child: _PreviewBody(
-                      previewType: previewType,
-                      fileName: currentItem.name,
-                      filePath: currentItem.path,
-                      imageLoader: controller.loadImagePreview,
-                      documentLoader: controller.loadPdfDocument,
-                      textLoaderFactory: controller.createTextPreviewLoader,
-                      mediaUrlLoader: controller.presignMediaUrl,
-                    ),
-                  ),
-                ),
+            : _PreviewBody(
+                previewType: previewType,
+                fileName: currentItem.name,
+                filePath: currentItem.path,
+                imageLoader: controller.loadImagePreview,
+                documentLoader: controller.loadPdfDocument,
+                textLoaderFactory: controller.createTextPreviewLoader,
+                mediaUrlLoader: controller.presignMediaUrl,
               ),
       ),
     );
@@ -500,12 +502,12 @@ class _ImagePreviewBodyState extends State<_ImagePreviewBody>
             behavior: HitTestBehavior.opaque,
             onHorizontalDragEnd: widget.onSwipe == null
                 ? null
-                : (details) => widget.onSwipe!(
-                    details.velocity.pixelsPerSecond.dx, false),
+                : (details) =>
+                    widget.onSwipe!(details.velocity.pixelsPerSecond.dx, false),
             onVerticalDragEnd: widget.onSwipe == null
                 ? null
-                : (details) => widget.onSwipe!(
-                    details.velocity.pixelsPerSecond.dy, true),
+                : (details) =>
+                    widget.onSwipe!(details.velocity.pixelsPerSecond.dy, true),
             child: _buildImageArea(theme),
           ),
         ),
