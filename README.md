@@ -13,7 +13,7 @@
 - 上传 / 下载统一进入传输中心：展示进度、速度、结果，支持 1–5 个并发、取消、失败重试、批量操作和传输历史恢复。
 - 图片缩略图与图片在线预览（经 OSS 图片处理）；PDF 和文本当前仅提供预览占位页及下载入口，其他类型仅支持下载。
 - Android 可从相册选择图片上传，也可接收其他应用通过系统分享传入的一个或多个文件，选择目标目录后加入上传队列。
-- 浅色 / 深色主题、窄屏底栏和宽屏侧栏布局；“我的”页可检查 GitHub Release 更新。Android 支持校验 APK 摘要后应用内下载安装，macOS 跳转下载 DMG。
+- 浅色 / 深色主题、窄屏底栏和宽屏侧栏布局；“我的”页可检查更新。Android 支持校验 APK 摘要后应用内下载安装；macOS 集成 Sparkle 自更新（检查、下载、EdDSA 校验、替换重启），检查失败时保留“手动下载”DMG 兜底入口。
 
 ## 架构与依赖
 
@@ -60,7 +60,17 @@ FC HTTP 触发器默认要求阿里云签名；生产和联调均应通过 `FC_A
 
 - Android 系统分享：从相册或文件管理器选择文件，使用系统“分享”并选择“私域网盘”。源文件会先复制到应用缓存，需在缓存被系统清理前确认上传。
 - 文件夹上传：在“上传”菜单选择“上传文件夹”；会先创建远端目录，再将文件逐个加入传输队列。
-- 发布构建：GitHub Actions 的 `.github/workflows/release.yml` 支持手动指定版本或自动递增 PATCH，构建 Android ARM64 APK 与 macOS DMG，并创建带更新清单的 GitHub Release。构建所需的仓库变量 / Secrets 为 `FC_BASE_URL`、`FC_ACCESS_KEY_ID`、`FC_ACCESS_KEY_SECRET` 及 Android 签名相关 Secrets。
+- 发布构建：GitHub Actions 的 `.github/workflows/release.yml` 支持手动指定版本或自动递增 PATCH，构建 Android ARM64 APK 与 macOS DMG/Sparkle 更新包 zip，创建带更新清单的 GitHub Release，并维护 `appcast` 分支上的 Sparkle 更新清单。构建所需的仓库变量 / Secrets 为 `FC_BASE_URL`、`FC_ACCESS_KEY_ID`、`FC_ACCESS_KEY_SECRET`、Android 签名相关 Secrets 及 Sparkle 签名私钥 `SPARKLE_EDDSA_PRIVATE_KEY`（签名失败时该版本降级为仅发布 DMG）。
+
+## macOS 首次安装
+
+应用未做公证，首次打开会被 Gatekeeper 拦截，任选一种方式放行：
+
+1. 系统设置 → 隐私与安全性，找到“已阻止使用”提示，点击“仍要打开”；
+2. 在“应用程序”中右键 App 选择“打开”；
+3. 终端执行 `xattr -cr "/Applications/私域网盘.app"` 清除隔离标记。
+
+首个带 Sparkle 的版本需要手动安装一次，之后新版本可直接在应用内“我的 → 检查更新”完成自更新，无需再走 DMG。
 
 ## 测试
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -7,6 +9,7 @@ import '../../../core/version/app_version.dart';
 import '../../../shared/state/app_scope.dart';
 import '../application/update_service.dart';
 import '../infrastructure/github_release_client.dart';
+import '../infrastructure/macos_sparkle_updater.dart';
 
 RoundedRectangleBorder _mobileCardShape() {
   return RoundedRectangleBorder(borderRadius: BorderRadius.circular(14));
@@ -81,6 +84,10 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   late final Future<AppVersion> _version = PackageAppVersionReader().read();
+  late final bool _sparkleEnabled =
+      usesSparkleUpdate(defaultTargetPlatform);
+  late final MacosSparkleUpdater _sparkle = MacosSparkleUpdater.instance;
+  StreamSubscription<SparkleUpdateStatus>? _sparkleSubscription;
   late final UpdateService _updates = UpdateService(
     versionReader: PackageAppVersionReader(),
     releaseClient: GithubReleaseClient(),
@@ -92,7 +99,20 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
+    if (_sparkleEnabled) {
+      unawaited(_sparkle.initialize());
+      _sparkleSubscription = _sparkle.statusStream.listen((_) {
+        if (mounted) setState(() {});
+      });
+      return;
+    }
     _refreshUpdateStatus();
+  }
+
+  @override
+  void dispose() {
+    _sparkleSubscription?.cancel();
+    super.dispose();
   }
 
   @override
@@ -351,6 +371,21 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   String get _updateSubtitle {
+    if (_sparkleEnabled) {
+      switch (_sparkle.status) {
+        case SparkleUpdateStatus.checking:
+          return '正在检查最新版本…';
+        case SparkleUpdateStatus.upToDate:
+          return '当前已是最新版本';
+        case SparkleUpdateStatus.failed:
+          return '网络不稳定，无法访问 GitHub';
+        case SparkleUpdateStatus.idle:
+          if (_sparkle.latestVersion != null) {
+            return '新版本 ${_sparkle.latestVersion} 可更新';
+          }
+          return '通过 Sparkle 自动更新';
+      }
+    }
     if (_checkingUpdate) return '正在检查最新版本…';
     if (_updateCheckFailed) return '网络不稳定，无法访问 GitHub';
     final result = _updateCheck;
@@ -360,6 +395,24 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Widget? get _updateTrailing {
+    if (_sparkleEnabled) {
+      switch (_sparkle.status) {
+        case SparkleUpdateStatus.checking:
+          return const SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          );
+        case SparkleUpdateStatus.failed:
+          return TextButton(
+            onPressed: _openReleasesPage,
+            child: const Text('手动下载'),
+          );
+        case SparkleUpdateStatus.idle:
+        case SparkleUpdateStatus.upToDate:
+          return null;
+      }
+    }
     if (_checkingUpdate) {
       return const SizedBox(
         width: 18,
@@ -404,6 +457,14 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _checkForUpdate() async {
+    if (_sparkleEnabled) {
+      try {
+        await _sparkle.checkManually();
+      } catch (error) {
+        debugPrint('[更新检查] Sparkle 检查失败：$error');
+      }
+      return;
+    }
     if (_checkingUpdate) return;
     setState(() {
       _checkingUpdate = true;
@@ -424,14 +485,13 @@ class _SettingsPageState extends State<SettingsPage> {
         );
         return;
       }
-      final macos = defaultTargetPlatform == TargetPlatform.macOS;
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
           title: Text('发现新版本 ${update.release.version}'),
           content: SingleChildScrollView(
               child: Text(
-            '${update.release.notes.isEmpty ? '暂无更新说明。' : update.release.notes}\n\n${macos ? '下载 DMG 后，请将新版应用拖入“应用程序”文件夹覆盖旧版。' : '下载完成后将由系统确认安装。'}',
+            '${update.release.notes.isEmpty ? '暂无更新说明。' : update.release.notes}\n\n下载完成后将由系统确认安装。',
           )),
           actions: [
             TextButton(
@@ -440,11 +500,7 @@ class _SettingsPageState extends State<SettingsPage> {
             FilledButton(
                 onPressed: () async {
                   Navigator.pop(context);
-                  if (macos) {
-                    await _updates.openDownload(update);
-                  } else {
-                    await _downloadAndInstall(update);
-                  }
+                  await _downloadAndInstall(update);
                 },
                 child: const Text('下载更新')),
           ],
