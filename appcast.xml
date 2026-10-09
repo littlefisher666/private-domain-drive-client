@@ -1,0 +1,29 @@
+<?xml version='1.0' encoding='utf-8'?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>私域网盘</title>
+    <link>https://github.com/littlefisher666/private-domain-drive-client</link>
+    <description>私域网盘 macOS 客户端 Sparkle 更新清单</description>
+    <language>zh-cn</language>
+    <item>
+      <title>私域网盘 macOS v1.0.5</title>
+      <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.5</link>
+      <sparkle:version>76</sparkle:version>
+      <sparkle:shortVersionString>1.0.5</sparkle:shortVersionString>
+      <pubDate>Fri, 09 Oct 2026 02:08:05 +0000</pubDate>
+      <description>【优化】
+- 例行发布，无用户可感知的变更。</description>
+      <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.5/private-domain-drive-macos-v1.0.5.zip" length="40251072" type="application/zip" sparkle:edSignature="dXVdIJYLsctQwfOfojFo3nak0j1XcimKjLvFtH8Ni0zBOEB+V2D7/jlVT9HplKCjNfMvzNdfyHsDs6Er8e/xBQ==" />
+    </item>
+    <item>
+      <title>私域网盘 macOS v1.0.3</title>
+      <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.3</link>
+      <sparkle:version>74</sparkle:version>
+      <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
+      <pubDate>Fri, 09 Oct 2026 01:00:20 +0000</pubDate>
+      <description>【新功能】
+- 接入 Sparkle 自更新并关闭 App Sandbox（macos）</description>
+      <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.3/private-domain-drive-macos-v1.0.3.zip" length="40251074" type="application/zip" sparkle:edSignature="zwwFCaTgzSbXqG/Cs8fj0ZNKGsxm7HqdWN2ue+6BZ0JW9gDbiq0P7mRXnOoSfza+TWMOikqZXciEgq2CGDcgAQ==" />
+    </item>
+  </channel>
+</rss>
