@@ -16,11 +16,6 @@ on:
         description: "可选；留空时按所选平台各自最新版本自动递增 PATCH，例如 1.0.1 → 1.0.2"
         required: false
         type: string
-      run_tests:
-        description: "是否运行 Flutter 单元测试"
-        required: false
-        default: true
-        type: boolean
 
 permissions:
   contents: write
@@ -154,13 +149,11 @@ jobs:
               echo "- macOS 发布版本：\`$macos_tag_name\`"
             fi
             echo "- 构建号：\`$build_number\`"
-            echo "- 运行单元测试：\`${{ inputs.run_tests }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   test:
     name: 运行单元测试
     needs: prepare
-    if: ${{ inputs.run_tests }}
     runs-on: ubuntu-24.04
 
     steps:
@@ -183,7 +176,7 @@ jobs:
   android:
     name: 构建 Android 安装包
     needs: [prepare, test]
-    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.test.result != 'failure' && needs.prepare.outputs.publish_android == 'true' }}
+    if: ${{ needs.prepare.outputs.publish_android == 'true' }}
     runs-on: ubuntu-24.04
 
     steps:
@@ -250,7 +243,7 @@ jobs:
   macos:
     name: 构建 macOS 应用
     needs: [prepare, test]
-    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.test.result != 'failure' && needs.prepare.outputs.publish_macos == 'true' }}
+    if: ${{ needs.prepare.outputs.publish_macos == 'true' }}
     runs-on: macos-latest
 
     steps:
