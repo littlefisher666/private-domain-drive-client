@@ -8,6 +8,9 @@ bool usesSparkleUpdate(TargetPlatform platform) =>
 
 enum SparkleUpdateStatus { idle, checking, upToDate, failed }
 
+/// 正在进行的一次更新检查来源。
+enum _CheckKind { none, startup, manual }
+
 abstract class SparkleUpdaterApi {
   void addListener(UpdaterListener listener);
   Future<void> setFeedURL(String feedUrl);
@@ -54,6 +57,7 @@ class MacosSparkleUpdater implements UpdaterListener {
   bool _initialized = false;
   SparkleUpdateStatus _status = SparkleUpdateStatus.idle;
   String? _latestVersion;
+  _CheckKind _activeCheck = _CheckKind.none;
 
   SparkleUpdateStatus get status => _status;
 
@@ -69,15 +73,20 @@ class MacosSparkleUpdater implements UpdaterListener {
     _initialized = true;
   }
 
-  /// 启动后的静默检查；Sparkle 自动检查失败时不打扰用户。
+  /// 启动后的静默检查；Sparkle 自动检查失败时不打扰用户，回到空闲状态。
+  ///
+  /// 升级自动重启后 Sparkle 的安装会话可能尚未收尾，此时发起的检查会被
+  /// Sparkle 拒绝并以上报 error 事件，因此失败一律静默处理。
   Future<void> startupCheck() async {
     await initialize();
+    _activeCheck = _CheckKind.startup;
     unawaited(_api.checkForUpdates(inBackground: true));
   }
 
   /// 设置页手动检查；发现更新或已是最新时由 Sparkle 原生弹窗反馈。
   Future<void> checkManually() async {
     await initialize();
+    _activeCheck = _CheckKind.manual;
     _setStatus(SparkleUpdateStatus.checking);
     await _api.checkForUpdates(inBackground: false);
   }
@@ -85,7 +94,15 @@ class MacosSparkleUpdater implements UpdaterListener {
   @override
   void onUpdaterError(UpdaterError? error) {
     debugPrint('[Sparkle] 更新检查失败：${error?.message}');
-    _setStatus(SparkleUpdateStatus.failed);
+    final kind = _activeCheck;
+    _activeCheck = _CheckKind.none;
+    if (kind == _CheckKind.manual) {
+      _setStatus(SparkleUpdateStatus.failed);
+    } else if (kind == _CheckKind.startup) {
+      // 启动静默检查失败：不打扰用户，回到空闲状态。
+      _setStatus(SparkleUpdateStatus.idle);
+    }
+    // 无进行中的检查（游离的会话中止事件）：忽略。
   }
 
   @override
@@ -95,8 +112,10 @@ class MacosSparkleUpdater implements UpdaterListener {
 
   @override
   void onUpdaterUpdateAvailable(AppcastItem? appcastItem) {
-    debugPrint('[Sparkle] 发现新版本：${appcastItem?.versionString}');
-    _latestVersion = appcastItem?.versionString;
+    debugPrint('[Sparkle] 发现新版本：${appcastItem?.displayVersionString}');
+    // versionString 是构建号，用户可读的营销版本号在 displayVersionString。
+    _latestVersion = appcastItem?.displayVersionString ?? appcastItem?.versionString;
+    _activeCheck = _CheckKind.none;
     _setStatus(SparkleUpdateStatus.idle);
   }
 
@@ -104,6 +123,7 @@ class MacosSparkleUpdater implements UpdaterListener {
   void onUpdaterUpdateNotAvailable(UpdaterError? error) {
     debugPrint('[Sparkle] 当前已是最新版本');
     _latestVersion = null;
+    _activeCheck = _CheckKind.none;
     _setStatus(SparkleUpdateStatus.upToDate);
   }
 
@@ -126,5 +146,6 @@ class MacosSparkleUpdater implements UpdaterListener {
     _status = SparkleUpdateStatus.idle;
     _latestVersion = null;
     _initialized = false;
+    _activeCheck = _CheckKind.none;
   }
 }
