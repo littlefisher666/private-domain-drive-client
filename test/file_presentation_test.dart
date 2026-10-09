@@ -29,7 +29,12 @@ void main() {
   test('预览类型识别覆盖图片、PDF、文本与不支持文件', () {
     expect(PreviewTypeResolver.fromFileName('封面.PNG'), PreviewType.image);
     expect(PreviewTypeResolver.fromFileName('说明.pdf'), PreviewType.pdf);
-    expect(PreviewTypeResolver.fromFileName('说明.md'), PreviewType.text);
+    expect(PreviewTypeResolver.fromFileName('说明.md'), PreviewType.markdown);
+    expect(PreviewTypeResolver.fromFileName('数据.csv'), PreviewType.csv);
+    expect(PreviewTypeResolver.fromFileName('脚本.py'), PreviewType.text);
+    expect(PreviewTypeResolver.fromFileName('配置.yaml'), PreviewType.text);
+    expect(PreviewTypeResolver.fromFileName('日志.log'), PreviewType.text);
+    expect(PreviewTypeResolver.fromFileName('歌曲.mp3'), PreviewType.audio);
     expect(
         PreviewTypeResolver.fromFileName('压缩包.zip'), PreviewType.unsupported);
   });

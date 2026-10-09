@@ -5,6 +5,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:private_domain_oss/private_domain_oss.dart';
 
 import '../../../core/errors/app_error.dart';
@@ -562,6 +563,83 @@ class OssClient {
       () => _native.presignGetObjectUrl(path, expires: expires),
     );
   }
+
+  /// 生成通用对象预签名 URL（复用视频预签名机制），供文档流式下载、
+  /// 音频流式播放等场景使用。
+  Future<String> presignObjectUrl(
+    String path,
+    UserSession session, {
+    Duration expires = const Duration(hours: 1),
+  }) =>
+      presignGetObjectUrl(path, session, expires: expires);
+
+  /// 通过预签名 URL 将对象流式下载到本地文件（不经原生 SDK 整段载入
+  /// 内存）。支持进度回调与取消；取消或失败时调用方负责清理目标文件。
+  Future<void> streamDownloadToFile(
+    String path,
+    UserSession session,
+    File target, {
+    Duration expires = const Duration(hours: 1),
+    void Function(int receivedBytes, int? totalBytes)? onProgress,
+    bool Function()? isCanceled,
+  }) async {
+    final url = await presignObjectUrl(path, session, expires: expires);
+    final client = http.Client();
+    try {
+      if (isCanceled?.call() == true) {
+        throw const TransferCanceledException();
+      }
+      final response = await client.send(http.Request('GET', Uri.parse(url)));
+      if (response.statusCode != 200) {
+        throw AppError(
+          '文档下载失败（HTTP ${response.statusCode}）',
+          code: 'OSS_DOCUMENT_DOWNLOAD_FAILED',
+        );
+      }
+      final total = response.contentLength;
+      var received = 0;
+      final sink = target.openWrite();
+      var sinkClosed = false;
+      Future<void> closeSink() async {
+        if (sinkClosed) return;
+        sinkClosed = true;
+        await sink.close();
+      }
+
+      try {
+        await for (final chunk in response.stream) {
+          if (isCanceled?.call() == true) {
+            await closeSink();
+            throw const TransferCanceledException();
+          }
+          sink.add(chunk);
+          received += chunk.length;
+          onProgress?.call(received, total);
+        }
+        await sink.flush();
+        await closeSink();
+      } catch (error) {
+        await closeSink();
+        rethrow;
+      }
+    } finally {
+      client.close();
+    }
+  }
+
+  /// 读取对象指定字节范围（Range 请求），供大文本分段加载使用。
+  Future<List<int>> getObjectRange(
+    String path,
+    UserSession session, {
+    required int startByte,
+    required int endByte,
+  }) =>
+      _getObjectRange(
+        path,
+        session,
+        startByte: startByte,
+        endByte: endByte,
+      );
 
   Future<void> copy(String from, String to, UserSession session) async {
     await _ensureConfigured(session);

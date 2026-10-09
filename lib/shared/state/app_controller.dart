@@ -10,9 +10,11 @@ import '../../features/auth/domain/user_session.dart';
 import '../../features/auth/infrastructure/saved_credentials_store.dart';
 import '../../features/auth/infrastructure/session_repository.dart';
 import '../../features/transfer/domain/transfer_task.dart';
+import '../../features/preview/infrastructure/text_preview_loader.dart';
 import '../../features/workspace/domain/file_item.dart';
 import '../../features/workspace/domain/recycle_bin_entry.dart';
 import '../../features/workspace/infrastructure/oss_client.dart';
+import '../cache/disk_document_cache.dart';
 import '../cache/disk_image_cache.dart';
 
 class ShareImportItem {
@@ -550,6 +552,61 @@ class AppController extends ChangeNotifier {
     final session = _session;
     final bucket = session?.ossConfig?.bucket ?? '';
     return '$bucket|${session?.userId ?? ''}';
+  }
+
+  /// 加载 PDF 文档本地文件：缓存命中直接返回；未命中走预签名 URL
+  /// 流式下载落盘后写入文档缓存。失败时抛出异常由界面展示重试。
+  Future<File> loadPdfDocument(FileItem item) async {
+    if (item.isDirectory || item.kind != FileKind.pdf) {
+      throw StateError('只有 PDF 文件支持文档预览');
+    }
+    final session = _requireSession();
+    await ensureSessionReady();
+    final cacheKey = DiskDocumentCache.cacheKey(
+      namespace: thumbnailCacheNamespace,
+      path: item.path,
+      versionToken: item.objectVersionToken,
+    );
+    final cached = await DiskDocumentCache.instance.get(cacheKey);
+    if (cached != null) return cached;
+    final temporary = await DiskDocumentCache.instance.createTemporaryFile();
+    if (temporary == null) {
+      throw AppError('本地缓存不可用，无法预览 PDF', code: 'DOC_CACHE_UNAVAILABLE');
+    }
+    try {
+      await _ossClient.streamDownloadToFile(
+        item.path,
+        session,
+        temporary,
+      );
+    } catch (_) {
+      await DiskDocumentCache.instance.discard(temporary);
+      rethrow;
+    }
+    final committed =
+        await DiskDocumentCache.instance.commit(cacheKey, temporary);
+    if (committed == null) {
+      throw AppError('PDF 缓存写入失败', code: 'DOC_CACHE_WRITE_FAILED');
+    }
+    return committed;
+  }
+
+  /// 创建文本预览分段加载器（编码与 20MB 上限策略内聚在加载器中）。
+  TextPreviewLoader createTextPreviewLoader(FileItem item) {
+    final session = _requireSession();
+    return TextPreviewLoader(
+      ossClient: _ossClient,
+      session: session,
+      path: item.path,
+      fileSize: item.size,
+    );
+  }
+
+  /// 生成音频等对象的预签名 URL，用于 media_kit 流式播放。
+  Future<String> presignMediaUrl(FileItem item) async {
+    final session = _requireSession();
+    await ensureSessionReady();
+    return _ossClient.presignObjectUrl(item.path, _session ?? session);
   }
 
   void setCurrentPath(String path) {
