@@ -460,7 +460,11 @@ void main() {
         ShareImportItem(id: '2', name: 'b.jpg', size: 1, localPath: fileB.path),
       ]);
       await controller.confirmShareUpload();
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await _waitForTaskStatus(
+        controller,
+        TransferTaskStatus.success,
+        taskCount: 2,
+      );
 
       final batchIds = controller.tasks.map((task) => task.batchId).toSet();
       expect(controller.tasks, hasLength(2));
@@ -477,7 +481,7 @@ void main() {
         localPath: '/fake/已存在.txt',
         fileSize: 1,
       );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await _waitForTaskStatus(controller, TransferTaskStatus.success);
 
       final task = controller.tasks.single;
       expect(task.status, TransferTaskStatus.success);
@@ -625,7 +629,11 @@ void main() {
       expect(controller.pendingTransferCount, 0);
 
       gate.complete();
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await _waitForTaskStatus(
+        controller,
+        TransferTaskStatus.success,
+        taskCount: 2,
+      );
       expect(
           controller.tasks
               .where((task) => task.status == TransferTaskStatus.success),
@@ -650,10 +658,14 @@ void main() {
         ],
         targetDirectory: directory.path,
       );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-
       expect(result.fileCount, 2);
       expect(result.directoryCount, 1);
+      await _waitForTaskStatus(
+        controller,
+        TransferTaskStatus.success,
+        taskCount: 2,
+      );
+
       expect(controller.tasks.where((task) => task.batchId == result.batchId),
           hasLength(2));
       expect(await File('${directory.path}/资料/a.txt').exists(), isTrue);
@@ -671,7 +683,7 @@ void main() {
         const FileItem(path: 'shared/a.txt', name: 'a.txt', isDirectory: false),
         targetDirectory: directory.path,
       );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await _waitForTaskStatus(controller, TransferTaskStatus.success);
 
       final task = controller.tasks.single;
       expect(task.status, TransferTaskStatus.success);
@@ -693,7 +705,7 @@ void main() {
             path: 'shared/README', name: 'README', isDirectory: false),
         targetDirectory: directory.path,
       );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await _waitForTaskStatus(controller, TransferTaskStatus.success);
 
       expect(controller.tasks.single.status, TransferTaskStatus.success);
       expect(controller.tasks.single.target, '${directory.path}/README (1)');
@@ -736,7 +748,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 50));
       controller.cancelTask(controller.tasks.single.id);
       gate.complete();
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await _waitForTaskStatus(controller, TransferTaskStatus.canceled);
 
       final task = controller.tasks.single;
       expect(task.status, TransferTaskStatus.canceled);
@@ -767,7 +779,7 @@ void main() {
       expect(confirming.bytesPerSecond, greaterThan(0));
 
       gate.complete();
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await _waitForTaskStatus(controller, TransferTaskStatus.success);
       expect(controller.tasks.single.status, TransferTaskStatus.success);
     });
   });
@@ -785,12 +797,18 @@ Future<AppController> _controller({_FakeOssClient? oss}) async {
 
 Future<void> _waitForTaskStatus(
   AppController controller,
-  TransferTaskStatus status,
-) async {
+  TransferTaskStatus status, {
+  int taskCount = 1,
+}) async {
   final deadline = DateTime.now().add(const Duration(seconds: 5));
-  while (controller.tasks.single.status != status) {
+  bool reached() {
+    if (controller.tasks.length != taskCount) return false;
+    return controller.tasks.every((task) => task.status == status);
+  }
+
+  while (!reached()) {
     if (DateTime.now().isAfter(deadline)) {
-      throw TimeoutException('传输任务未在限定时间内进入 $status 状态');
+      throw TimeoutException('传输任务未在限定时间内全部进入 $status 状态');
     }
     await Future<void>.delayed(const Duration(milliseconds: 10));
   }
