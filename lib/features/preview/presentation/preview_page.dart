@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -7,6 +8,12 @@ import '../../../shared/state/app_scope.dart';
 import '../../../shared/widgets/app_feedback.dart';
 import '../../workspace/domain/file_item.dart';
 import '../domain/preview_type.dart';
+import '../infrastructure/text_preview_loader.dart';
+import 'audio_preview_body.dart';
+import 'csv_preview_body.dart';
+import 'markdown_preview_body.dart';
+import 'pdf_preview_body.dart';
+import 'text_preview_body.dart';
 
 class PreviewPageArguments {
   const PreviewPageArguments({
@@ -177,19 +184,25 @@ class _PreviewPageState extends State<PreviewPage> {
                     images.length > 1 ? '${_index + 1} / ${images.length}' : null,
                 onImageSwipe: images.length > 1 ? _onSwipe : null,
                 imageTransitionOffset: _enterOffset,
-                textContent: '暂不支持在线读取此文件内容，请下载后查看。',
+                documentLoader: controller.loadPdfDocument,
+                textLoaderFactory: controller.createTextPreviewLoader,
+                mediaUrlLoader: controller.presignMediaUrl,
               )
             : Padding(
                 padding: const EdgeInsets.all(16),
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(18),
+                  child: ColoredBox(
+                    color:
+                        scheme.surfaceContainerHighest.withValues(alpha: 0.45),
                     child: _PreviewBody(
                       previewType: previewType,
                       fileName: currentItem.name,
                       filePath: currentItem.path,
                       imageLoader: controller.loadImagePreview,
-                      textContent: '暂不支持在线读取此文件内容，请下载后查看。',
+                      documentLoader: controller.loadPdfDocument,
+                      textLoaderFactory: controller.createTextPreviewLoader,
+                      mediaUrlLoader: controller.presignMediaUrl,
                     ),
                   ),
                 ),
@@ -205,7 +218,9 @@ class _PreviewBody extends StatelessWidget {
     required this.fileName,
     required this.filePath,
     required this.imageLoader,
-    required this.textContent,
+    required this.documentLoader,
+    required this.textLoaderFactory,
+    required this.mediaUrlLoader,
     this.imagePositionText,
     this.onImageSwipe,
     this.imageTransitionOffset = const Offset(1, 0),
@@ -216,7 +231,9 @@ class _PreviewBody extends StatelessWidget {
   final String fileName;
   final String filePath;
   final Future<List<int>> Function(FileItem item) imageLoader;
-  final String textContent;
+  final Future<File> Function(FileItem item) documentLoader;
+  final TextPreviewLoader Function(FileItem item) textLoaderFactory;
+  final Future<String> Function(FileItem item) mediaUrlLoader;
   final String? imagePositionText;
   final void Function(double velocity, bool vertical)? onImageSwipe;
   final Offset imageTransitionOffset;
@@ -224,6 +241,12 @@ class _PreviewBody extends StatelessWidget {
   /// 缩略图加载器（本地缓存命中时近乎即时返回），
   /// 用于原图未就绪时先展示低清画面。
   final Future<List<int>> Function(FileItem item)? thumbnailLoader;
+
+  FileItem get _item => FileItem(
+        path: filePath,
+        name: fileName,
+        isDirectory: false,
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -233,11 +256,7 @@ class _PreviewBody extends StatelessWidget {
     switch (previewType) {
       case PreviewType.image:
         return _ImagePreviewBody(
-          item: FileItem(
-            path: filePath,
-            name: fileName,
-            isDirectory: false,
-          ),
+          item: _item,
           loader: imageLoader,
           thumbnailLoader: thumbnailLoader,
           positionText: imagePositionText,
@@ -245,54 +264,29 @@ class _PreviewBody extends StatelessWidget {
           transitionOffset: imageTransitionOffset,
         );
       case PreviewType.pdf:
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text('PDF 预览', style: theme.textTheme.headlineSmall),
-            const SizedBox(height: 12),
-            Expanded(
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: scheme.surfaceContainerHighest.withValues(alpha: 0.45),
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: ListView(
-                  children: <Widget>[
-                    Text(fileName, style: theme.textTheme.titleMedium),
-                    const SizedBox(height: 12),
-                    Text(
-                      '正在展示 PDF 预览区域。可从文件列表进入，下载将创建传输任务。',
-                      style: theme.textTheme.bodyLarge,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
+        return PdfPreviewBody(
+          item: _item,
+          loader: documentLoader,
+        );
+      case PreviewType.markdown:
+        return MarkdownPreviewBody(
+          item: _item,
+          loaderFactory: textLoaderFactory,
+        );
+      case PreviewType.csv:
+        return CsvPreviewBody(
+          item: _item,
+          loaderFactory: textLoaderFactory,
         );
       case PreviewType.text:
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text('文本预览', style: theme.textTheme.titleLarge),
-            const SizedBox(height: 12),
-            Expanded(
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: scheme.surfaceContainerHighest.withValues(alpha: 0.45),
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: SingleChildScrollView(
-                  child: SelectableText(textContent,
-                      style: theme.textTheme.bodyLarge),
-                ),
-              ),
-            ),
-          ],
+        return TextPreviewBody(
+          item: _item,
+          loaderFactory: textLoaderFactory,
+        );
+      case PreviewType.audio:
+        return AudioPreviewBody(
+          item: _item,
+          urlLoader: mediaUrlLoader,
         );
       case PreviewType.unsupported:
         return Center(

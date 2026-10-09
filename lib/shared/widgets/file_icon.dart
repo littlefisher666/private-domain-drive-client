@@ -26,6 +26,7 @@ class FileTypeIcon extends StatelessWidget {
       FileKind.image => (Icons.image_outlined, const Color(0xFF0F766E)),
       FileKind.pdf => (Icons.picture_as_pdf_outlined, const Color(0xFFDC2626)),
       FileKind.text => (Icons.description_outlined, const Color(0xFF2563EB)),
+      FileKind.audio => (Icons.music_note_outlined, const Color(0xFF7C3AED)),
       FileKind.file => (
           Icons.insert_drive_file_outlined,
           scheme.onSurfaceVariant
@@ -300,6 +301,11 @@ _FileStyle _styleFor(FileKind kind) {
         bg: CupertinoDesktopTokens.textBg,
         fg: CupertinoDesktopTokens.textFg,
         label: 'TXT',
+      ),
+    FileKind.audio => const _FileStyle(
+        bg: CupertinoDesktopTokens.fileBg,
+        fg: CupertinoDesktopTokens.fileFg,
+        label: 'AUDIO',
       ),
     FileKind.file => const _FileStyle(
         bg: CupertinoDesktopTokens.fileBg,

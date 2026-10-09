@@ -74,7 +74,7 @@ extension FileSortOptionX on FileSortOption {
       this == FileSortOption.takenNewest || this == FileSortOption.takenOldest;
 }
 
-enum FileKind { folder, image, pdf, text, file }
+enum FileKind { folder, image, pdf, text, audio, file }
 
 class ImageThumbnailSpec {
   const ImageThumbnailSpec._();
@@ -109,6 +109,16 @@ extension FileItemX on FileItem {
     if (lower.endsWith('.pdf')) {
       return FileKind.pdf;
     }
+    if (lower.endsWith('.mp3') ||
+        lower.endsWith('.m4a') ||
+        lower.endsWith('.flac') ||
+        lower.endsWith('.wav') ||
+        lower.endsWith('.aac') ||
+        lower.endsWith('.ogg') ||
+        lower.endsWith('.opus') ||
+        lower.endsWith('.wma')) {
+      return FileKind.audio;
+    }
     if (lower.endsWith('.txt') ||
         lower.endsWith('.md') ||
         lower.endsWith('.json') ||
@@ -126,6 +136,7 @@ extension FileItemX on FileItem {
         FileKind.image => '图片',
         FileKind.pdf => 'PDF',
         FileKind.text => '文本',
+        FileKind.audio => '音频',
         FileKind.file => '文件',
       };
 
