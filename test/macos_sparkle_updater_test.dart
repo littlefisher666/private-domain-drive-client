@@ -85,7 +85,7 @@ void main() {
     expect(api.checkCalls, [true]);
   });
 
-  test('检查失败进入失败状态并通知监听者', () async {
+  test('手动检查失败进入失败状态，游离的错误事件被忽略', () async {
     final api = _FakeSparkleApi();
     final updater = MacosSparkleUpdater(api: api);
     final statuses = <SparkleUpdateStatus>[];
@@ -93,10 +93,42 @@ void main() {
 
     await updater.checkManually();
     updater.onUpdaterError(UpdaterError('网络错误'));
+    // 会话已结束，随后的游离 abort 事件不应改变状态。
+    updater.onUpdaterError(UpdaterError('网络错误'));
     await pumpEventQueue();
 
     expect(updater.status, SparkleUpdateStatus.failed);
-    expect(statuses, contains(SparkleUpdateStatus.failed));
+    expect(statuses, [
+      SparkleUpdateStatus.checking,
+      SparkleUpdateStatus.failed,
+    ]);
+  });
+
+  test('启动静默检查失败不打扰用户，回到空闲状态', () async {
+    final api = _FakeSparkleApi();
+    final updater = MacosSparkleUpdater(api: api);
+    final statuses = <SparkleUpdateStatus>[];
+    updater.statusStream.listen(statuses.add);
+
+    await updater.startupCheck();
+    updater.onUpdaterError(UpdaterError('网络错误'));
+    await pumpEventQueue();
+
+    expect(updater.status, SparkleUpdateStatus.idle);
+    expect(statuses, isEmpty);
+  });
+
+  test('无进行中检查时收到的错误事件被忽略', () async {
+    final api = _FakeSparkleApi();
+    final updater = MacosSparkleUpdater(api: api);
+    final statuses = <SparkleUpdateStatus>[];
+    updater.statusStream.listen(statuses.add);
+
+    updater.onUpdaterError(UpdaterError('网络错误'));
+    await pumpEventQueue();
+
+    expect(updater.status, SparkleUpdateStatus.idle);
+    expect(statuses, isEmpty);
   });
 
   test('已是最新版本进入 upToDate 状态', () async {
@@ -120,16 +152,20 @@ void main() {
     expect(updater.latestVersion, '1.2.4');
   });
 
-  test('重复状态不重复广播', () async {
+  test('检查失败后重复错误事件不重复广播', () async {
     final api = _FakeSparkleApi();
     final updater = MacosSparkleUpdater(api: api);
     final statuses = <SparkleUpdateStatus>[];
     updater.statusStream.listen(statuses.add);
 
+    await updater.checkManually();
     updater.onUpdaterError(UpdaterError('网络错误'));
     updater.onUpdaterError(UpdaterError('网络错误'));
     await pumpEventQueue();
 
-    expect(statuses, [SparkleUpdateStatus.failed]);
+    expect(statuses, [
+      SparkleUpdateStatus.checking,
+      SparkleUpdateStatus.failed,
+    ]);
   });
 }
