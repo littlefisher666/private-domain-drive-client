@@ -12,6 +12,7 @@ import '../../features/auth/infrastructure/session_repository.dart';
 import '../../features/transfer/domain/transfer_task.dart';
 import '../../features/preview/infrastructure/text_preview_loader.dart';
 import '../../features/workspace/domain/file_item.dart';
+import '../../features/workspace/domain/move_task_entry.dart';
 import '../../features/workspace/domain/recycle_bin_entry.dart';
 import '../../features/workspace/infrastructure/oss_client.dart';
 import '../cache/disk_document_cache.dart';
@@ -80,6 +81,42 @@ class BatchDownloadEnqueueResult {
   final String batchId;
   final int fileCount;
   final int directoryCount;
+}
+
+/// 目标路径已存在时的移动处置决策；不提供覆盖选项，避免破坏幂等重跑安全性。
+enum MoveConflictResolution { skip, keepBoth }
+
+class MoveProgress {
+  const MoveProgress({required this.processed, required this.total});
+
+  final int processed;
+  final int total;
+}
+
+class MoveSummary {
+  const MoveSummary({
+    required this.movedCount,
+    required this.failedKeys,
+    this.sourceKeys = const <String>{},
+    this.destinationKeys = const <String>{},
+  });
+
+  final int movedCount;
+  final List<String> failedKeys;
+
+  /// 本次搬运涉及的源侧与目标侧对象 key（含目录标记），供索引挂钩使用。
+  final Set<String> sourceKeys;
+  final Set<String> destinationKeys;
+
+  bool get hasFailures => failedKeys.isNotEmpty;
+}
+
+/// 一次移动执行的单源计划：源前缀与其在目标侧的落点（重命名后）。
+class _MovePlanPair {
+  const _MovePlanPair({required this.source, required this.renameRoot});
+
+  final String source;
+  final String renameRoot;
 }
 
 class DirectorySizeState {
@@ -174,6 +211,7 @@ class AppController extends ChangeNotifier {
       _batchConflictWaiters = <String, Completer<_UploadConflictDecision?>>{};
 
   static const rootPrefix = 'shared/';
+  static const _movesRoot = '$rootPrefix.moves/';
   static const _transferConcurrencyKey = 'transfer_concurrency';
   static const _transferHistoryKey = 'transfer_history:v1';
   static const _fileSortOptionKey = 'file_sort_option';
@@ -213,6 +251,11 @@ class AppController extends ChangeNotifier {
   /// 总并发数单独通知，避免传输进度刷新整个设置区域。
   final ValueNotifier<int> transferConcurrencyListenable =
       ValueNotifier<int>(3);
+
+  /// 移动进行中状态（已处理/总对象数）；仅工作区条目区消费，避免整页重建。
+  final ValueNotifier<MoveProgress?> moveStateListenable =
+      ValueNotifier<MoveProgress?>(null);
+  bool _isMoving = false;
 
   UserSession? _session;
   String _currentPath = rootPrefix;
@@ -278,6 +321,7 @@ class AppController extends ChangeNotifier {
   int get transferConcurrency => transferConcurrencyListenable.value;
   int get runningTransferCount => _runningTransferIds.length;
   int get pendingTransferCount => _pendingTransferIds.length;
+  bool get isMoving => _isMoving;
 
   List<ShareImportItem> get pendingShareItems =>
       List<ShareImportItem>.unmodifiable(_pendingShareItems);
@@ -1256,6 +1300,468 @@ class AppController extends ChangeNotifier {
     ));
   }
 
+  /// 发起移动：源去重 → 目标合法性校验 → 冲突检测与处置 → 写 manifest → 执行。
+  /// 返回 null 表示用户在冲突处置或互斥检查后取消，未产生任何搬运。
+  Future<MoveSummary?> moveItems(
+    List<FileItem> items,
+    String targetDir,
+  ) async {
+    if (_isMoving) {
+      throw StateError('已有移动任务进行中，请等待完成');
+    }
+    _ensureUploadCapability();
+    _ensureDeleteCapability();
+    final targetPrefix = _normalizeDir(targetDir);
+    await ensureSessionReady();
+    final session = _requireSession();
+
+    final sources = _dedupeMoveSources(items);
+    if (sources.isEmpty) {
+      throw StateError('没有可移动的条目');
+    }
+    _validateMoveTargets(sources, targetPrefix);
+
+    final plan = await _planMove(sources, targetPrefix, session);
+    if (plan == null) {
+      return null;
+    }
+    final summary = await _executeMovePlan(
+      plan: plan,
+      targetPrefix: targetPrefix,
+      session: session,
+    );
+    _refreshAfterMove(
+      sources.map((item) => item.path),
+      plan.map((pair) => pair.renameRoot),
+      summary,
+    );
+    unawaited(_galleryHooks?.onObjectsDeleted(summary.sourceKeys));
+    unawaited(_galleryHooks?.onObjectsRestored(summary.destinationKeys));
+    return summary;
+  }
+
+  /// 对包含父文件夹与其子项的选择去重：父前缀已覆盖子路径。
+  List<FileItem> _dedupeMoveSources(List<FileItem> items) {
+    final sorted = items.toList(growable: false)
+      ..sort((a, b) => a.path.length.compareTo(b.path.length));
+    final sources = <FileItem>[];
+    for (final item in sorted) {
+      _ensureWithinRoot(item.path);
+      if (sources.any((source) =>
+          item.path.startsWith(_normalizeDir(source.path)) ||
+          item.path == source.path)) {
+        continue;
+      }
+      sources.add(item);
+    }
+    return sources;
+  }
+
+  /// 目标不得为任何源目录自身或其子目录，也不得与全部源的所在目录相同。
+  void _validateMoveTargets(List<FileItem> sources, String targetPrefix) {
+    for (final item in sources) {
+      if (!item.isDirectory) continue;
+      final dirPrefix = _normalizeDir(item.path);
+      if (targetPrefix == dirPrefix || targetPrefix.startsWith(dirPrefix)) {
+        throw StateError('目标目录不能是「${item.name}」自身或其子目录');
+      }
+    }
+    final sameAsSourceParent = sources
+        .every((item) => _normalizeDir(parentPath(item.path)) == targetPrefix);
+    if (sameAsSourceParent) {
+      throw StateError('目标目录与源所在目录相同，无需移动');
+    }
+  }
+
+  /// 逐条目检测目标路径冲突并生成执行计划；存在冲突时向用户请求处置。
+  Future<List<_MovePlanPair>?> _planMove(
+    List<FileItem> sources,
+    String targetPrefix,
+    UserSession session,
+  ) async {
+    final conflicts = <FileItem>[];
+    for (final item in sources) {
+      final desired =
+          '$targetPrefix${item.name}${item.isDirectory ? '/' : ''}';
+      if (await _ossClient.objectExists(desired, session)) {
+        conflicts.add(item);
+      }
+    }
+    var resolution = MoveConflictResolution.keepBoth;
+    if (conflicts.isNotEmpty) {
+      final decision =
+          await _showMoveConflictDialog(conflicts.map((item) => item.name)
+              .toList(growable: false));
+      if (decision == null) {
+        return null;
+      }
+      resolution = decision;
+    }
+    final plan = <_MovePlanPair>[];
+    for (final item in sources) {
+      if (conflicts.contains(item) && resolution == MoveConflictResolution.skip) {
+        continue;
+      }
+      var name = item.name;
+      if (conflicts.contains(item)) {
+        name = (await _nonConflictingObjectPath(
+                '$targetPrefix$name${item.isDirectory ? '/' : ''}', session))
+            .substring(targetPrefix.length)
+            .replaceFirst(RegExp(r'/$'), '');
+      }
+      plan.add(_MovePlanPair(
+        source: item.path,
+        renameRoot: '$targetPrefix$name${item.isDirectory ? '/' : ''}',
+      ));
+    }
+    return plan;
+  }
+
+  /// 写 manifest 后逐对象 copy→delete 执行计划；全部成功时删除 manifest，
+  /// 存在失败时保留 manifest 供冷启动继续或撤销。
+  Future<MoveSummary> _executeMovePlan({
+    required List<_MovePlanPair> plan,
+    required String targetPrefix,
+    required UserSession session,
+    String? manifestId,
+  }) async {
+    _isMoving = true;
+    notifyListeners();
+    final id = manifestId ??
+        '${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
+    final manifestKey = '$_movesRoot$id/manifest.json';
+    try {
+      final entry = MoveTaskEntry(
+        id: id,
+        sourcePrefixes: plan.map((pair) => pair.source).toList(growable: false),
+        destinations: plan.map((pair) => pair.renameRoot).toList(growable: false),
+        targetPrefix: targetPrefix,
+        createdAt: DateTime.now(),
+      );
+      await _ossClient.uploadText(manifestKey, entry.encode(), session);
+      final summary = await _runMovePlan(plan, session);
+      if (!summary.hasFailures) {
+        try {
+          await _ossClient.delete(manifestKey, session);
+        } catch (_) {
+          // manifest 删除失败仅残留一个可再次处理的任务，不影响结果。
+        }
+      }
+      return summary;
+    } finally {
+      _isMoving = false;
+      moveStateListenable.value = null;
+      notifyListeners();
+    }
+  }
+
+  Future<MoveSummary> _runMovePlan(
+    List<_MovePlanPair> plan,
+    UserSession session,
+  ) async {
+    final work = <({String key, String dst})>[];
+    for (final pair in plan) {
+      final keys = <String>{pair.source};
+      if (pair.source.endsWith('/')) {
+        keys.addAll(await _ossClient.listAllObjectKeys(pair.source, session));
+      }
+      for (final key in keys) {
+        final dst = key == pair.source
+            ? pair.renameRoot
+            : '${pair.renameRoot}${key.substring(pair.source.length)}';
+        work.add((key: key, dst: dst));
+      }
+    }
+    final failed = <String>[];
+    var processed = 0;
+    moveStateListenable.value = MoveProgress(processed: 0, total: work.length);
+    for (final item in work) {
+      try {
+        await _ossClient.copy(item.key, item.dst, session);
+        await _ossClient.delete(item.key, session);
+      } catch (_) {
+        // 复制失败可能源于上一轮已完成搬运（源已消失）：目标侧存在且源
+        // 已不存在即视为完成；目录标记缺失时改用建目录方式补齐。
+        final sourceExists = await _safeObjectExists(item.key, session);
+        if (!sourceExists && await _safeObjectExists(item.dst, session)) {
+          // 已在上一轮完成。
+        } else if (!sourceExists &&
+            item.key.endsWith('/') &&
+            await _createDirectoryMarker(item.dst, session)) {
+          // 空目录标记补齐。
+        } else {
+          failed.add(item.key);
+        }
+      }
+      processed++;
+      moveStateListenable.value =
+          MoveProgress(processed: processed, total: work.length);
+    }
+    return MoveSummary(
+      movedCount: work.length - failed.length,
+      failedKeys: failed,
+      sourceKeys: work.map((item) => item.key).toSet(),
+      destinationKeys: work.map((item) => item.dst).toSet(),
+    );
+  }
+
+  Future<bool> _safeObjectExists(String path, UserSession session) async {
+    try {
+      return await _ossClient.objectExists(path, session);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _createDirectoryMarker(String path, UserSession session) async {
+    try {
+      await _ossClient.createFolder(path, session);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 生成不冲突的目标路径：优先原名，其次「名称（n）」后缀，绝不覆盖。
+  Future<String> _nonConflictingObjectPath(
+      String desired, UserSession session) async {
+    if (!await _ossClient.objectExists(desired, session)) return desired;
+    final directory = parentPath(desired);
+    final raw = desired.substring(directory.length);
+    final isDirectory = raw.endsWith('/');
+    final name = isDirectory ? raw.substring(0, raw.length - 1) : raw;
+    final dot = name.lastIndexOf('.');
+    final stem = dot > 0 ? name.substring(0, dot) : name;
+    final extension = dot > 0 ? name.substring(dot) : '';
+    for (var number = 1;; number++) {
+      final candidate =
+          '$directory$stem（$number）$extension${isDirectory ? '/' : ''}';
+      if (!await _ossClient.objectExists(candidate, session)) return candidate;
+    }
+  }
+
+  Future<MoveConflictResolution?> _showMoveConflictDialog(
+      List<String> conflictingNames) async {
+    final context = _navigatorKey?.currentContext;
+    if (context == null) {
+      return null;
+    }
+    var selected = MoveConflictResolution.keepBoth;
+    return showDialog<MoveConflictResolution>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setState) => AlertDialog(
+          title: const Text('目标目录存在同名条目'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(
+                '「${conflictingNames.take(3).join('、')}'
+                '${conflictingNames.length > 3 ? ' 等 ${conflictingNames.length} 项' : ''}」'
+                '在目标目录已存在，请选择处理方式。',
+              ),
+              RadioGroup<MoveConflictResolution>(
+                groupValue: selected,
+                onChanged: (value) =>
+                    setState(() => selected = value ?? selected),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    RadioListTile<MoveConflictResolution>(
+                      title: const Text('保留两者'),
+                      subtitle: const Text('同名条目自动追加序号后移动'),
+                      value: MoveConflictResolution.keepBoth,
+                    ),
+                    RadioListTile<MoveConflictResolution>(
+                      title: const Text('跳过'),
+                      subtitle: const Text('跳过同名条目，移动其余内容'),
+                      value: MoveConflictResolution.skip,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消整个移动'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(selected),
+              child: const Text('确认'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 列出 OSS 上未完成的移动任务 manifest。
+  Future<List<MoveTaskEntry>> listPendingMoves() async {
+    await ensureSessionReady();
+    final session = _requireSession();
+    final prefixes = await _ossClient.listPrefixes(_movesRoot, session);
+    final entries = <MoveTaskEntry>[];
+    for (final prefix in prefixes) {
+      try {
+        entries.add(MoveTaskEntry.decode(
+          utf8.decode(
+              await _ossClient.download('$prefix' 'manifest.json', session)),
+        ));
+      } catch (_) {
+        // manifest 未写完或已损坏，等待用户通过继续/撤销流程清理。
+      }
+    }
+    entries.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return entries;
+  }
+
+  /// 继续未完成的移动：按 manifest 幂等重跑，已搬走的对象自然跳过。
+  Future<MoveSummary> resumePendingMove(MoveTaskEntry entry) async {
+    if (_isMoving) {
+      throw StateError('已有移动任务进行中，请等待完成');
+    }
+    _ensureUploadCapability();
+    _ensureDeleteCapability();
+    await ensureSessionReady();
+    final session = _requireSession();
+    final plan = _planFromEntry(entry);
+    final summary = await _executeMovePlan(
+      plan: plan,
+      targetPrefix: entry.targetPrefix,
+      session: session,
+      manifestId: entry.id,
+    );
+    _refreshAfterMove(
+      entry.sourcePrefixes,
+      plan.map((pair) => pair.renameRoot),
+      summary,
+    );
+    unawaited(_galleryHooks?.onObjectsDeleted(summary.sourceKeys));
+    unawaited(_galleryHooks?.onObjectsRestored(summary.destinationKeys));
+    return summary;
+  }
+
+  /// 撤销未完成的移动：把目标侧已搬运对象反向搬回源位置，冲突时自动改名。
+  Future<MoveSummary> undoPendingMove(MoveTaskEntry entry) async {
+    if (_isMoving) {
+      throw StateError('已有移动任务进行中，请等待完成');
+    }
+    _ensureUploadCapability();
+    _ensureDeleteCapability();
+    await ensureSessionReady();
+    final session = _requireSession();
+    final plan = _planFromEntry(entry);
+    final work = <({String key, String dst})>[];
+    for (final pair in plan) {
+      if (!await _safeObjectExists(pair.renameRoot, session)) {
+        // 目标侧不存在：未开始搬运或已被撤销，无需处理。
+        continue;
+      }
+      final keys = <String>{pair.renameRoot};
+      if (pair.source.endsWith('/')) {
+        keys.addAll(
+            await _ossClient.listAllObjectKeys(pair.renameRoot, session));
+      }
+      for (final key in keys) {
+        final relative = key.startsWith(pair.renameRoot) &&
+                pair.renameRoot.length > entry.targetPrefix.length
+            ? key.substring(pair.renameRoot.length)
+            : key.substring(entry.targetPrefix.length);
+        var dst = '${pair.source}$relative';
+        if (await _safeObjectExists(dst, session)) {
+          dst = await _nonConflictingObjectPath(dst, session);
+        }
+        work.add((key: key, dst: dst));
+      }
+    }
+    _isMoving = true;
+    notifyListeners();
+    final failed = <String>[];
+    try {
+      moveStateListenable.value =
+          MoveProgress(processed: 0, total: work.length);
+      var processed = 0;
+      for (final item in work) {
+        try {
+          await _ossClient.copy(item.key, item.dst, session);
+          await _ossClient.delete(item.key, session);
+        } catch (_) {
+          failed.add(item.key);
+        }
+        processed++;
+        moveStateListenable.value =
+            MoveProgress(processed: processed, total: work.length);
+      }
+      if (failed.isEmpty) {
+        try {
+          await _ossClient.delete('$_movesRoot${entry.id}/manifest.json',
+              session);
+        } catch (_) {
+          // manifest 删除失败仅残留任务，不影响撤销结果。
+        }
+      }
+    } finally {
+      _isMoving = false;
+      moveStateListenable.value = null;
+      notifyListeners();
+    }
+    final destinations = work.map((item) => item.dst).toSet();
+    _refreshAfterMove(destinations, entry.sourcePrefixes.toSet(),
+        MoveSummary(movedCount: work.length - failed.length, failedKeys: failed));
+    return MoveSummary(
+        movedCount: work.length - failed.length, failedKeys: failed);
+  }
+
+  List<_MovePlanPair> _planFromEntry(MoveTaskEntry entry) {
+    return <_MovePlanPair>[
+      for (var index = 0; index < entry.sourcePrefixes.length; index++)
+        _MovePlanPair(
+          source: entry.sourcePrefixes[index],
+          renameRoot: entry.destinations.isNotEmpty &&
+                  index < entry.destinations.length
+              ? entry.destinations[index]
+              : entry.targetPrefix +
+                  entry.sourcePrefixes[index]
+                      .substring(parentPath(entry.sourcePrefixes[index]).length),
+        ),
+    ];
+  }
+
+  /// 移动结束后统一刷新：目录缓存、侧边栏目录、当前路径与选择状态。
+  void _refreshAfterMove(
+    Iterable<String> removedPrefixes,
+    Iterable<String> addedPrefixes,
+    MoveSummary summary,
+  ) {
+    if (summary.movedCount == 0 && !summary.hasFailures) {
+      return;
+    }
+    for (final prefix in removedPrefixes) {
+      final dir = _normalizeDir(prefix);
+      _remoteDirectories.removeWhere(
+          (path) => path == dir || path.startsWith(dir));
+      if (_currentPath.startsWith(dir)) {
+        _currentPath = parentPath(dir);
+      }
+    }
+    _remoteDirectories.addAll(addedPrefixes.map(_normalizeDir));
+    _treeRevision++;
+    _clearDirectorySizeCache();
+    if (selectedItemListenable.value != null &&
+        removedPrefixes.any((prefix) =>
+            selectedItemListenable.value!.path.startsWith(_normalizeDir(prefix)))) {
+      selectedItemListenable.value = null;
+    }
+    clearMultiSelection();
+    notifyListeners();
+  }
+
   Future<void> uploadFile(
       {required String fileName,
       required String localPath,
@@ -2109,6 +2615,7 @@ class AppController extends ChangeNotifier {
     selectedItemListenable.dispose();
     multiSelectedPathsListenable.dispose();
     directorySizeStatesListenable.dispose();
+    moveStateListenable.dispose();
     tasksListenable.dispose();
     transferConcurrencyListenable.dispose();
     super.dispose();

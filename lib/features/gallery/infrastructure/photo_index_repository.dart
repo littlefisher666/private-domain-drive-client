@@ -156,6 +156,7 @@ class PhotoIndexRepository {
     final root = session.rootPrefix;
     final galleryPrefix = '$root.gallery/';
     final trashPrefix = '$root.trash/';
+    final movesPrefix = '$root.moves/';
 
     final objects = await _ossClient.listAllObjects(root, session);
     final mediaObjects = <OssNativeObject>[];
@@ -164,6 +165,7 @@ class PhotoIndexRepository {
       if (key.endsWith('/')) continue;
       if (key.startsWith(galleryPrefix)) continue;
       if (key.startsWith(trashPrefix)) continue;
+      if (key.startsWith(movesPrefix)) continue;
       final name = key.substring(key.lastIndexOf('/') + 1);
       if (!isMediaFileName(name)) continue;
       mediaObjects.add(object);

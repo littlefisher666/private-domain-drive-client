@@ -19,6 +19,8 @@ import '../../../shared/widgets/file_sort_sheet.dart';
 import '../../preview/domain/preview_type.dart';
 import '../../preview/presentation/preview_page.dart';
 import '../domain/file_item.dart';
+import '../domain/move_task_entry.dart';
+import 'directory_picker_dialog.dart';
 
 class WorkspacePage extends StatefulWidget {
   const WorkspacePage({super.key, this.desktopChrome = false});
@@ -164,6 +166,18 @@ class _WorkspacePageState extends State<WorkspacePage> {
   String? _boundPath;
   int? _boundTreeRevision;
   String? _renamingPath;
+  bool _pendingMovesChecked = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_pendingMovesChecked) {
+        _pendingMovesChecked = true;
+        unawaited(_checkPendingMoves());
+      }
+    });
+  }
 
   bool get _desktop =>
       widget.desktopChrome || MediaQuery.sizeOf(context).width >= 960;
@@ -413,12 +427,26 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
+                    ValueListenableBuilder<MoveProgress?>(
+                      valueListenable: controller.moveStateListenable,
+                      builder: (context, moveProgress, _) =>
+                          moveProgress == null
+                              ? const SizedBox.shrink()
+                              : Padding(
+                                  padding: const EdgeInsets.only(bottom: 8),
+                                  child: _MoveProgressBanner(
+                                      progress: moveProgress),
+                                ),
+                    ),
                     if (showBatchBar) ...<Widget>[
                       _BatchSelectionBar(
                         selectedCount: selectedItems.length,
                         allSelected: selectedItems.length == items.length,
                         itemCount: items.length,
                         canDownload: controller.capabilities.download,
+                        canMove: controller.capabilities.upload &&
+                            controller.capabilities.delete &&
+                            !controller.isMoving,
                         canDelete: controller.capabilities.delete,
                         onSelectAll: () {
                           if (selectedItems.length == items.length) {
@@ -430,6 +458,9 @@ class _WorkspacePageState extends State<WorkspacePage> {
                         onDownload: selectedItems.isEmpty
                             ? null
                             : () => _downloadSelected(selectedItems),
+                        onMove: selectedItems.isEmpty
+                            ? null
+                            : () => _moveItems(selectedItems),
                         onDelete: selectedItems.isEmpty
                             ? null
                             : () => _deleteSelected(selectedItems),
@@ -477,7 +508,11 @@ class _WorkspacePageState extends State<WorkspacePage> {
                               canUpload: canUpload,
                               canDelete: controller.capabilities.delete,
                               canDownload: controller.capabilities.download,
+                              canMove: controller.capabilities.upload &&
+                                  controller.capabilities.delete,
                               onDownload: _download,
+                              onMove: (item) =>
+                                  _moveItems(<FileItem>[item]),
                               onRename: _rename,
                               renamingPath: _renamingPath,
                               onRenameSubmit: _commitRename,
@@ -496,6 +531,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
                             canUpload: canUpload,
                             canDelete: controller.capabilities.delete,
                             canDownload: controller.capabilities.download,
+                            canMove: controller.capabilities.upload &&
+                                controller.capabilities.delete,
                             onOpen: _handleOpen,
                             onMore: desktop ? (_) {} : _showItemActions,
                             onSelect: onSelect,
@@ -505,6 +542,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                                 controller.replaceMultiSelection,
                             onPreview: _openPreview,
                             onDownload: _download,
+                            onMove: (item) => _moveItems(<FileItem>[item]),
                             onRename: _rename,
                             renamingPath: _renamingPath,
                             onRenameSubmit: _commitRename,
@@ -847,6 +885,140 @@ class _WorkspacePageState extends State<WorkspacePage> {
     if (mounted) await _reload();
   }
 
+  /// 单条目与批量移动共用入口：能力检查 → 目录选择 → 执行与反馈。
+  Future<void> _moveItems(List<FileItem> items) async {
+    final controller = AppScope.of(context);
+    if (!controller.capabilities.upload || !controller.capabilities.delete) {
+      AppFeedback.showSnack(context, '当前身份没有移动权限');
+      return;
+    }
+    if (controller.isMoving) {
+      AppFeedback.showSnack(context, '已有移动任务进行中，请等待完成');
+      return;
+    }
+    // 非法目标：任何源目录自身/子树，以及源所在目录（无需移动）。
+    final invalidTargets = <String>{
+      for (final item in items.where((item) => item.isDirectory)) item.path,
+      if (items.isNotEmpty) controller.parentPath(items.first.path),
+    };
+    final target = await showDirectoryPickerDialog(
+      context,
+      controller: controller,
+      invalidPrefixes: invalidTargets,
+    );
+    if (target == null || !mounted) {
+      return;
+    }
+    try {
+      final summary = await controller.moveItems(items, target);
+      if (!mounted) {
+        return;
+      }
+      await _reload();
+      if (summary == null || !mounted) {
+        return;
+      }
+      AppFeedback.showSnack(
+        context,
+        summary.hasFailures
+            ? '已移动 ${summary.movedCount} 个对象，${summary.failedKeys.length} 个失败，'
+                '重新启动后可继续或撤销'
+            : '已移动 ${items.length} 项到「${controller.displayPath(target)}」',
+      );
+    } catch (error) {
+      if (mounted) {
+        AppFeedback.showSnack(
+          context,
+          error.toString().replaceFirst('Bad state: ', ''),
+        );
+      }
+    }
+  }
+
+  /// 冷启动（或重新登录）后检测残留移动任务，逐个提示继续或撤销。
+  Future<void> _checkPendingMoves() async {
+    final controller = AppScope.read(context);
+    if (!controller.isLoggedIn) {
+      return;
+    }
+    try {
+      final pending = await controller.listPendingMoves();
+      for (final entry in pending) {
+        if (!mounted) {
+          return;
+        }
+        final resume = await _showPendingMoveDialog(entry);
+        if (resume == null) {
+          continue;
+        }
+        try {
+          final summary = resume
+              ? await controller.resumePendingMove(entry)
+              : await controller.undoPendingMove(entry);
+          if (!mounted) {
+            return;
+          }
+          await _reload();
+          if (!mounted) {
+            return;
+          }
+          AppFeedback.showSnack(
+            context,
+            summary.hasFailures
+                ? '有 ${summary.failedKeys.length} 个对象处理失败，'
+                    '重新启动后可继续或撤销'
+                : resume
+                    ? '已继续完成移动'
+                    : '已撤销移动并恢复原位置',
+          );
+        } catch (error) {
+          if (mounted) {
+            AppFeedback.showSnack(
+              context,
+              error.toString().replaceFirst('Bad state: ', ''),
+            );
+          }
+        }
+      }
+    } catch (_) {
+      // 未登录或会话未就绪时不做恢复提示。
+    }
+  }
+
+  Future<bool?> _showPendingMoveDialog(MoveTaskEntry entry) {
+    final controller = AppScope.read(context);
+    final createdAt = entry.createdAt;
+    final mm = createdAt.month.toString().padLeft(2, '0');
+    final dd = createdAt.day.toString().padLeft(2, '0');
+    final hh = createdAt.hour.toString().padLeft(2, '0');
+    final mi = createdAt.minute.toString().padLeft(2, '0');
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('存在未完成的移动任务'),
+        content: Text(
+          '${entry.sourcePrefixes.length} 项内容正在移动到'
+          '「${controller.displayPath(entry.targetPrefix)}」时中断'
+          '（$mm-$dd $hh:$mi）。可以选择继续移动，或撤销并恢复到原位置。',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('暂不处理'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('撤销移动'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('继续移动'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _pickUploadDirectory() async {
     await pickAndUploadDirectory(context);
     if (mounted) await _reload();
@@ -963,6 +1135,18 @@ class _WorkspacePageState extends State<WorkspacePage> {
                       onTap: () {
                         Navigator.pop(context);
                         _download(item);
+                      },
+                    ),
+                  if (controller.capabilities.upload &&
+                      controller.capabilities.delete)
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.drive_file_move_outlined,
+                          size: 22),
+                      title: const Text('移动到…'),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _moveItems(<FileItem>[item]);
                       },
                     ),
                   if (controller.capabilities.upload ||
@@ -1142,9 +1326,11 @@ class _BatchSelectionBar extends StatelessWidget {
     required this.allSelected,
     required this.itemCount,
     required this.canDownload,
+    required this.canMove,
     required this.canDelete,
     required this.onSelectAll,
     this.onDownload,
+    this.onMove,
     this.onDelete,
   });
 
@@ -1152,9 +1338,11 @@ class _BatchSelectionBar extends StatelessWidget {
   final bool allSelected;
   final int itemCount;
   final bool canDownload;
+  final bool canMove;
   final bool canDelete;
   final VoidCallback onSelectAll;
   final VoidCallback? onDownload;
+  final VoidCallback? onMove;
   final VoidCallback? onDelete;
 
   @override
@@ -1202,6 +1390,13 @@ class _BatchSelectionBar extends StatelessWidget {
               style: compactButtonStyle,
               icon: const Icon(Icons.download_outlined),
               label: const Text('下载'),
+            ),
+          if (selectedCount > 0 && canMove)
+            FilledButton.icon(
+              onPressed: onMove,
+              style: compactButtonStyle,
+              icon: const Icon(Icons.drive_file_move_outlined),
+              label: const Text('移动'),
             ),
           if (selectedCount > 0 && canDelete)
             TextButton.icon(
@@ -1706,6 +1901,7 @@ class WorkspaceListView extends StatelessWidget {
     required this.canUpload,
     required this.canDelete,
     required this.canDownload,
+    required this.canMove,
     required this.onOpen,
     required this.onMore,
     required this.onSelect,
@@ -1714,6 +1910,7 @@ class WorkspaceListView extends StatelessWidget {
     required this.onMarqueeSelectionChanged,
     required this.onPreview,
     required this.onDownload,
+    required this.onMove,
     required this.onRename,
     required this.renamingPath,
     required this.onRenameSubmit,
@@ -1731,6 +1928,7 @@ class WorkspaceListView extends StatelessWidget {
   final bool canUpload;
   final bool canDelete;
   final bool canDownload;
+  final bool canMove;
   final ValueChanged<FileItem> onOpen;
   final ValueChanged<FileItem> onMore;
   final ValueChanged<FileItem> onSelect;
@@ -1739,6 +1937,7 @@ class WorkspaceListView extends StatelessWidget {
   final ValueChanged<Set<String>> onMarqueeSelectionChanged;
   final ValueChanged<FileItem> onPreview;
   final ValueChanged<FileItem> onDownload;
+  final ValueChanged<FileItem> onMove;
   final ValueChanged<FileItem> onRename;
   final String? renamingPath;
   final Future<bool> Function(FileItem item, String name) onRenameSubmit;
@@ -1843,10 +2042,12 @@ class WorkspaceListView extends StatelessWidget {
                   item: item,
                   canDownload: canDownload,
                   canRename: canUpload || canDelete,
+                  canMove: canMove,
                   canDelete: canDelete,
                   onOpen: () => onOpen(item),
                   onPreview: () => onPreview(item),
                   onDownload: () => onDownload(item),
+                  onMove: () => onMove(item),
                   onRename: () => onRename(item),
                   onDelete: () => onDelete(item),
                 ),
@@ -1950,7 +2151,9 @@ class WorkspaceGridView extends StatelessWidget {
     required this.canUpload,
     required this.canDelete,
     required this.canDownload,
+    required this.canMove,
     required this.onDownload,
+    required this.onMove,
     required this.onRename,
     required this.renamingPath,
     required this.onRenameSubmit,
@@ -1976,7 +2179,9 @@ class WorkspaceGridView extends StatelessWidget {
   final bool canUpload;
   final bool canDelete;
   final bool canDownload;
+  final bool canMove;
   final ValueChanged<FileItem> onDownload;
+  final ValueChanged<FileItem> onMove;
   final ValueChanged<FileItem> onRename;
   final String? renamingPath;
   final Future<bool> Function(FileItem item, String name) onRenameSubmit;
@@ -2034,10 +2239,12 @@ class WorkspaceGridView extends StatelessWidget {
                   item: item,
                   canDownload: canDownload,
                   canRename: canUpload || canDelete,
+                  canMove: canMove,
                   canDelete: canDelete,
                   onOpen: () => onOpen(item),
                   onPreview: () => onOpen(item),
                   onDownload: () => onDownload(item),
+                  onMove: () => onMove(item),
                   onRename: () => onRename(item),
                   onDelete: () => onDelete(item),
                 ),
@@ -2773,7 +2980,46 @@ class _InlineRenameFieldState extends State<_InlineRenameField> {
   }
 }
 
-enum _DesktopItemAction { openOrPreview, download, rename, delete }
+enum _DesktopItemAction { openOrPreview, download, move, rename, delete }
+
+class _MoveProgressBanner extends StatelessWidget {
+  const _MoveProgressBanner({required this.progress});
+
+  final MoveProgress progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Row(
+        children: <Widget>[
+          const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '正在移动 ${progress.processed}/${progress.total} 个对象…',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: scheme.onSurface,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 Future<void> _showDesktopItemMenu({
   required BuildContext context,
@@ -2781,10 +3027,12 @@ Future<void> _showDesktopItemMenu({
   required FileItem item,
   required bool canDownload,
   required bool canRename,
+  required bool canMove,
   required bool canDelete,
   required VoidCallback onOpen,
   required VoidCallback onPreview,
   required VoidCallback onDownload,
+  required VoidCallback onMove,
   required VoidCallback onRename,
   required VoidCallback onDelete,
 }) async {
@@ -2818,6 +3066,13 @@ Future<void> _showDesktopItemMenu({
           icon: Icons.download_outlined,
           label: '下载',
         ),
+      if (canMove)
+        _desktopContextMenuItem(
+          context: context,
+          value: _DesktopItemAction.move,
+          icon: Icons.drive_file_move_outlined,
+          label: '移动到…',
+        ),
       if (canRename)
         _desktopContextMenuItem(
           context: context,
@@ -2841,6 +3096,9 @@ Future<void> _showDesktopItemMenu({
       break;
     case _DesktopItemAction.download:
       onDownload();
+      break;
+    case _DesktopItemAction.move:
+      onMove();
       break;
     case _DesktopItemAction.rename:
       onRename();
