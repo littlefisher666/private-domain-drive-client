@@ -32,6 +32,11 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // 与流水线 --target-platform android-arm64 对齐，避免插件原生库
+        // （如 pdfrx 的 pdfium）给其余 ABI 打包死重。
+        ndk {
+            abiFilters.add("arm64-v8a")
+        }
     }
 
     buildTypes {
