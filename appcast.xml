@@ -6,6 +6,56 @@
     <description>私域网盘 macOS 客户端 Sparkle 更新清单</description>
     <language>zh-cn</language>
     <item>
+      <title>私域网盘 macOS v1.0.8</title>
+      <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.8</link>
+      <sparkle:version>81</sparkle:version>
+      <sparkle:shortVersionString>1.0.8</sparkle:shortVersionString>
+      <pubDate>Sat, 10 Oct 2026 07:03:53 +0000</pubDate>
+      <description>【新功能】
+- 创建链接合并为单对话框（workspace）
+- 目录别名支持挂载到任意层级（workspace）
+- 根目录目录别名（虚拟目录链接）（workspace）
+- 子目录统计改为懒加载异步补齐并新增本地缓存（workspace）
+- 上传同名文件冲突对话框默认勾选改为跳过（workspace）
+- 支持文件与文件夹移动（copy+delete 幂等搬运）（workspace）
+
+【修复】
+- 同层别名指向同层目录时并列展示（workspace）
+- rebase 懒加载统计后融合别名统计调用（workspace）
+- 移动端列表底部留白避免悬浮添加按钮遮挡三点菜单（workspace）
+- 启动更新检查可关闭并完善 OSS 错误诊断与 EXIF 兜底（platform）
+
+【优化】
+- Gradle 仓库按 CI 环境区分镜像（android）
+- 移动改为流式边列举边搬运并加速目录选择（workspace）
+- 开启混淆与 R8 压缩并剔除 Web 平台专用资源（release）
+- 限定 ABI 为 arm64-v8a，移除插件原生库的多 ABI 死重（android）</description>
+      <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.8/private-domain-drive-macos-v1.0.8.zip" length="48427563" type="application/zip" sparkle:edSignature="zg/c6ob33QAxPYPa3pdbxhnR2gx09ogKQ64RHMYsPFKs5XByB1ZUzCt0HJjoBXWrIIHZAFs46I8nzx5ZLBnXBA==" />
+    </item>
+    <item>
+      <title>私域网盘 macOS v1.0.7</title>
+      <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.7</link>
+      <sparkle:version>78</sparkle:version>
+      <sparkle:shortVersionString>1.0.7</sparkle:shortVersionString>
+      <pubDate>Fri, 09 Oct 2026 06:59:26 +0000</pubDate>
+      <description>【新功能】
+- 详情页新增 PDF/文本/Markdown/CSV 直接预览与音频播放（preview）
+
+【修复】
+- 适配 macOS 红绿灯避让并移除非图片预览的圆角框（preview）</description>
+      <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.7/private-domain-drive-macos-v1.0.7.zip" length="48270218" type="application/zip" sparkle:edSignature="pA4EBmYDpT8htmGegpai/7O0eOl9Sbo/wF0ch3DvSUPuhGcESeyYUsf9l8/oz/n9St3sQH7SJmsYiG48SPJ5AA==" />
+    </item>
+    <item>
+      <title>私域网盘 macOS v1.0.6</title>
+      <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.6</link>
+      <sparkle:version>77</sparkle:version>
+      <sparkle:shortVersionString>1.0.6</sparkle:shortVersionString>
+      <pubDate>Fri, 09 Oct 2026 03:35:59 +0000</pubDate>
+      <description>【修复】
+- 修正 Sparkle 更新提示版本号与误报失败状态（macos）</description>
+      <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.6/private-domain-drive-macos-v1.0.6.zip" length="40250560" type="application/zip" sparkle:edSignature="gg4+hy09O6gF6vV/fVkZz9FgYBub3znZeRMWi5Y9ku1CL3awW6okEEGnoNkIhH/BynpSyhxndQT+9Dw/Nd+TAQ==" />
+    </item>
+    <item>
       <title>私域网盘 macOS v1.0.5</title>
       <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.5</link>
       <sparkle:version>76</sparkle:version>
