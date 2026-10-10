@@ -141,17 +141,6 @@ class OssClient {
     return current == null || candidate.isAfter(current) ? candidate : current;
   }
 
-  /// 目录直属条目统计（子项数与最新更新时间），供别名等虚拟条目
-  /// 渲染复用。失败由调用方兜底降级。
-  Future<(int itemCount, DateTime? updatedAt)> directorySummary(
-    String path,
-    UserSession session,
-  ) async {
-    await _ensureConfigured(session);
-    final summary = await _readDirectorySummary(path);
-    return (summary.itemCount, summary.updatedAt);
-  }
-
   /// 目录前缀是否真实存在：前缀下存在任意对象（含目录标记）或子前缀。
   Future<bool> directoryExists(String path, UserSession session) async {
     await _ensureConfigured(session);
