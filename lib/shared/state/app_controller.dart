@@ -294,6 +294,9 @@ class AppController extends ChangeNotifier {
   /// 经「进入别名」到达当前目录时记录的别名名称；任意路径切换即清除。
   /// 用于标题展示与「别名根层级后退返回根目录」语义。
   String? _activeAliasName;
+
+  /// 进入别名前的所在层级，别名根层级后退返回该位置（挂载层级）。
+  String? _aliasReturnPath;
   BrowseMode _browseMode = BrowseMode.list;
   ThumbnailSize _thumbnailSize = ThumbnailSize.medium;
   FileSortOption _defaultFileSortOption = FileSortOption.updatedNewest;
@@ -360,12 +363,21 @@ class AppController extends ChangeNotifier {
   String get currentTitle =>
       _activeAliasName ?? displayPath(_currentPath);
 
-  /// 后退目标目录；处于别名根层级时返回会话根目录，已在根目录返回 null。
+  /// 后退目标目录；处于别名根层级时返回进入前的挂载层级，已在根目录返回 null。
   String? backNavigationPath() {
     final current = _normalizeDir(_currentPath);
     final root = _normalizeDir(workspaceRoot);
     if (current == root) return null;
-    return _activeAliasName != null ? root : parentPath(current);
+    if (_activeAliasName != null) {
+      final returnPath = _aliasReturnPath;
+      if (returnPath != null &&
+          _normalizeDir(returnPath) != current &&
+          _normalizeDir(returnPath).startsWith(root)) {
+        return _normalizeDir(returnPath);
+      }
+      return root;
+    }
+    return parentPath(current);
   }
 
   /// 当前已加载的别名条目，供名称冲突校验与目录选择器复用。
@@ -595,15 +607,12 @@ class AppController extends ChangeNotifier {
     }
     await ensureSessionReady();
     final target = path ?? _currentPath;
-    final isRoot = _normalizeDir(target) == _normalizeDir(workspaceRoot);
     final results = await Future.wait<dynamic>([
       _ossClient.list(target, _session!),
-      if (isRoot) _loadAliasTable(session) else Future<void>.value(),
+      _loadAliasTable(session),
     ]);
     final items = results[0] as List<FileItem>;
-    final merged = isRoot
-        ? await _mergeAliasItems(items, session)
-        : items;
+    final merged = await _mergeAliasItems(items, session, target);
     if (target == _currentPath) {
       final beforeCount = _remoteDirectories.length;
       _remoteDirectories
@@ -632,15 +641,21 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  /// 将别名条目合并进根目录列表：渲染为带链接标识的文件夹，
-  /// 统计信息取目标前缀的直属内容，计入根目录条目统计。
+  /// 将挂载于 [path] 层级的别名条目合并进目录列表：渲染为带链接标识的
+  /// 文件夹，统计信息取目标前缀的直属内容，计入所在层级条目统计。
   Future<List<FileItem>> _mergeAliasItems(
     List<FileItem> items,
     UserSession session,
+    String path,
   ) async {
     if (_aliasTable.isEmpty) return items;
+    final level = _normalizeDir(path);
+    final mounted = _aliasTable.aliases
+        .where((alias) => _normalizeDir(alias.parentPrefix) == level)
+        .toList(growable: false);
+    if (mounted.isEmpty) return items;
     final existingPaths = items.map((item) => item.path).toSet();
-    final aliasItems = _aliasTable.aliases
+    final aliasItems = mounted
         .where((alias) => !existingPaths.contains(alias.targetPrefix))
         .toList(growable: false);
     if (aliasItems.isEmpty) return items;
@@ -689,38 +704,6 @@ class AppController extends ChangeNotifier {
     ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   }
 
-<<<<<<< HEAD
-  /// 读取单个目录统计的缓存命中值；未命中返回 null。
-  Future<DirectorySummary?> cachedDirectorySummary(String path) =>
-      _directorySummaryService.cached(path);
-
-  /// 批量读取目录统计缓存命中值，key 为目录路径。
-  Future<Map<String, DirectorySummary>> cachedDirectorySummaries(
-          Iterable<String> paths) =>
-      _directorySummaryService.cachedAll(paths);
-
-  /// 后台受限并发统计子文件夹并逐个回调，不阻塞调用方。
-  Future<void> refreshDirectorySummaries(
-    Iterable<String> paths, {
-    required void Function(String path, DirectorySummary summary) onResult,
-  }) =>
-      _directorySummaryService.refresh(paths, onResult);
-
-  void noteDirectoryFilesAdded(String dir, int count, DateTime at) =>
-      _directorySummaryService.noteFilesAdded(dir, count, at);
-
-  void noteDirectoryFilesRemoved(String dir, int count) =>
-      _directorySummaryService.noteFilesRemoved(dir, count);
-
-  void invalidateDirectorySummary(String dir) =>
-      _directorySummaryService.invalidate(dir);
-
-  /// 回收站清理等不可靠路径调用 invalidate。写修正后同时触发该目录的
-  /// 后台校准，让计数最终与 OSS 一致；校准不阻塞操作反馈。
-  void _calibrateDirectorySummary(String dir) {
-    unawaited(_directorySummaryService.refresh(<String>[dir], (_, __) {}));
-  }
-
   /// 对一组成功删除/新增的顶层条目按所属目录修正统计缓存。
   void _noteTopLevelChanges(
     Iterable<String> topLevelPaths,
@@ -751,18 +734,19 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  /// 目录选择器使用：与 [listSubdirectories] 一致，但根目录下合并别名
-  /// 条目（path 指向目标目录），使别名可作为移动目标。
+  /// 目录选择器使用：与 [listSubdirectories] 一致，但按层级合并挂载于
+  /// [path] 的别名条目（path 指向目标目录），使别名可作为移动/挂载目标。
   Future<List<FileItem>> listPickerDirectories(String path) async {
     final directories = await listSubdirectories(path);
-    if (_normalizeDir(path) != _normalizeDir(workspaceRoot) ||
-        _aliasTable.aliases.isEmpty) {
+    if (_aliasTable.aliases.isEmpty) {
       return directories;
     }
+    final level = _normalizeDir(path);
     final realPaths = directories.map((item) => item.path).toSet();
     final aliasItems = <FileItem>[
       for (final alias in _aliasTable.aliases)
-        if (realPaths.add(alias.targetPrefix))
+        if (_normalizeDir(alias.parentPrefix) == level &&
+            realPaths.add(alias.targetPrefix))
           FileItem(
             path: alias.targetPrefix,
             name: alias.name,
@@ -771,6 +755,7 @@ class AppController extends ChangeNotifier {
             createdBy: alias.createdBy,
           ),
     ];
+    if (aliasItems.isEmpty) return directories;
     return [...directories, ...aliasItems]
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   }
@@ -899,6 +884,7 @@ class AppController extends ChangeNotifier {
     _currentPath = _normalizeDir(path);
     // 任意路径切换都脱离别名上下文；进入别名走 openAlias。
     _activeAliasName = null;
+    _aliasReturnPath = null;
     selectedItemListenable.value = null;
     clearMultiSelection();
     notifyListeners();
@@ -920,31 +906,49 @@ class AppController extends ChangeNotifier {
         code: 'ALIAS_TARGET_MISSING',
       );
     }
+    final origin = _normalizeDir(_currentPath);
+    final root = _normalizeDir(workspaceRoot);
     _currentPath = target;
     _activeAliasName = alias.name;
+    // 后退返回进入别名前所在的层级，即其挂载层级。
+    _aliasReturnPath =
+        origin.startsWith(root) && origin != target ? origin : null;
     selectedItemListenable.value = null;
     clearMultiSelection();
     notifyListeners();
   }
 
-  /// 为真实文件夹条目创建指向它的目录别名，链接统一出现在根目录。
-  Future<void> createAlias(FileItem targetFolder, String name) async {
+  /// 为真实文件夹条目创建指向它的目录别名，挂载到 [parentPrefix] 层级。
+  Future<void> createAlias(
+    FileItem targetFolder,
+    String name, {
+    required String parentPrefix,
+  }) async {
     _ensureUploadCapability();
     final session = _requireSession();
     await ensureSessionReady();
     final target = _normalizeDir(targetFolder.path);
     final root = _normalizeDir(workspaceRoot);
+    final parent = _normalizeDir(parentPrefix);
     if (target == root) {
       throw StateError('不能为根目录创建链接');
     }
+    if (!parent.startsWith(root)) {
+      throw StateError('挂载位置不在网盘范围内');
+    }
     final aliasName = name.trim();
-    await _validateAliasName(aliasName, session);
+    await _validateAliasName(
+      aliasName,
+      session,
+      parentPrefix: parent,
+    );
     if (!await _ossClient.directoryExists(target, session)) {
       throw AppError('目标目录不存在，无法创建链接', code: 'ALIAS_TARGET_MISSING');
     }
     final alias = DirectoryAlias.create(
       name: aliasName,
       targetPrefix: target,
+      parentPrefix: parent,
       createdBy: session.displayName.isNotEmpty == true
           ? session.displayName
           : session.account,
@@ -987,8 +991,17 @@ class AppController extends ChangeNotifier {
     }
     final session = _requireSession();
     await ensureSessionReady();
+    final existing = _aliasTable.byId(id);
+    if (existing == null) {
+      throw StateError('别名条目不存在');
+    }
     final aliasName = newName.trim();
-    await _validateAliasName(aliasName, session, excludeAliasId: id);
+    await _validateAliasName(
+      aliasName,
+      session,
+      parentPrefix: existing.parentPrefix,
+      excludeAliasId: id,
+    );
     _aliasTable = await _aliasRepository.update(
       session,
       (table) => table.copyWith(
@@ -1005,11 +1018,12 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 校验别名名称：非空、不以点开头、不含 `/`，且不与根目录现有真实
-  /// 条目或其他别名重名（忽略大小写）。
+  /// 校验别名名称：非空、不以点开头、不含 `/`，且不与挂载层级
+  /// [parentPrefix] 现有真实条目或同级别名重名（忽略大小写）。
   Future<void> _validateAliasName(
     String name,
     UserSession session, {
+    required String parentPrefix,
     String? excludeAliasId,
   }) async {
     if (name.isEmpty) {
@@ -1021,16 +1035,17 @@ class AppController extends ChangeNotifier {
     if (name.contains('/')) {
       throw StateError('名称不能包含 /');
     }
-    final root = _normalizeDir(workspaceRoot);
-    final rootNames = await _ossClient.listEntryNames(root, session);
+    final level = _normalizeDir(parentPrefix);
+    final levelNames = await _ossClient.listEntryNames(level, session);
     final lowerName = name.toLowerCase();
-    if (rootNames.any((entry) => entry.toLowerCase() == lowerName)) {
-      throw StateError('根目录已存在同名条目');
+    if (levelNames.any((entry) => entry.toLowerCase() == lowerName)) {
+      throw StateError('该目录层级已存在同名条目');
     }
     for (final alias in _aliasTable.aliases) {
       if (alias.id == excludeAliasId) continue;
-      if (alias.name.toLowerCase() == lowerName) {
-        throw StateError('已存在同名链接');
+      if (_normalizeDir(alias.parentPrefix) == level &&
+          alias.name.toLowerCase() == lowerName) {
+        throw StateError('该目录层级已存在同名链接');
       }
     }
   }
