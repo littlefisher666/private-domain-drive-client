@@ -659,7 +659,7 @@ class AppController extends ChangeNotifier {
         .where((alias) => !existingPaths.contains(alias.targetPrefix))
         .toList(growable: false);
     if (aliasItems.isEmpty) return items;
-    final summaries = await Future.wait<(int, DateTime?)?>(
+    final summaries = await Future.wait<DirectorySummary?>(
       aliasItems.map((alias) async {
         try {
           return await _ossClient.directorySummary(alias.targetPrefix, session);
@@ -675,8 +675,8 @@ class AppController extends ChangeNotifier {
           path: aliasItems[index].targetPrefix,
           name: aliasItems[index].name,
           isDirectory: true,
-          itemCount: summaries[index]?.$1,
-          updatedAt: summaries[index]?.$2,
+          itemCount: summaries[index]?.itemCount,
+          updatedAt: summaries[index]?.updatedAt,
           isAlias: true,
           aliasId: aliasItems[index].id,
           createdBy: aliasItems[index].createdBy,
@@ -702,6 +702,37 @@ class AppController extends ChangeNotifier {
             isDirectory: true,
           ),
     ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  }
+
+  /// 读取单个目录统计的缓存命中值；未命中返回 null。
+  Future<DirectorySummary?> cachedDirectorySummary(String path) =>
+      _directorySummaryService.cached(path);
+
+  /// 批量读取目录统计缓存命中值，key 为目录路径。
+  Future<Map<String, DirectorySummary>> cachedDirectorySummaries(
+          Iterable<String> paths) =>
+      _directorySummaryService.cachedAll(paths);
+
+  /// 后台受限并发统计子文件夹并逐个回调，不阻塞调用方。
+  Future<void> refreshDirectorySummaries(
+    Iterable<String> paths, {
+    required void Function(String path, DirectorySummary summary) onResult,
+  }) =>
+      _directorySummaryService.refresh(paths, onResult);
+
+  void noteDirectoryFilesAdded(String dir, int count, DateTime at) =>
+      _directorySummaryService.noteFilesAdded(dir, count, at);
+
+  void noteDirectoryFilesRemoved(String dir, int count) =>
+      _directorySummaryService.noteFilesRemoved(dir, count);
+
+  void invalidateDirectorySummary(String dir) =>
+      _directorySummaryService.invalidate(dir);
+
+  /// 回收站清理等不可靠路径调用 invalidate。写修正后同时触发该目录的
+  /// 后台校准，让计数最终与 OSS 一致；校准不阻塞操作反馈。
+  void _calibrateDirectorySummary(String dir) {
+    unawaited(_directorySummaryService.refresh(<String>[dir], (_, __) {}));
   }
 
   /// 对一组成功删除/新增的顶层条目按所属目录修正统计缓存。
