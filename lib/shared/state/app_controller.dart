@@ -13,9 +13,11 @@ import '../../features/auth/infrastructure/session_repository.dart';
 import '../../features/transfer/domain/transfer_task.dart';
 import '../../features/preview/infrastructure/text_preview_loader.dart';
 import '../../features/workspace/domain/file_item.dart';
+import '../../features/workspace/domain/directory_alias.dart';
 import '../../features/workspace/domain/move_task_entry.dart';
 import '../../features/workspace/domain/recycle_bin_entry.dart';
 import '../../features/workspace/infrastructure/directory_summary_service.dart';
+import '../../features/workspace/infrastructure/alias_repository.dart';
 import '../../features/workspace/infrastructure/oss_client.dart';
 import '../cache/disk_document_cache.dart';
 import '../cache/disk_image_cache.dart';
@@ -198,6 +200,7 @@ class AppController extends ChangeNotifier {
         _savedCredentialsStore =
             savedCredentialsStore ?? SavedCredentialsStore() {
     _ossClient.onCredentialExpired = handleCredentialExpired;
+    _aliasRepository = AliasRepository(ossClient: _ossClient);
   }
 
   final SessionRepository _sessionRepository;
@@ -207,6 +210,7 @@ class AppController extends ChangeNotifier {
     ossClient: _ossClient,
     sessionProvider: () => _session,
   );
+  late final AliasRepository _aliasRepository;
 
   /// 相册等模块与主控制器共用同一个 OSS 客户端（凭证配置状态共享）。
   OssClient get ossClient => _ossClient;
@@ -283,6 +287,13 @@ class AppController extends ChangeNotifier {
 
   UserSession? _session;
   String _currentPath = rootPrefix;
+
+  /// 最近一次加载的别名表；根目录浏览与别名写入时刷新。
+  DirectoryAliasTable _aliasTable = const DirectoryAliasTable();
+
+  /// 经「进入别名」到达当前目录时记录的别名名称；任意路径切换即清除。
+  /// 用于标题展示与「别名根层级后退返回根目录」语义。
+  String? _activeAliasName;
   BrowseMode _browseMode = BrowseMode.list;
   ThumbnailSize _thumbnailSize = ThumbnailSize.medium;
   FileSortOption _defaultFileSortOption = FileSortOption.updatedNewest;
@@ -344,6 +355,21 @@ class AppController extends ChangeNotifier {
         ? '全部文件'
         : relative.replaceFirst(RegExp(r'/$'), '');
   }
+
+  /// 工作区标题：经别名进入且仍在别名根层级时显示别名名称。
+  String get currentTitle =>
+      _activeAliasName ?? displayPath(_currentPath);
+
+  /// 后退目标目录；处于别名根层级时返回会话根目录，已在根目录返回 null。
+  String? backNavigationPath() {
+    final current = _normalizeDir(_currentPath);
+    final root = _normalizeDir(workspaceRoot);
+    if (current == root) return null;
+    return _activeAliasName != null ? root : parentPath(current);
+  }
+
+  /// 当前已加载的别名条目，供名称冲突校验与目录选择器复用。
+  List<DirectoryAlias> get directoryAliases => _aliasTable.aliases;
 
   BrowseMode get browseMode => _browseMode;
   ThumbnailSize get thumbnailSize => _thumbnailSize;
@@ -568,22 +594,79 @@ class AppController extends ChangeNotifier {
       throw AppError('请先登录', code: 'REMOTE_SESSION_REQUIRED');
     }
     await ensureSessionReady();
-    final items = await _ossClient.list(path ?? _currentPath, _session!);
-    if ((path ?? _currentPath) == _currentPath) {
+    final target = path ?? _currentPath;
+    final isRoot = _normalizeDir(target) == _normalizeDir(workspaceRoot);
+    final results = await Future.wait<dynamic>([
+      _ossClient.list(target, _session!),
+      if (isRoot) _loadAliasTable(session) else Future<void>.value(),
+    ]);
+    final items = results[0] as List<FileItem>;
+    final merged = isRoot
+        ? await _mergeAliasItems(items, session)
+        : items;
+    if (target == _currentPath) {
       final beforeCount = _remoteDirectories.length;
       _remoteDirectories
         ..add(_currentPath)
         ..addAll(
-            items.where((item) => item.isDirectory).map((item) => item.path));
+            merged.where((item) => item.isDirectory).map((item) => item.path));
       if (_remoteDirectories.length != beforeCount) {
         notifyListeners();
       }
     }
     return _sortDirectoryItems(
-      items,
+      merged,
       _session!,
-      _fileSortOptionForPath(path ?? _currentPath),
+      _fileSortOptionForPath(target),
     );
+  }
+
+  /// 刷新别名表；读取失败保留旧表，不阻塞目录浏览。
+  Future<void> _loadAliasTable(UserSession session) async {
+    try {
+      _aliasTable = await _aliasRepository.load(session);
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('[alias] 别名表加载失败，沿用旧表: $error');
+      }
+    }
+  }
+
+  /// 将别名条目合并进根目录列表：渲染为带链接标识的文件夹，
+  /// 统计信息取目标前缀的直属内容，计入根目录条目统计。
+  Future<List<FileItem>> _mergeAliasItems(
+    List<FileItem> items,
+    UserSession session,
+  ) async {
+    if (_aliasTable.isEmpty) return items;
+    final existingPaths = items.map((item) => item.path).toSet();
+    final aliasItems = _aliasTable.aliases
+        .where((alias) => !existingPaths.contains(alias.targetPrefix))
+        .toList(growable: false);
+    if (aliasItems.isEmpty) return items;
+    final summaries = await Future.wait<(int, DateTime?)?>(
+      aliasItems.map((alias) async {
+        try {
+          return await _ossClient.directorySummary(alias.targetPrefix, session);
+        } catch (_) {
+          return null;
+        }
+      }),
+    );
+    return <FileItem>[
+      ...items,
+      for (var index = 0; index < aliasItems.length; index++)
+        FileItem(
+          path: aliasItems[index].targetPrefix,
+          name: aliasItems[index].name,
+          isDirectory: true,
+          itemCount: summaries[index]?.$1,
+          updatedAt: summaries[index]?.$2,
+          isAlias: true,
+          aliasId: aliasItems[index].id,
+          createdBy: aliasItems[index].createdBy,
+        ),
+    ];
   }
 
   /// 目录选择器专用：仅前缀列举子目录（单次请求），不做子内容统计。
@@ -606,6 +689,7 @@ class AppController extends ChangeNotifier {
     ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   }
 
+<<<<<<< HEAD
   /// 读取单个目录统计的缓存命中值；未命中返回 null。
   Future<DirectorySummary?> cachedDirectorySummary(String path) =>
       _directorySummaryService.cached(path);
@@ -665,6 +749,30 @@ class AppController extends ChangeNotifier {
     for (final dir in affected) {
       _calibrateDirectorySummary(dir);
     }
+  }
+
+  /// 目录选择器使用：与 [listSubdirectories] 一致，但根目录下合并别名
+  /// 条目（path 指向目标目录），使别名可作为移动目标。
+  Future<List<FileItem>> listPickerDirectories(String path) async {
+    final directories = await listSubdirectories(path);
+    if (_normalizeDir(path) != _normalizeDir(workspaceRoot) ||
+        _aliasTable.aliases.isEmpty) {
+      return directories;
+    }
+    final realPaths = directories.map((item) => item.path).toSet();
+    final aliasItems = <FileItem>[
+      for (final alias in _aliasTable.aliases)
+        if (realPaths.add(alias.targetPrefix))
+          FileItem(
+            path: alias.targetPrefix,
+            name: alias.name,
+            isDirectory: true,
+            isAlias: true,
+            createdBy: alias.createdBy,
+          ),
+    ];
+    return [...directories, ...aliasItems]
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   }
 
   Future<List<int>> loadThumbnail(FileItem item) async {
@@ -789,9 +897,142 @@ class AppController extends ChangeNotifier {
 
   void setCurrentPath(String path) {
     _currentPath = _normalizeDir(path);
+    // 任意路径切换都脱离别名上下文；进入别名走 openAlias。
+    _activeAliasName = null;
     selectedItemListenable.value = null;
     clearMultiSelection();
     notifyListeners();
+  }
+
+  /// 进入虚拟目录别名：此后浏览、上传、下载、删除、移动等操作均作用于
+  /// 别名的真实目标前缀。目标已失效（前缀下无任何对象）时抛出明确错误，
+  /// 不展示空目录成功态。
+  Future<void> openAlias(FileItem alias) async {
+    if (!alias.isAlias || alias.aliasId == null) {
+      throw StateError('条目不是目录别名');
+    }
+    final session = _requireSession();
+    await ensureSessionReady();
+    final target = _normalizeDir(alias.path);
+    if (!await _ossClient.directoryExists(target, session)) {
+      throw AppError(
+        '目标目录不存在，链接可能已失效',
+        code: 'ALIAS_TARGET_MISSING',
+      );
+    }
+    _currentPath = target;
+    _activeAliasName = alias.name;
+    selectedItemListenable.value = null;
+    clearMultiSelection();
+    notifyListeners();
+  }
+
+  /// 为真实文件夹条目创建指向它的目录别名，链接统一出现在根目录。
+  Future<void> createAlias(FileItem targetFolder, String name) async {
+    _ensureUploadCapability();
+    final session = _requireSession();
+    await ensureSessionReady();
+    final target = _normalizeDir(targetFolder.path);
+    final root = _normalizeDir(workspaceRoot);
+    if (target == root) {
+      throw StateError('不能为根目录创建链接');
+    }
+    final aliasName = name.trim();
+    await _validateAliasName(aliasName, session);
+    if (!await _ossClient.directoryExists(target, session)) {
+      throw AppError('目标目录不存在，无法创建链接', code: 'ALIAS_TARGET_MISSING');
+    }
+    final alias = DirectoryAlias.create(
+      name: aliasName,
+      targetPrefix: target,
+      createdBy: session.displayName.isNotEmpty == true
+          ? session.displayName
+          : session.account,
+    );
+    _aliasTable = await _aliasRepository.update(
+      session,
+      (table) => table.copyWith(aliases: [...table.aliases, alias]),
+    );
+    _treeRevision++;
+    _clearDirectorySizeCache();
+    notifyListeners();
+  }
+
+  /// 删除链接：仅从别名表移除条目，不影响目标目录内容。
+  Future<void> deleteAlias(FileItem aliasItem) async {
+    _ensureDeleteCapability();
+    final id = aliasItem.aliasId;
+    if (!aliasItem.isAlias || id == null) {
+      throw StateError('条目不是目录别名');
+    }
+    final session = _requireSession();
+    await ensureSessionReady();
+    _aliasTable = await _aliasRepository.update(
+      session,
+      (table) => table.copyWith(
+        aliases:
+            table.aliases.where((alias) => alias.id != id).toList(),
+      ),
+    );
+    _treeRevision++;
+    notifyListeners();
+  }
+
+  /// 重命名链接：仅修改别名表中的展示名称。
+  Future<void> renameAlias(FileItem aliasItem, String newName) async {
+    _ensureUploadCapability();
+    final id = aliasItem.aliasId;
+    if (!aliasItem.isAlias || id == null) {
+      throw StateError('条目不是目录别名');
+    }
+    final session = _requireSession();
+    await ensureSessionReady();
+    final aliasName = newName.trim();
+    await _validateAliasName(aliasName, session, excludeAliasId: id);
+    _aliasTable = await _aliasRepository.update(
+      session,
+      (table) => table.copyWith(
+        aliases: <DirectoryAlias>[
+          for (final alias in table.aliases)
+            if (alias.id == id) alias.copyWith(name: aliasName) else alias,
+        ],
+      ),
+    );
+    if (_activeAliasName == aliasItem.name) {
+      _activeAliasName = aliasName;
+    }
+    _treeRevision++;
+    notifyListeners();
+  }
+
+  /// 校验别名名称：非空、不以点开头、不含 `/`，且不与根目录现有真实
+  /// 条目或其他别名重名（忽略大小写）。
+  Future<void> _validateAliasName(
+    String name,
+    UserSession session, {
+    String? excludeAliasId,
+  }) async {
+    if (name.isEmpty) {
+      throw StateError('名称不能为空');
+    }
+    if (name.startsWith('.')) {
+      throw StateError('名称不能以点开头');
+    }
+    if (name.contains('/')) {
+      throw StateError('名称不能包含 /');
+    }
+    final root = _normalizeDir(workspaceRoot);
+    final rootNames = await _ossClient.listEntryNames(root, session);
+    final lowerName = name.toLowerCase();
+    if (rootNames.any((entry) => entry.toLowerCase() == lowerName)) {
+      throw StateError('根目录已存在同名条目');
+    }
+    for (final alias in _aliasTable.aliases) {
+      if (alias.id == excludeAliasId) continue;
+      if (alias.name.toLowerCase() == lowerName) {
+        throw StateError('已存在同名链接');
+      }
+    }
   }
 
   void setBrowseMode(BrowseMode mode) {

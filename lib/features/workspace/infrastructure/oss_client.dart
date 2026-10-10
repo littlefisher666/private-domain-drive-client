@@ -141,6 +141,62 @@ class OssClient {
     return current == null || candidate.isAfter(current) ? candidate : current;
   }
 
+  /// 目录直属条目统计（子项数与最新更新时间），供别名等虚拟条目
+  /// 渲染复用。失败由调用方兜底降级。
+  Future<(int itemCount, DateTime? updatedAt)> directorySummary(
+    String path,
+    UserSession session,
+  ) async {
+    await _ensureConfigured(session);
+    final summary = await _readDirectorySummary(path);
+    return (summary.itemCount, summary.updatedAt);
+  }
+
+  /// 目录前缀是否真实存在：前缀下存在任意对象（含目录标记）或子前缀。
+  Future<bool> directoryExists(String path, UserSession session) async {
+    await _ensureConfigured(session);
+    final page = await _platform(
+      () => _native.listObjects(prefix: _dir(path), delimiter: '/', maxKeys: 1),
+    );
+    return page.objects.isNotEmpty || page.commonPrefixes.isNotEmpty;
+  }
+
+  /// 单层列举前缀下的直接子目录名与文件名（不含统计与隐藏过滤），
+  /// 供别名名称冲突校验使用。
+  Future<Set<String>> listEntryNames(
+    String prefix,
+    UserSession session,
+  ) async {
+    await _ensureConfigured(session);
+    final names = <String>{};
+    final dir = _dir(prefix);
+    String? marker;
+    do {
+      final page = await _platform(() => _native.listObjects(
+            prefix: dir,
+            delimiter: '/',
+            marker: marker,
+            maxKeys: 1000,
+          ));
+      for (final key in page.commonPrefixes) {
+        if (key != dir) {
+          names.add(key.substring(dir.length).replaceFirst(RegExp(r'/$'), ''));
+        }
+      }
+      for (final object in page.objects) {
+        final relative = object.key.substring(dir.length);
+        if (relative.isNotEmpty && !relative.contains('/')) {
+          names.add(relative);
+        }
+      }
+      marker = page.isTruncated ? page.nextMarker : null;
+      if (page.isTruncated && (marker == null || marker.isEmpty)) {
+        throw AppError('OSS 分页响应缺少下一页标识', code: 'OSS_INVALID_RESPONSE');
+      }
+    } while (marker != null && marker.isNotEmpty);
+    return names;
+  }
+
   Future<void> createFolder(String path, UserSession session) async {
     await _ensureConfigured(session);
     await _platform(() => _native.putEmptyObject(_dir(path)));

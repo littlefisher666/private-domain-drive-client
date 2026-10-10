@@ -588,6 +588,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                               onRenameSubmit: _commitRename,
                               onRenameCancel: _cancelRename,
                               onDelete: _delete,
+                              onCreateLink: _createLink,
                             );
                           }
                           return WorkspaceListView(
@@ -618,6 +619,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                             onRenameSubmit: _commitRename,
                             onRenameCancel: _cancelRename,
                             onDelete: _delete,
+                            onCreateLink: _createLink,
                           );
                         },
                       ),
@@ -663,12 +665,30 @@ class _WorkspacePageState extends State<WorkspacePage> {
     }
   }
 
-  Future<void> _goUp() async {
+  /// 进入虚拟目录别名；目标失效时提示且不切换目录。
+  Future<void> _openAlias(FileItem item) async {
     final controller = AppScope.of(context);
-    if (controller.currentPath == AppController.rootPrefix) {
+    try {
+      await controller.openAlias(item);
+    } catch (error) {
+      if (mounted) {
+        AppFeedback.showSnack(
+          context,
+          error.toString().replaceFirst('Bad state: ', ''),
+        );
+      }
       return;
     }
-    await _openDirectory(controller.parentPath(controller.currentPath));
+    await _reload();
+  }
+
+  Future<void> _goUp() async {
+    final controller = AppScope.of(context);
+    final target = controller.backNavigationPath();
+    if (target == null) {
+      return;
+    }
+    await _openDirectory(target);
   }
 
   void _openPreview(FileItem item) {
@@ -690,6 +710,10 @@ class _WorkspacePageState extends State<WorkspacePage> {
   Future<void> _handleOpen(FileItem item) async {
     final controller = AppScope.of(context);
     controller.selectItem(item);
+    if (item.isAlias) {
+      await _openAlias(item);
+      return;
+    }
     if (item.isDirectory) {
       await _openDirectory(item.path);
       return;
@@ -742,7 +766,10 @@ class _WorkspacePageState extends State<WorkspacePage> {
 
   void _rename(FileItem item) {
     final controller = AppScope.of(context);
-    if (!controller.capabilities.upload && !controller.capabilities.delete) {
+    final allowed = item.isAlias
+        ? controller.capabilities.upload
+        : controller.capabilities.upload || controller.capabilities.delete;
+    if (!allowed) {
       AppFeedback.showSnack(context, '当前身份没有重命名权限');
       return;
     }
@@ -767,7 +794,11 @@ class _WorkspacePageState extends State<WorkspacePage> {
     }
     final controller = AppScope.of(context);
     try {
-      await controller.renameItem(item, trimmedName);
+      if (item.isAlias) {
+        await controller.renameAlias(item, trimmedName);
+      } else {
+        await controller.renameItem(item, trimmedName);
+      }
       _cancelRename();
       await _reload();
       if (mounted) {
@@ -786,6 +817,10 @@ class _WorkspacePageState extends State<WorkspacePage> {
   }
 
   Future<void> _delete(FileItem item) async {
+    if (item.isAlias) {
+      await _deleteLink(item);
+      return;
+    }
     final controller = AppScope.of(context);
     if (!controller.capabilities.delete) {
       AppFeedback.showSnack(context, '当前身份没有删除权限');
@@ -806,6 +841,72 @@ class _WorkspacePageState extends State<WorkspacePage> {
       await _reload();
       if (mounted) {
         AppFeedback.showSnack(context, '已移入回收站：${item.name}');
+      }
+    } catch (error) {
+      if (mounted) {
+        AppFeedback.showSnack(
+          context,
+          error.toString().replaceFirst('Bad state: ', ''),
+        );
+      }
+    }
+  }
+
+  /// 为真实文件夹条目创建链接；链接统一出现在根目录。
+  Future<void> _createLink(FileItem folder) async {
+    final controller = AppScope.of(context);
+    if (!controller.capabilities.upload) {
+      AppFeedback.showSnack(context, '当前身份没有创建链接权限');
+      return;
+    }
+    final name = await AppFeedback.promptText(
+      context,
+      title: '创建链接',
+      initialValue: folder.name,
+      hintText: '链接将显示在「全部文件」根目录',
+      confirmLabel: '创建',
+    );
+    if (name == null) {
+      return;
+    }
+    try {
+      await controller.createAlias(folder, name);
+      await _reload();
+      if (mounted) {
+        AppFeedback.showSnack(context, '已创建链接「${name.trim()}」');
+      }
+    } catch (error) {
+      if (mounted) {
+        AppFeedback.showSnack(
+          context,
+          error.toString().replaceFirst('Bad state: ', ''),
+        );
+      }
+    }
+  }
+
+  /// 删除链接：仅移除别名条目，目标目录内容不受影响。
+  Future<void> _deleteLink(FileItem item) async {
+    final controller = AppScope.of(context);
+    if (!controller.capabilities.delete) {
+      AppFeedback.showSnack(context, '当前身份没有删除权限');
+      return;
+    }
+    final confirmed = await AppFeedback.confirm(
+      context,
+      title: '确认删除链接？',
+      message: '将仅移除链接“${item.name}”，目标目录及其内容不受影响。',
+      confirmLabel: '删除链接',
+      destructive: true,
+    );
+    if (!confirmed) {
+      return;
+    }
+    try {
+      await controller.deleteAlias(item);
+      await _reload();
+      if (mounted) {
+        AppFeedback.showSnack(context, '已删除链接：${item.name}');
       }
     } catch (error) {
       if (mounted) {
@@ -899,8 +1000,16 @@ class _WorkspacePageState extends State<WorkspacePage> {
 
   Future<void> _deleteSelected(List<FileItem> items) async {
     final controller = AppScope.of(context);
+    // 链接条目删除走单独的「删除链接」流程，批量删除只作用于真实条目，
+    // 避免把别名当成真实目录展开删除。
+    final realItems =
+        items.where((item) => !item.isAlias).toList(growable: false);
+    if (realItems.isEmpty) {
+      AppFeedback.showSnack(context, '链接条目请使用「删除链接」操作');
+      return;
+    }
     try {
-      final preview = await controller.prepareBatchDelete(items);
+      final preview = await controller.prepareBatchDelete(realItems);
       if (!mounted) return;
       final confirmed = await AppFeedback.confirm(
         context,
@@ -966,12 +1075,20 @@ class _WorkspacePageState extends State<WorkspacePage> {
       AppFeedback.showSnack(context, '已有移动任务进行中，请等待完成');
       return;
     }
+    // 链接条目不可移动；移动目标选择器中选中链接等价于其真实目标前缀。
+    final realItems =
+        items.where((item) => !item.isAlias).toList(growable: false);
+    if (realItems.isEmpty) {
+      AppFeedback.showSnack(context, '链接条目不支持移动');
+      return;
+    }
     // 非法目标：任何源目录自身/子树（含后代全部禁用），以及源所在目录（仅禁其自身）。
     final invalidPrefixes = <String>{
-      for (final item in items.where((item) => item.isDirectory)) item.path,
+      for (final item in realItems.where((item) => item.isDirectory))
+        item.path,
     };
     final invalidPaths = <String>{
-      if (items.isNotEmpty) controller.parentPath(items.first.path),
+      if (realItems.isNotEmpty) controller.parentPath(realItems.first.path),
     };
     final target = await showDirectoryPickerDialog(
       context,
@@ -983,7 +1100,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
       return;
     }
     try {
-      final summary = await controller.moveItems(items, target);
+      final summary = await controller.moveItems(realItems, target);
       if (!mounted) {
         return;
       }
@@ -996,7 +1113,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
         summary.hasFailures
             ? '已移动 ${summary.movedCount} 个对象，${summary.failedKeys.length} 个失败，'
                 '重新启动后可继续或撤销'
-            : '已移动 ${items.length} 项到「${controller.displayPath(target)}」',
+            : '已移动 ${realItems.length} 项到「${controller.displayPath(target)}」',
       );
     } catch (error) {
       if (mounted) {
@@ -1209,7 +1326,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                       _handleOpen(item);
                     },
                   ),
-                  if (controller.capabilities.download)
+                  if (!item.isAlias && controller.capabilities.download)
                     ListTile(
                       dense: true,
                       leading: const Icon(Icons.download_outlined, size: 22),
@@ -1219,7 +1336,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
                         _download(item);
                       },
                     ),
-                  if (controller.capabilities.upload &&
+                  if (!item.isAlias &&
+                      controller.capabilities.upload &&
                       controller.capabilities.delete)
                     ListTile(
                       dense: true,
@@ -1231,8 +1349,22 @@ class _WorkspacePageState extends State<WorkspacePage> {
                         _moveItems(<FileItem>[item]);
                       },
                     ),
-                  if (controller.capabilities.upload ||
-                      controller.capabilities.delete)
+                  if (!item.isAlias &&
+                      item.isDirectory &&
+                      controller.capabilities.upload)
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.add_link, size: 22),
+                      title: const Text('创建链接'),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _createLink(item);
+                      },
+                    ),
+                  if (item.isAlias
+                      ? controller.capabilities.upload
+                      : controller.capabilities.upload ||
+                          controller.capabilities.delete)
                     ListTile(
                       dense: true,
                       leading: const Icon(Icons.edit_outlined, size: 22),
@@ -1242,7 +1374,25 @@ class _WorkspacePageState extends State<WorkspacePage> {
                         _rename(item);
                       },
                     ),
-                  if (controller.capabilities.delete)
+                  if (item.isAlias && controller.capabilities.delete)
+                    ListTile(
+                      dense: true,
+                      leading: Icon(
+                        Icons.link_off,
+                        size: 22,
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                      title: Text(
+                        '删除链接',
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error),
+                      ),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _deleteLink(item);
+                      },
+                    ),
+                  if (!item.isAlias && controller.capabilities.delete)
                     ListTile(
                       dense: true,
                       leading: Icon(
@@ -1327,8 +1477,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
         top: !desktop,
         child: desktop
             ? WorkspaceDesktopBody(
-                path: controller.displayPath(controller.currentPath),
-                canGoUp: controller.currentPath != AppController.rootPrefix,
+                path: controller.currentTitle,
+                canGoUp: controller.backNavigationPath() != null,
                 canUpload: canUpload,
                 canDelete: canDelete,
                 canDownload: canDownload,
@@ -1362,10 +1512,9 @@ class _WorkspacePageState extends State<WorkspacePage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
                     WorkspaceMobileHeader(
-                      path: controller.displayPath(controller.currentPath),
+                      path: controller.currentTitle,
                       roleLabel: controller.session?.displayName ?? '成员',
-                      canGoUp:
-                          controller.currentPath != AppController.rootPrefix,
+                      canGoUp: controller.backNavigationPath() != null,
                       browseMode: controller.browseMode,
                       sortOption: controller.fileSortOption,
                       onGoUp: _goUp,
@@ -1998,6 +2147,7 @@ class WorkspaceListView extends StatelessWidget {
     required this.onRenameSubmit,
     required this.onRenameCancel,
     required this.onDelete,
+    required this.onCreateLink,
   });
 
   final List<FileItem> items;
@@ -2025,6 +2175,7 @@ class WorkspaceListView extends StatelessWidget {
   final Future<bool> Function(FileItem item, String name) onRenameSubmit;
   final VoidCallback onRenameCancel;
   final ValueChanged<FileItem> onDelete;
+  final ValueChanged<FileItem> onCreateLink;
 
   @override
   Widget build(BuildContext context) {
@@ -2123,16 +2274,20 @@ class WorkspaceListView extends StatelessWidget {
                   context: context,
                   position: details.globalPosition,
                   item: item,
-                  canDownload: canDownload,
+                  canDownload: canDownload && !item.isAlias,
                   canRename: canUpload || canDelete,
-                  canMove: canMove,
-                  canDelete: canDelete,
+                  canMove: canMove && !item.isAlias,
+                  canDelete: canDelete && !item.isAlias,
                   onOpen: () => onOpen(item),
                   onPreview: () => onPreview(item),
                   onDownload: () => onDownload(item),
                   onMove: () => onMove(item),
                   onRename: () => onRename(item),
                   onDelete: () => onDelete(item),
+                  onCreateLink: canUpload && item.isDirectory && !item.isAlias
+                      ? () => onCreateLink(item)
+                      : null,
+                  onDeleteLink: item.isAlias ? () => onDelete(item) : null,
                 ),
                 child: InkWell(
                   onTap: () => onSelect(item),
@@ -2242,6 +2397,7 @@ class WorkspaceGridView extends StatelessWidget {
     required this.onRenameSubmit,
     required this.onRenameCancel,
     required this.onDelete,
+    required this.onCreateLink,
   });
 
   final List<FileItem> items;
@@ -2270,6 +2426,7 @@ class WorkspaceGridView extends StatelessWidget {
   final Future<bool> Function(FileItem item, String name) onRenameSubmit;
   final VoidCallback onRenameCancel;
   final ValueChanged<FileItem> onDelete;
+  final ValueChanged<FileItem> onCreateLink;
 
   @override
   Widget build(BuildContext context) {
@@ -2321,16 +2478,20 @@ class WorkspaceGridView extends StatelessWidget {
                   context: context,
                   position: details.globalPosition,
                   item: item,
-                  canDownload: canDownload,
+                  canDownload: canDownload && !item.isAlias,
                   canRename: canUpload || canDelete,
-                  canMove: canMove,
-                  canDelete: canDelete,
+                  canMove: canMove && !item.isAlias,
+                  canDelete: canDelete && !item.isAlias,
                   onOpen: () => onOpen(item),
                   onPreview: () => onOpen(item),
                   onDownload: () => onDownload(item),
                   onMove: () => onMove(item),
                   onRename: () => onRename(item),
                   onDelete: () => onDelete(item),
+                  onCreateLink: canUpload && item.isDirectory && !item.isAlias
+                      ? () => onCreateLink(item)
+                      : null,
+                  onDeleteLink: item.isAlias ? () => onDelete(item) : null,
                 ),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(16),
@@ -2861,6 +3022,8 @@ class _DetailPanel extends StatelessWidget {
                             : FileSizeFormatter.format(item!.size ?? 0),
                       ),
                       _kv(context, '路径', controller.displayPath(item!.path)),
+                      if (item!.isAlias)
+                        _kv(context, '创建者', item!.createdBy ?? ''),
                       _kv(
                         context,
                         '更新',
@@ -3066,7 +3229,15 @@ class _InlineRenameFieldState extends State<_InlineRenameField> {
   }
 }
 
-enum _DesktopItemAction { openOrPreview, download, move, rename, delete }
+enum _DesktopItemAction {
+  openOrPreview,
+  download,
+  move,
+  rename,
+  delete,
+  createLink,
+  deleteLink,
+}
 
 class _MoveProgressBanner extends StatelessWidget {
   const _MoveProgressBanner({required this.progress});
@@ -3135,6 +3306,8 @@ Future<void> _showDesktopItemMenu({
   required VoidCallback onMove,
   required VoidCallback onRename,
   required VoidCallback onDelete,
+  VoidCallback? onCreateLink,
+  VoidCallback? onDeleteLink,
 }) async {
   final overlay = Overlay.of(context).context.findRenderObject()! as RenderBox;
   final action = await showMenu<_DesktopItemAction>(
@@ -3180,12 +3353,27 @@ Future<void> _showDesktopItemMenu({
           icon: Icons.drive_file_rename_outline,
           label: '重命名',
         ),
+      if (onCreateLink != null)
+        _desktopContextMenuItem(
+          context: context,
+          value: _DesktopItemAction.createLink,
+          icon: Icons.add_link,
+          label: '创建链接',
+        ),
       if (canDelete)
         _desktopContextMenuItem(
           context: context,
           value: _DesktopItemAction.delete,
           icon: Icons.delete_outline,
           label: '删除',
+          isDestructive: true,
+        ),
+      if (onDeleteLink != null)
+        _desktopContextMenuItem(
+          context: context,
+          value: _DesktopItemAction.deleteLink,
+          icon: Icons.link_off,
+          label: '删除链接',
           isDestructive: true,
         ),
     ],
@@ -3205,6 +3393,12 @@ Future<void> _showDesktopItemMenu({
       break;
     case _DesktopItemAction.delete:
       onDelete();
+      break;
+    case _DesktopItemAction.createLink:
+      onCreateLink?.call();
+      break;
+    case _DesktopItemAction.deleteLink:
+      onDeleteLink?.call();
       break;
     case null:
       break;

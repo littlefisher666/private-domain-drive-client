@@ -32,8 +32,41 @@ class FileTypeIcon extends StatelessWidget {
           scheme.onSurfaceVariant
         ),
     };
+    final iconWidget = Icon(icon, size: size, color: color);
+    if (!item.isAlias) return iconWidget;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: <Widget>[
+        iconWidget,
+        Positioned(
+          right: -size * 0.18,
+          bottom: -size * 0.12,
+          child: _AliasLinkBadge(size: size * 0.55),
+        ),
+      ],
+    );
+  }
+}
 
-    return Icon(icon, size: size, color: color);
+/// 别名条目的链接角标：叠加在目录图标上区分虚拟链接与真实文件夹。
+class _AliasLinkBadge extends StatelessWidget {
+  const _AliasLinkBadge({required this.size});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        shape: BoxShape.circle,
+        border: Border.all(color: scheme.primary, width: 1),
+      ),
+      child: Icon(Icons.link, size: size * 0.72, color: scheme.primary),
+    );
   }
 }
 
@@ -50,22 +83,45 @@ class FileTypeBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = _styleFor(item.kind);
-    return Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: style.bg,
-        borderRadius: BorderRadius.circular(9),
+    final content = Text(
+      style.label,
+      style: TextStyle(
+        color: style.fg,
+        fontSize: 11,
+        fontWeight: FontWeight.w800,
       ),
-      child: Text(
-        style.label,
-        style: TextStyle(
-          color: style.fg,
-          fontSize: 11,
-          fontWeight: FontWeight.w800,
+    );
+    if (!item.isAlias) {
+      return Container(
+        width: size,
+        height: size,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: style.bg,
+          borderRadius: BorderRadius.circular(9),
         ),
-      ),
+        child: content,
+      );
+    }
+    return Stack(
+      clipBehavior: Clip.none,
+      children: <Widget>[
+        Container(
+          width: size,
+          height: size,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: style.bg,
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: content,
+        ),
+        Positioned(
+          right: -6,
+          bottom: -6,
+          child: _AliasLinkBadge(size: 14),
+        ),
+      ],
     );
   }
 }
