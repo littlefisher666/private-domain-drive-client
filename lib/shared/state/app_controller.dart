@@ -654,13 +654,10 @@ class AppController extends ChangeNotifier {
         .where((alias) => _normalizeDir(alias.parentPrefix) == level)
         .toList(growable: false);
     if (mounted.isEmpty) return items;
-    final existingPaths = items.map((item) => item.path).toSet();
-    final aliasItems = mounted
-        .where((alias) => !existingPaths.contains(alias.targetPrefix))
-        .toList(growable: false);
-    if (aliasItems.isEmpty) return items;
+    // 同层级别名允许指向同层真实目录（如目录改名快捷入口），此时真实
+    // 条目与别名条目并列展示；批量操作按 isAlias 区分二者。
     final summaries = await Future.wait<DirectorySummary?>(
-      aliasItems.map((alias) async {
+      mounted.map((alias) async {
         try {
           return await _ossClient.directorySummary(alias.targetPrefix, session);
         } catch (_) {
@@ -670,16 +667,16 @@ class AppController extends ChangeNotifier {
     );
     return <FileItem>[
       ...items,
-      for (var index = 0; index < aliasItems.length; index++)
+      for (var index = 0; index < mounted.length; index++)
         FileItem(
-          path: aliasItems[index].targetPrefix,
-          name: aliasItems[index].name,
+          path: mounted[index].targetPrefix,
+          name: mounted[index].name,
           isDirectory: true,
           itemCount: summaries[index]?.itemCount,
           updatedAt: summaries[index]?.updatedAt,
           isAlias: true,
-          aliasId: aliasItems[index].id,
-          createdBy: aliasItems[index].createdBy,
+          aliasId: mounted[index].id,
+          createdBy: mounted[index].createdBy,
         ),
     ];
   }
@@ -1364,6 +1361,11 @@ class AppController extends ChangeNotifier {
 
   void toggleMultiSelection(FileItem item,
       {List<FileItem>? visibleItems, bool range = false}) {
+    // 链接条目与真实条目可能共用同一路径（同层指向），批量操作按 isAlias
+    // 区分二者；多选基于路径无法区分，故链接条目不参与多选。
+    if (item.isAlias) {
+      return;
+    }
     if (!_isMultiSelectionMode) {
       enterMultiSelection(item);
       return;
