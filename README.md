@@ -32,13 +32,13 @@
 flutter pub get
 
 # macOS
-flutter run -d macos --dart-define-from-file=env/local.json
+flutter run -d macos --dart-define-from-file=../secrets/client/local.json
 
 # Android（模拟器或真机）
-flutter run -d android --dart-define-from-file=env/local.json
+flutter run -d android --dart-define-from-file=../secrets/client/local.json
 ```
 
-`env/local.json` 不提交到仓库，至少应按部署环境填写：
+环境配置统一存放在主仓库 `secrets/client/local.json`（经 git-crypt 加密后随主仓库提交），至少应按部署环境填写：
 
 ```json
 {
@@ -79,7 +79,7 @@ flutter test
 
 # 已连接 macOS 与真实 OSS 环境时，按需执行集成测试
 flutter test integration_test/macos_smoke_test.dart -d macos \
-  --dart-define-from-file=env/local.json
+  --dart-define-from-file=../secrets/client/local.json
 ```
 
 `integration_test/` 中另含 OSS CRUD、缩略图与既有缩略图探测测试；它们会操作配置环境中的 OSS，仅应在隔离测试前缀下运行。

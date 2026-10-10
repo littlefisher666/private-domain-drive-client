@@ -39,7 +39,7 @@ captures/
 *.log
 
 # Local build-time credentials and environment configuration
-env/local.json
+# (统一存放于主仓库 secrets/client/local.json, 经 git-crypt 加密)
 
 # Coverage
 coverage/
