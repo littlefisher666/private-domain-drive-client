@@ -167,7 +167,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
   );
   String? _boundPath;
   int? _boundTreeRevision;
-  String? _renamingPath;
+  // 链接条目与真实条目可能共用同一路径，重命名需按 (path, isAlias) 匹配。
+  ({String path, bool isAlias})? _renamingTarget;
   bool _pendingMovesChecked = false;
 
   /// 子文件夹统计的异步回填值，按目录路径覆盖列表条目。
@@ -412,7 +413,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
           child: Focus(
             key: const ValueKey<String>('workspace-items-focus'),
             focusNode: _itemsFocusNode,
-            descendantsAreFocusable: _renamingPath != null,
+            descendantsAreFocusable: _renamingTarget != null,
             onKeyEvent: (node, event) {
               if (desktop && event is KeyDownEvent) {
                 if (event.logicalKey == LogicalKeyboardKey.escape &&
@@ -585,7 +586,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                               onMove: (item) =>
                                   _moveItems(<FileItem>[item]),
                               onRename: _rename,
-                              renamingPath: _renamingPath,
+                              renamingTarget: _renamingTarget,
                               onRenameSubmit: _commitRename,
                               onRenameCancel: _cancelRename,
                               onDelete: _delete,
@@ -616,7 +617,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                             onDownload: _download,
                             onMove: (item) => _moveItems(<FileItem>[item]),
                             onRename: _rename,
-                            renamingPath: _renamingPath,
+                            renamingTarget: _renamingTarget,
                             onRenameSubmit: _commitRename,
                             onRenameCancel: _cancelRename,
                             onDelete: _delete,
@@ -774,12 +775,13 @@ class _WorkspacePageState extends State<WorkspacePage> {
       AppFeedback.showSnack(context, '当前身份没有重命名权限');
       return;
     }
-    setState(() => _renamingPath = item.path);
+    setState(() =>
+        _renamingTarget = (path: item.path, isAlias: item.isAlias));
   }
 
   void _cancelRename() {
-    if (_renamingPath != null) {
-      setState(() => _renamingPath = null);
+    if (_renamingTarget != null) {
+      setState(() => _renamingTarget = null);
     }
   }
 
@@ -2108,6 +2110,10 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
+/// 重命名编辑框按 (path, isAlias) 匹配条目；链接与真实条目可能共用路径。
+bool _isRenamingTarget(({String path, bool isAlias})? target, FileItem item) =>
+    target != null && target.path == item.path && target.isAlias == item.isAlias;
+
 class WorkspaceListView extends StatelessWidget {
   const WorkspaceListView({
     required this.items,
@@ -2131,7 +2137,7 @@ class WorkspaceListView extends StatelessWidget {
     required this.onDownload,
     required this.onMove,
     required this.onRename,
-    required this.renamingPath,
+    required this.renamingTarget,
     required this.onRenameSubmit,
     required this.onRenameCancel,
     required this.onDelete,
@@ -2159,7 +2165,7 @@ class WorkspaceListView extends StatelessWidget {
   final ValueChanged<FileItem> onDownload;
   final ValueChanged<FileItem> onMove;
   final ValueChanged<FileItem> onRename;
-  final String? renamingPath;
+  final ({String path, bool isAlias})? renamingTarget;
   final Future<bool> Function(FileItem item, String name) onRenameSubmit;
   final VoidCallback onRenameCancel;
   final ValueChanged<FileItem> onDelete;
@@ -2183,7 +2189,7 @@ class WorkspaceListView extends StatelessWidget {
               horizontalTitleGap: 10,
               minLeadingWidth: 28,
               minVerticalPadding: 5,
-              leading: multiSelecting
+              leading: multiSelecting && !item.isAlias
                   ? SizedBox(
                       width: 28,
                       height: 28,
@@ -2194,7 +2200,7 @@ class WorkspaceListView extends StatelessWidget {
                       ),
                     )
                   : FileTypeIcon(item: item, size: 24),
-              title: renamingPath == item.path
+              title: _isRenamingTarget(renamingTarget, item)
                   ? _InlineRenameField(
                       item: item,
                       onSubmit: onRenameSubmit,
@@ -2247,8 +2253,9 @@ class WorkspaceListView extends StatelessWidget {
         ),
         itemBuilder: (context, index) {
           final item = items[index];
+          // 多选集合不含链接条目（与真实条目可能共用路径），避免误高亮。
           final selected = selectedPaths.isNotEmpty
-              ? selectedPaths.contains(item.path)
+              ? !item.isAlias && selectedPaths.contains(item.path)
               : item.path == selectedPath;
           return Listener(
             onPointerDown: (event) => onItemPointerDown(event.pointer),
@@ -2301,7 +2308,7 @@ class WorkspaceListView extends StatelessWidget {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: <Widget>[
-                              if (renamingPath == item.path)
+                              if (_isRenamingTarget(renamingTarget, item))
                                 _InlineRenameField(
                                   item: item,
                                   onSubmit: onRenameSubmit,
@@ -2381,7 +2388,7 @@ class WorkspaceGridView extends StatelessWidget {
     required this.onDownload,
     required this.onMove,
     required this.onRename,
-    required this.renamingPath,
+    required this.renamingTarget,
     required this.onRenameSubmit,
     required this.onRenameCancel,
     required this.onDelete,
@@ -2410,7 +2417,7 @@ class WorkspaceGridView extends StatelessWidget {
   final ValueChanged<FileItem> onDownload;
   final ValueChanged<FileItem> onMove;
   final ValueChanged<FileItem> onRename;
-  final String? renamingPath;
+  final ({String path, bool isAlias})? renamingTarget;
   final Future<bool> Function(FileItem item, String name) onRenameSubmit;
   final VoidCallback onRenameCancel;
   final ValueChanged<FileItem> onDelete;
@@ -2452,7 +2459,7 @@ class WorkspaceGridView extends StatelessWidget {
         itemBuilder: (context, index) {
           final item = items[index];
           final selected = selectedPaths.isNotEmpty
-              ? selectedPaths.contains(item.path)
+              ? !item.isAlias && selectedPaths.contains(item.path)
               : item.path == selectedPath;
 
           return Listener(
@@ -2508,7 +2515,7 @@ class WorkspaceGridView extends StatelessWidget {
                                     loader: thumbnailLoader,
                                     cacheNamespace: thumbnailCacheNamespace)),
                             const SizedBox(height: 8),
-                            if (renamingPath == item.path)
+                            if (_isRenamingTarget(renamingTarget, item))
                               _InlineRenameField(
                                 item: item,
                                 onSubmit: onRenameSubmit,
@@ -2639,7 +2646,7 @@ class _MobileUniformGrid extends StatelessWidget {
       horizontalTitleGap: 10,
       minLeadingWidth: 28,
       minVerticalPadding: 5,
-      leading: multiSelecting
+      leading: multiSelecting && !item.isAlias
           ? SizedBox(
               width: 28,
               height: 28,
@@ -2683,7 +2690,7 @@ class _MobileUniformGrid extends StatelessWidget {
 
   Widget _buildTile(BuildContext context, FileItem item) {
     final selected = selectedPaths.isNotEmpty
-        ? selectedPaths.contains(item.path)
+        ? !item.isAlias && selectedPaths.contains(item.path)
         : item.path == selectedPath;
     final scheme = Theme.of(context).colorScheme;
     return GestureDetector(
