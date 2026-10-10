@@ -1,12 +1,18 @@
 allprojects {
     repositories {
-        maven {
-            name = "aliyun-google"
-            url = uri("https://maven.aliyun.com/repository/google")
-        }
-        maven {
-            name = "aliyun-public"
-            url = uri("https://maven.aliyun.com/repository/public")
+        // 与 settings.gradle.kts 保持一致：CI 直连默认仓库，本地走阿里云镜像。
+        if (System.getenv("CI")?.toBooleanStrictOrNull() != true) {
+            maven {
+                name = "aliyun-google"
+                url = uri("https://maven.aliyun.com/repository/google")
+            }
+            maven {
+                name = "aliyun-public"
+                url = uri("https://maven.aliyun.com/repository/public")
+            }
+        } else {
+            google()
+            mavenCentral()
         }
     }
 }
