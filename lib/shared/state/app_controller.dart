@@ -1927,7 +1927,7 @@ class AppController extends ChangeNotifier {
   }) async {
     final context = _navigatorKey?.currentContext;
     if (context == null) return null;
-    var selected = UploadConflictResolution.keepBoth;
+    var selected = UploadConflictResolution.skip;
     var applyToBatch = false;
     return showDialog<_UploadConflictDecision>(
       context: context,
