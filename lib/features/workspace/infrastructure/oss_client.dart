@@ -185,6 +185,36 @@ class OssClient {
     return keys;
   }
 
+  /// 递归列举前缀下全部对象 key，每返回一页（≤1000）即回调一次，供
+  /// 移动等场景边列举边搬运；回调内对已列举 key 的删除可与翻页安全并发
+  /// （OSS 按 key 字典序分页，已删除的源 key 均 ≤ 翻页 marker）。
+  Future<void> forEachObjectKeyPage(
+    String path,
+    UserSession session,
+    Future<void> Function(List<String> keys) onPage,
+  ) async {
+    await _ensureConfigured(session);
+    String? marker;
+    do {
+      final page = await _platform(
+        () => _native.listObjects(
+          prefix: _dir(path),
+          marker: marker,
+          maxKeys: 1000,
+        ),
+      );
+      final keys =
+          page.objects.map((object) => object.key).toList(growable: false);
+      if (keys.isNotEmpty) {
+        await onPage(keys);
+      }
+      marker = page.isTruncated ? page.nextMarker : null;
+      if (page.isTruncated && (marker == null || marker.isEmpty)) {
+        throw AppError('OSS 分页响应缺少下一页标识', code: 'OSS_INVALID_RESPONSE');
+      }
+    } while (marker != null && marker.isNotEmpty);
+  }
+
   /// 统计指定目录前缀下所有文件的总大小。
   ///
   /// OSS 的目录没有独立大小；每个列表分页已携带对象大小，因此无需逐个

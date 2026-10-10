@@ -1,15 +1,16 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:private_domain_drive_client/features/auth/domain/user_session.dart';
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
 import 'package:private_domain_drive_client/features/workspace/domain/file_item.dart';
+import 'package:private_domain_drive_client/features/workspace/domain/move_task_entry.dart';
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
 import 'package:private_domain_drive_client/features/workspace/presentation/workspace_page.dart';
 import 'package:private_domain_drive_client/shared/state/app_controller.dart';
 import 'package:private_domain_drive_client/shared/state/app_scope.dart';
+import 'package:private_domain_oss/private_domain_oss.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -84,9 +85,10 @@ void main() {
       'shared/dst/',
     );
 
-    // 3 次对象复制 + 1 次删除 manifest（成功收尾）。
+    // 3 次对象复制 + 2 次批量删源（目录标记与列举页各一批）+ 1 次删除 manifest。
     expect(oss.copyCalls, 3);
-    expect(oss.deleteCalls, 4);
+    expect(oss.deleteManyCalls, 2);
+    expect(oss.deleteCalls, 1);
     expect(oss.objects.contains('shared/dst/src/x.txt'), isTrue);
   });
 
@@ -203,7 +205,9 @@ void main() {
   testWidgets('撤销移动：已搬运对象反向搬回，源位置被占用时自动改名', (tester) async {
     final oss = _FakeOssClient()
       ..objects.addAll(<String>{'shared/a.txt', 'shared/b.txt'})
-      ..copyFailures.add('shared/b.txt');
+      ..copyFailures.add('shared/b.txt')
+      ..sizes['shared/a.txt'] = 5
+      ..sizes['shared/b.txt'] = 7;
     final controller = await _pump(tester, oss);
 
     // a.txt 成功搬运，b.txt 复制失败留下 manifest。
@@ -211,8 +215,9 @@ void main() {
       <FileItem>[file('shared/a.txt'), file('shared/b.txt')],
       'shared/dst/',
     );
-    // 用户随后在源位置放入新的同名文件，验证撤销不得覆盖。
+    // 用户随后在源位置放入同名但内容不同的新文件，验证撤销不得覆盖。
     oss.objects.add('shared/a.txt');
+    oss.sizes['shared/a.txt'] = 99;
     final pending = await controller.listPendingMoves();
     expect(pending, hasLength(1));
 
@@ -222,6 +227,142 @@ void main() {
       'shared/a.txt',
       'shared/a（1）.txt',
       'shared/b.txt',
+    });
+    expect(oss.manifestKeys, isEmpty);
+  });
+
+  testWidgets('撤销中断批次：源目标两侧重复副本直接丢弃而非改名', (tester) async {
+    final oss = _FakeOssClient()
+      ..objects.addAll(<String>{
+        'shared/src/',
+        'shared/src/keep.txt',
+        'shared/dst/src/',
+        'shared/dst/src/keep.txt',
+        'shared/dst/src/moved.txt',
+      })
+      ..sizes['shared/src/keep.txt'] = 5
+      ..sizes['shared/dst/src/keep.txt'] = 5
+      ..sizes['shared/dst/src/moved.txt'] = 7;
+    final controller = await _pump(tester, oss);
+
+    // 模拟中断批次：keep.txt 已复制到目标但源侧尚未删除；moved.txt 已完成搬运。
+    final entry = MoveTaskEntry(
+      id: 'task-1',
+      sourcePrefixes: <String>['shared/src/'],
+      targetPrefix: 'shared/dst/',
+      createdAt: DateTime(2026, 1, 1),
+    );
+    final summary = await controller.undoPendingMove(entry);
+
+    expect(summary.hasFailures, isFalse);
+    expect(oss.objects, <String>{
+      'shared/src/',
+      'shared/src/keep.txt',
+      'shared/src/moved.txt',
+    });
+    expect(oss.copyCalls, 1);
+    expect(oss.manifestKeys, isEmpty);
+  });
+
+  testWidgets('流式执行：每个对象的复制先于其源删除', (tester) async {
+    final oss = _FakeOssClient()
+      ..objects.addAll(<String>{
+        'shared/src/',
+        'shared/src/a.txt',
+        'shared/src/b.txt',
+        'shared/src/c.txt',
+      })
+      ..listPageSize = 2;
+    final controller = await _pump(tester, oss);
+
+    await controller.moveItems(<FileItem>[dir('shared/src/')], 'shared/dst/');
+
+    expect(oss.objects, <String>{
+      'shared/dst/src/',
+      'shared/dst/src/a.txt',
+      'shared/dst/src/b.txt',
+      'shared/dst/src/c.txt',
+    });
+    // 单对象 copy 先于其源 delete 的不变式在分页流式执行下依旧成立。
+    for (final key in <String>[
+      'shared/src/a.txt',
+      'shared/src/b.txt',
+      'shared/src/c.txt',
+    ]) {
+      final copyIndex = oss.operationLog.indexOf('copy:$key');
+      final deleteIndex = oss.operationLog.indexWhere((entry) =>
+          entry.startsWith('deleteMany:') &&
+          (entry == 'deleteMany:$key' ||
+              entry.startsWith('deleteMany:$key,') ||
+              entry.contains(',$key') ||
+              entry.endsWith(',$key')));
+      expect(copyIndex, greaterThanOrEqualTo(0), reason: key);
+      expect(deleteIndex, greaterThan(copyIndex), reason: key);
+    }
+  });
+
+  testWidgets('流式执行：列举未完成时进度总数随分页递增', (tester) async {
+    final oss = _FakeOssClient()
+      ..objects.addAll(<String>{
+        'shared/src/',
+        'shared/src/a.txt',
+        'shared/src/b.txt',
+        'shared/src/c.txt',
+        'shared/src/d.txt',
+        'shared/src/e.txt',
+      })
+      ..listPageSize = 2;
+    final controller = await _pump(tester, oss);
+    final snapshots = <MoveProgress>[];
+    controller.moveStateListenable.addListener(() {
+      final value = controller.moveStateListenable.value;
+      if (value != null) snapshots.add(value);
+    });
+
+    await controller.moveItems(<FileItem>[dir('shared/src/')], 'shared/dst/');
+
+    final counting = snapshots.where((s) => s.isCounting).toList();
+    expect(counting, isNotEmpty);
+    // 列举未完成时总数尚未到 6，且随每页结果递增。
+    expect(counting.first.total, lessThan(6));
+    expect(counting.map((s) => s.total).toSet().length, greaterThan(1));
+    final last = snapshots.last;
+    expect(last.isCounting, isFalse);
+    expect(last.processed, 6);
+    expect(last.total, 6);
+  });
+
+  testWidgets('续迁中断批次：一页内双侧重复副本幂等收敛', (tester) async {
+    final entry = MoveTaskEntry(
+      id: 'task-1',
+      sourcePrefixes: <String>['shared/src/'],
+      targetPrefix: 'shared/dst/',
+      createdAt: DateTime(2026, 1, 1),
+    );
+    final oss = _FakeOssClient()
+      ..objects.addAll(<String>{
+        'shared/.moves/task-1/manifest.json',
+        'shared/src/',
+        'shared/src/x.txt',
+        'shared/dst/src/',
+        'shared/dst/src/x.txt',
+        'shared/dst/src/moved.txt',
+      })
+      ..sizes['shared/src/x.txt'] = 5
+      ..sizes['shared/dst/src/x.txt'] = 5
+      ..sizes['shared/dst/src/moved.txt'] = 7
+      ..textContent['shared/.moves/task-1/manifest.json'] = entry.encode();
+    final controller = await _pump(tester, oss);
+
+    final pending = await controller.listPendingMoves();
+    expect(pending, hasLength(1));
+    final summary = await controller.resumePendingMove(pending.first);
+
+    expect(summary.hasFailures, isFalse);
+    expect(oss.objects, <String>{
+      'shared/dst/src/',
+      'shared/dst/src/x.txt',
+      'shared/dst/src/moved.txt',
     });
     expect(oss.manifestKeys, isEmpty);
   });
@@ -332,9 +473,18 @@ class _FakeSessionRepository implements SessionRepository {
 class _FakeOssClient extends OssClient {
   final Set<String> objects = <String>{};
   final Map<String, String> textContent = <String, String>{};
+  final Map<String, int> sizes = <String, int>{};
   final Set<String> copyFailures = <String>{};
   int copyCalls = 0;
   int deleteCalls = 0;
+  int deleteManyCalls = 0;
+
+  /// 操作日志：记录 copy / delete / deleteMany 的实际执行顺序，
+  /// 供流式执行不变式断言使用。
+  final List<String> operationLog = <String>[];
+
+  /// 递归列举每页返回的 key 数，测试流式分页时调小。
+  int listPageSize = 1000;
 
   Set<String> get manifestKeys => objects
       .where((key) => key.startsWith('shared/.moves/') && key.endsWith('manifest.json'))
@@ -356,15 +506,18 @@ class _FakeOssClient extends OssClient {
   @override
   Future<void> copy(String from, String to, UserSession session) async {
     copyCalls++;
+    operationLog.add('copy:$from');
     if (copyFailures.contains(from)) {
       throw StateError('copy failed: $from');
     }
     objects.add(to);
+    sizes[to] = sizes[from] ?? 0;
   }
 
   @override
   Future<void> delete(String path, UserSession session) async {
     deleteCalls++;
+    operationLog.add('delete:$path');
     objects.remove(path);
   }
 
@@ -373,8 +526,28 @@ class _FakeOssClient extends OssClient {
     Iterable<String> paths,
     UserSession session,
   ) async {
+    deleteManyCalls++;
+    final requested = paths.toList()..sort();
+    operationLog.add('deleteMany:${requested.join(',')}');
     objects.removeAll(paths);
-    return BatchDeleteResult(deletedPaths: paths.toList(growable: false));
+    return BatchDeleteResult(deletedPaths: requested);
+  }
+
+  @override
+  Future<void> forEachObjectKeyPage(
+    String path,
+    UserSession session,
+    Future<void> Function(List<String> keys) onPage,
+  ) async {
+    final prefix = _dir(path);
+    final keys = objects.where((key) => key.startsWith(prefix)).toList()
+      ..sort();
+    for (var start = 0; start < keys.length; start += listPageSize) {
+      final end = start + listPageSize > keys.length
+          ? keys.length
+          : start + listPageSize;
+      await onPage(keys.sublist(start, end));
+    }
   }
 
   @override
@@ -392,6 +565,15 @@ class _FakeOssClient extends OssClient {
   @override
   Future<bool> objectExists(String path, UserSession session) async =>
       objects.contains(path);
+
+  @override
+  Future<List<OssNativeObject>> listAllObjects(
+      String path, UserSession session) async {
+    return <OssNativeObject>[
+      for (final key in objects.where((key) => key.startsWith(path)))
+        OssNativeObject(key: key, size: sizes[key] ?? 0),
+    ];
+  }
 
   @override
   Future<List<String>> listAllObjectKeys(
