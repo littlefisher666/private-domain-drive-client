@@ -2032,6 +2032,7 @@ class WorkspaceListView extends StatelessWidget {
       return Card(
         clipBehavior: Clip.antiAlias,
         child: ListView.separated(
+          padding: EdgeInsets.only(bottom: canUpload ? 80 : 0),
           itemCount: items.length,
           separatorBuilder: (_, __) => const Divider(height: 1),
           itemBuilder: (context, index) {
@@ -2286,6 +2287,7 @@ class WorkspaceGridView extends StatelessWidget {
         onSelect: onSelect,
         onToggle: onToggle,
         onLongPress: onLongPress,
+        bottomPadding: canUpload ? 80 : 12,
       );
     }
     return _DesktopMarqueeSelection(
@@ -2413,6 +2415,7 @@ class _MobileUniformGrid extends StatelessWidget {
     required this.onSelect,
     required this.onToggle,
     this.onLongPress,
+    this.bottomPadding = 12,
   });
 
   final List<FileItem> items;
@@ -2427,6 +2430,7 @@ class _MobileUniformGrid extends StatelessWidget {
   final ValueChanged<FileItem> onSelect;
   final ValueChanged<FileItem> onToggle;
   final ValueChanged<FileItem>? onLongPress;
+  final double bottomPadding;
 
   static const _spacing = 3.0;
 
@@ -2472,7 +2476,7 @@ class _MobileUniformGrid extends StatelessWidget {
               childCount: others.length,
             ),
           ),
-        const SliverToBoxAdapter(child: SizedBox(height: 12)),
+        SliverToBoxAdapter(child: SizedBox(height: bottomPadding)),
       ],
     );
   }
