@@ -852,7 +852,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
     }
   }
 
-  /// 为真实文件夹条目创建链接；链接统一出现在根目录。
+  /// 为真实文件夹条目创建链接；挂载层级由用户在目录选择对话框中选定。
   Future<void> _createLink(FileItem folder) async {
     final controller = AppScope.of(context);
     if (!controller.capabilities.upload) {
@@ -863,14 +863,29 @@ class _WorkspacePageState extends State<WorkspacePage> {
       context,
       title: '创建链接',
       initialValue: folder.name,
-      hintText: '链接将显示在「全部文件」根目录',
-      confirmLabel: '创建',
+      hintText: '链接名称',
+      confirmLabel: '下一步',
     );
-    if (name == null) {
+    if (name == null || !mounted) {
+      return;
+    }
+    // 选择挂载层级：默认当前所在目录，可导航到任意层级，禁止挂到目标自身。
+    final parentPath = await showDirectoryPickerDialog(
+      context,
+      controller: controller,
+      invalidPaths: <String>{folder.path},
+      title: '选择链接位置',
+      confirmLabel: '创建到此处',
+    );
+    if (parentPath == null || !mounted) {
       return;
     }
     try {
-      await controller.createAlias(folder, name);
+      await controller.createAlias(
+        folder,
+        name,
+        parentPrefix: parentPath,
+      );
       await _reload();
       if (mounted) {
         AppFeedback.showSnack(context, '已创建链接「${name.trim()}」');

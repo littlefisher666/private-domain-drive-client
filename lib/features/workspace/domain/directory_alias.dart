@@ -8,17 +8,21 @@ class DirectoryAlias {
     required this.id,
     required this.name,
     required this.targetPrefix,
+    required this.parentPrefix,
     this.createdBy,
     this.createdAt,
   });
 
   final String id;
 
-  /// 根目录内展示的别名名称，须与真实条目及其他别名保持唯一。
+  /// 挂载层级内展示的别名名称，须与同层级真实条目及其他别名保持唯一。
   final String name;
 
   /// 完整真实目录前缀（含会话根前缀与结尾 `/`），直接用于 ListObjects。
   final String targetPrefix;
+
+  /// 挂载层级（完整目录前缀，含结尾 `/`），决定别名在哪个层级渲染。
+  final String parentPrefix;
 
   /// 创建时的登录用户名，仅用于展示，缺失按空值展示。
   final String? createdBy;
@@ -28,6 +32,7 @@ class DirectoryAlias {
         id: id,
         name: name ?? this.name,
         targetPrefix: targetPrefix,
+        parentPrefix: parentPrefix,
         createdBy: createdBy,
         createdAt: createdAt,
       );
@@ -35,12 +40,14 @@ class DirectoryAlias {
   static DirectoryAlias create({
     required String name,
     required String targetPrefix,
+    required String parentPrefix,
     required String createdBy,
   }) =>
       DirectoryAlias(
         id: _generateId(),
         name: name,
         targetPrefix: targetPrefix,
+        parentPrefix: parentPrefix,
         createdBy: createdBy,
         createdAt: DateTime.now(),
       );
@@ -49,13 +56,18 @@ class DirectoryAlias {
         'id': id,
         'name': name,
         'targetPrefix': targetPrefix,
+        'parent': parentPrefix,
         if (createdBy != null && createdBy!.isNotEmpty) 'createdBy': createdBy,
         if (createdAt != null) 'createdAt': createdAt!.toIso8601String(),
       };
 
   /// 单条数据损坏（缺少 id/name/targetPrefix）时跳过该条目；
+  /// [defaultParentPrefix] 兜底无 `parent` 字段的存量条目；
   /// createdBy/createdAt 缺失按空值解析。
-  static DirectoryAlias? tryDecode(Object? raw) {
+  static DirectoryAlias? tryDecode(
+    Object? raw, {
+    required String defaultParentPrefix,
+  }) {
     if (raw is! Map) return null;
     final id = raw['id'];
     final name = raw['name'];
@@ -68,12 +80,15 @@ class DirectoryAlias {
         targetPrefix.isEmpty) {
       return null;
     }
+    final parent = raw['parent'];
     final createdBy = raw['createdBy'];
     final createdAt = raw['createdAt'];
     return DirectoryAlias(
       id: id,
       name: name,
       targetPrefix: targetPrefix,
+      parentPrefix:
+          parent is String && parent.isNotEmpty ? parent : defaultParentPrefix,
       createdBy: createdBy is String ? createdBy : null,
       createdAt: createdAt is String ? DateTime.tryParse(createdAt) : null,
     );
@@ -115,15 +130,22 @@ class DirectoryAliasTable {
   String encode() => jsonEncode(toJson());
 
   /// 解析失败（非法 JSON 或顶层结构错误）抛出 [FormatException]，
-  /// 由调用方按空表降级。
-  static DirectoryAliasTable decode(String raw) {
+  /// 由调用方按空表降级。[defaultParentPrefix] 为无 `parent` 字段
+  /// 存量条目的挂载层级兜底（会话根前缀）。
+  static DirectoryAliasTable decode(
+    String raw, {
+    required String defaultParentPrefix,
+  }) {
     final decoded = jsonDecode(raw);
     if (decoded is! Map) throw const FormatException('别名表结构不是对象');
     final links = decoded['links'];
     final aliases = <DirectoryAlias>[];
     if (links is List) {
       for (final item in links) {
-        final alias = DirectoryAlias.tryDecode(item);
+        final alias = DirectoryAlias.tryDecode(
+          item,
+          defaultParentPrefix: defaultParentPrefix,
+        );
         if (alias != null) aliases.add(alias);
       }
     }

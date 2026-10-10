@@ -93,7 +93,14 @@ class AliasRepository {
     if (objects.isEmpty) return null;
     final etag = objects.firstWhere((object) => object.key == key).etag ?? '';
     final bytes = await _ossClient.download(key, session, maxBytes: _maxBytes);
-    return (DirectoryAliasTable.decode(utf8.decode(bytes)), etag);
+    // 无 parent 字段的存量条目挂载在会话根目录。
+    return (
+      DirectoryAliasTable.decode(
+        utf8.decode(bytes),
+        defaultParentPrefix: session.rootPrefix,
+      ),
+      etag
+    );
   }
 
   void _logDecodeFailure(Object error) {
