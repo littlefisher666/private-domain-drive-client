@@ -11,6 +11,7 @@ import 'package:private_domain_drive_client/features/auth/domain/user_session.da
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
 import 'package:private_domain_drive_client/features/workspace/domain/file_item.dart';
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
+import 'package:private_domain_oss/private_domain_oss.dart';
 import 'package:private_domain_drive_client/features/workspace/presentation/workspace_page.dart';
 import 'package:private_domain_drive_client/shared/state/app_controller.dart';
 import 'package:private_domain_drive_client/shared/state/app_scope.dart';
@@ -599,6 +600,13 @@ class _FakeOssClient extends OssClient {
   Future<List<String>> listAllObjectKeys(String path, UserSession session) =>
       Future<void>.value()
           .then((_) => objectKeysByPath[path] ?? const <String>[]);
+
+  @override
+  Future<List<OssNativeObject>> listAllObjects(
+    String path,
+    UserSession session,
+  ) async =>
+      const <OssNativeObject>[];
 
   @override
   Future<BatchDeleteResult> deleteMany(
