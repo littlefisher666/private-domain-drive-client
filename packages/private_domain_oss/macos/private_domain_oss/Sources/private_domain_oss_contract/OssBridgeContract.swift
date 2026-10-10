@@ -166,11 +166,14 @@ public enum OssBridgeContract {
             case "InvalidArgument", "InvalidRequest": code = "invalidRequest"
             default: code = "serviceError"
             }
-            return StableError(code: code, message: "OSS 请求失败", details: [
+            var details: [String: Any] = [
                 "statusCode": server.statusCode,
                 "ossCode": server.code,
                 "requestId": server.requestId,
-            ])
+            ]
+            if !server.message.isEmpty { details["ossMessage"] = server.message }
+            if !server.ec.isEmpty { details["ossEc"] = server.ec }
+            return StableError(code: code, message: "OSS 请求失败", details: details)
         }
         if let client = error as? ClientError {
             let code = client.code.contains("Parameter") ? "invalidRequest" : "networkUnavailable"

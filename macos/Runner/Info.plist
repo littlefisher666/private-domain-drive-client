@@ -37,5 +37,7 @@
 	<string>NSApplication</string>
 	<key>SUPublicEDKey</key>
 	<string>xgTVuSWfGYsHDXrTe4K6pKJMfOsJnUcGDoSKvJ6hCaY=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
 </dict>
 </plist>

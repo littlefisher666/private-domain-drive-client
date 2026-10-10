@@ -259,7 +259,15 @@ class OssClient {
     await file.parent.create(recursive: true);
     await file.writeAsString(content, flush: true);
     try {
-      await uploadFile(path, file.path, session, taskId: 'manifest-$path');
+      // taskId 必须唯一：原生侧同名传输会先取消旧任务，相册清单存在
+      // 并发更新（删除清理与还原合并同时触发），固定 taskId 会导致
+      // 其中一方被误取消。
+      await uploadFile(
+        path,
+        file.path,
+        session,
+        taskId: 'manifest-$path-${DateTime.now().microsecondsSinceEpoch}',
+      );
     } finally {
       if (await file.exists()) await file.delete();
     }
@@ -398,6 +406,7 @@ class OssClient {
     // 解析不出拍摄时间再走 image/exif 兜底（OSS 该接口不支持 HEIC）。
     final header = <int>[];
     ImageExifInfo? headerInfo;
+    var isJpeg = false;
     for (final targetSize in _jpegExifProbeSizes) {
       List<int> chunk;
       try {
@@ -415,8 +424,7 @@ class OssClient {
       }
       header.addAll(chunk);
       final info = _parseImageHeaderInfo(header);
-      final isJpeg =
-          header.length >= 2 && header[0] == 0xff && header[1] == 0xd8;
+      isJpeg = header.length >= 2 && header[0] == 0xff && header[1] == 0xd8;
       if (info != null) {
         if (info.takenAt != null) return info;
         if (!isJpeg) {
@@ -432,31 +440,38 @@ class OssClient {
       if (header.length < targetSize) break;
     }
     DateTime? takenAt;
-    try {
-      final bytes = await _getProcessedObject(
-        path,
-        session,
-        maxBytes: 128 * 1024,
-        process: 'image/exif',
-      );
-      final value = jsonDecode(utf8.decode(bytes));
-      if (value is Map) {
-        for (final key in <String>[
-          'DateTimeOriginal',
-          'DateTimeDigitized',
-          'DateTime',
-        ]) {
-          final raw = _findExifValue(value, key);
-          if (raw is! String) continue;
-          final parsed = _parseExifDate(raw);
-          if (parsed != null) {
-            takenAt = parsed;
-            break;
+    // OSS 的 image/exif 仅支持 JPEG；HEIC 等格式服务端会拒绝
+    // （InvalidArgument），头部解析不出就不再请求。
+    if (isJpeg) {
+      try {
+        final bytes = await _getProcessedObject(
+          path,
+          session,
+          maxBytes: 128 * 1024,
+          process: 'image/exif',
+        );
+        final value = jsonDecode(utf8.decode(bytes));
+        if (value is Map) {
+          for (final key in <String>[
+            'DateTimeOriginal',
+            'DateTimeDigitized',
+            'DateTime',
+          ]) {
+            final raw = _findExifValue(value, key);
+            if (raw is! String) continue;
+            final parsed = _parseExifDate(raw);
+            if (parsed != null) {
+              takenAt = parsed;
+              break;
+            }
           }
         }
+      } catch (error) {
+        // 图片处理接口失败或格式不支持时，保留文件头解析结果。
+        if (kDebugMode) {
+          debugPrint('[exif] image/exif 兜底失败 $path: $error');
+        }
       }
-    } catch (_) {
-      // 图片处理接口失败或格式不支持时，保留文件头解析结果。
     }
     return ImageExifInfo(
       takenAt: takenAt ?? headerInfo?.takenAt,
@@ -772,6 +787,7 @@ class OssClient {
       }
       final details = error.details;
       final ossCode = details is Map ? details['ossCode'] : null;
+      final ossMessage = details is Map ? details['ossMessage'] : null;
       final sdkCode = details is Map ? details['sdkCode'] : null;
       final bridgeCode = details is Map ? details['bridgeCode'] : null;
       final nativeErrorType =
@@ -786,8 +802,15 @@ class OssClient {
         statusCode,
       ].join('|');
       if (kDebugMode && _reportedErrorSignatures.add(errorSignature)) {
+        final site = StackTrace.current
+            .toString()
+            .split('\n')
+            .skip(1)
+            .take(3)
+            .join(' <- ');
         debugPrint(
-          'OSS 请求失败：${error.code}（ossCode: ${ossCode ?? '-'}，sdkCode: ${sdkCode ?? '-'}，bridgeCode: ${bridgeCode ?? '-'}，nativeType: ${nativeErrorType ?? '-'}，状态码: ${statusCode ?? '-'}）',
+          'OSS 请求失败：${error.code}（ossCode: ${ossCode ?? '-'}，sdkCode: ${sdkCode ?? '-'}，bridgeCode: ${bridgeCode ?? '-'}，nativeType: ${nativeErrorType ?? '-'}，状态码: ${statusCode ?? '-'}）'
+          '${ossMessage == null ? '' : '\nOSS 消息: $ossMessage'}\n调用位置: $site',
         );
       }
       const messages = <String, String>{

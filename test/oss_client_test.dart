@@ -75,6 +75,7 @@ void main() {
 
   test('读取 OSS EXIF 中的原始拍摄时间', () async {
     final native = _FakeNative()
+      ..rangeResult = _jpegHeaderWithoutDate()
       ..bytesResult = Uint8List.fromList(
         utf8.encode(
           '{"DateTimeOriginal":"2026:09:08 19:25:41"}',
@@ -149,19 +150,20 @@ void main() {
     expect(native.maxBytesRequests.last, 2 * 1024);
   });
 
-  test('头部解析不出拍摄时间时回退图片处理 EXIF', () async {
+  test('非 JPEG 头部解析失败时不请求 image/exif 兜底', () async {
+    // OSS 的 image/exif 仅支持 JPEG，对 HEIC 等格式会返回
+    // InvalidArgument；头部解析不出就应放弃，不发图片处理请求。
     final native = _FakeNative()
-      ..bytesResult = Uint8List.fromList(
-        utf8.encode('{"DateTimeOriginal":"2026:09:08 19:25:41"}'),
-      );
+      ..bytesResult = _heicHeaderWithoutExif()
+      ..processedBytesError = PlatformException(code: 'invalidRequest');
 
     final info = await OssClient(native: native).readImageExif(
       'shared/相册/test.heic',
       _session(),
     );
 
-    expect(info.takenAt, DateTime(2026, 9, 8, 19, 25, 41));
-    expect(native.processes, <String?>[null, 'image/exif']);
+    expect(info.takenAt, isNull);
+    expect(native.processes, everyElement(isNull));
   });
 
   test('缩略图请求会重新同步原生 OSS 会话', () async {
@@ -257,6 +259,31 @@ Uint8List _jpegHeaderWithTakenAt(String date) {
   final dateBytes = ascii.encode('$date\x00');
   expect(dateBytes, hasLength(20));
   return _jpegHeaderWithDateValue(dateBytes);
+}
+
+/// SOI + 空 EXIF（IFD0 零条目）的 JPEG 头：格式合法但没有拍摄时间，
+/// 用于验证走 image/exif 兜底的场景。
+Uint8List _jpegHeaderWithoutDate() => Uint8List.fromList(<int>[
+      0xff, 0xd8,
+      0xff, 0xe1, 0x00, 0x14,
+      0x45, 0x78, 0x69, 0x66, 0x00, 0x00,
+      0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x08,
+      0x00, 0x00,
+    ]);
+
+/// 无 EXIF 的 HEIC 头：客户端解析不出拍摄时间。
+Uint8List _heicHeaderWithoutExif() {
+  final ftyp = <int>[
+    0x00, 0x00, 0x00, 0x18,
+    0x66, 0x74, 0x79, 0x70, // 'ftyp'
+    0x68, 0x65, 0x69, 0x63, // 'heic'
+    0x00, 0x00, 0x00, 0x00,
+    0x6d, 0x69, 0x66, 0x31,
+    0x68, 0x65, 0x69, 0x63,
+  ];
+  return Uint8List.fromList(
+    <int>[...ftyp, ...List<int>.filled(512, 0x00)],
+  );
 }
 
 /// 日期串允许任意字节（如带"下午"等非标准尾巴的相册导出文件）。
@@ -359,6 +386,7 @@ class _FakeNative extends PrivateDomainOss {
   final List<({String prefix, String? delimiter})> listRequests =
       <({String prefix, String? delimiter})>[];
   Uint8List bytesResult = Uint8List(0);
+  Uint8List? rangeResult;
   Object? bytesError;
   Object? processedBytesError;
   String? lastProcess;
@@ -410,6 +438,7 @@ class _FakeNative extends PrivateDomainOss {
     }
     final error = bytesError;
     if (error != null) throw error;
+    if (range != null) return rangeResult ?? bytesResult;
     return bytesResult;
   }
 
