@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/router/route_names.dart';
+import '../../../core/constants/app_constants.dart';
 import '../../../core/version/app_version.dart';
 import '../../../shared/state/app_scope.dart';
 import '../application/update_service.dart';
@@ -95,6 +96,14 @@ class _SettingsPageState extends State<SettingsPage> {
   UpdateCheckResult? _updateCheck;
   bool _checkingUpdate = false;
   bool _updateCheckFailed = false;
+
+  /// 本地调试配置（DISABLE_STARTUP_UPDATE_CHECK）强制关闭启动检查时，
+  /// 设置页开关锁定为关，避免展示与实际行为不一致。
+  bool get _devUpdateCheckLocked => AppConstants.disableStartupUpdateCheck;
+
+  String get _autoCheckSubtitle => _devUpdateCheckLocked
+      ? '本地调试配置已禁用启动检查'
+      : '打开应用时在后台检查新版本';
 
   @override
   void initState() {
@@ -283,6 +292,23 @@ class _SettingsPageState extends State<SettingsPage> {
                     trailing: _updateTrailing,
                     onTap: _checkForUpdate,
                   ),
+                  if (_sparkleEnabled) ...<Widget>[
+                    const Divider(height: 1),
+                    SwitchListTile(
+                      contentPadding: _mobileTilePadding(desktop),
+                      secondary: _SettingsLeadingIcon(
+                        icon: Icons.autorenew_outlined,
+                        desktop: desktop,
+                      ),
+                      title: const Text('启动时自动检查更新'),
+                      subtitle: Text(_autoCheckSubtitle),
+                      value:
+                          controller.autoCheckUpdates && !_devUpdateCheckLocked,
+                      onChanged: _devUpdateCheckLocked
+                          ? null
+                          : (value) => controller.setAutoCheckUpdates(value),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -383,7 +409,7 @@ class _SettingsPageState extends State<SettingsPage> {
           if (_sparkle.latestVersion != null) {
             return '新版本 ${_sparkle.latestVersion} 可更新';
           }
-          return '通过 Sparkle 自动更新';
+          return '点击立即检查是否有新版本';
       }
     }
     if (_checkingUpdate) return '正在检查最新版本…';

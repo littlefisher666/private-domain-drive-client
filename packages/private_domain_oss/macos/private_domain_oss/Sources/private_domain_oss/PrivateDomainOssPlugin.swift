@@ -553,6 +553,14 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
     }
 
     static func flutterError(_ error: Error) -> FlutterError {
+        if let server = error as? ServerError, !server.message.isEmpty {
+            print(
+                "[OSS] \(server.code)：\(server.message)"
+                    + (server.ec.isEmpty ? "" : "（ec: \(server.ec)）")
+                    + (server.requestId.isEmpty ? "" : "（requestId: \(server.requestId)）")
+                    + (server.requestTarget.isEmpty ? "" : "\n[OSS] 请求目标: \(server.requestTarget)")
+            )
+        }
         let stable = OssBridgeContract.stableError(error)
         return FlutterError(
             code: stable.code,

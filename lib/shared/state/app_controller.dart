@@ -218,6 +218,7 @@ class AppController extends ChangeNotifier {
   static const _fileSortOptionsByDirectoryKey =
       'file_sort_options_by_directory';
   static const _themeModeKey = 'theme_mode';
+  static const _autoCheckUpdatesKey = 'auto_check_updates';
   static const _thumbnailSizeKey = 'thumbnail_size';
   static const _takenAtCachePrefix = 'image_taken_at:v5:';
   static const _videoFileExtensions = <String>{
@@ -269,6 +270,7 @@ class AppController extends ChangeNotifier {
   String _shareTargetPath = rootPrefix;
   bool _bootstrapped = false;
   ThemeMode _themeMode = ThemeMode.light;
+  bool _autoCheckUpdates = true;
   int _treeRevision = 0;
   bool _isMultiSelectionMode = false;
   String? _selectionAnchorPath;
@@ -332,6 +334,25 @@ class AppController extends ChangeNotifier {
   Set<String> get multiSelectedPaths => multiSelectedPathsListenable.value;
   bool get bootstrapped => _bootstrapped;
   ThemeMode get themeMode => _themeMode;
+
+  /// 是否在启动时自动检查更新（仅 macOS Sparkle 路径消费）。
+  bool get autoCheckUpdates => _autoCheckUpdates;
+
+  /// 更新启动自动检查偏好；写入失败时保留本次会话的选择。
+  Future<void> setAutoCheckUpdates(bool value) async {
+    if (_autoCheckUpdates == value) {
+      return;
+    }
+    _autoCheckUpdates = value;
+    notifyListeners();
+    try {
+      final preferences = _preferences ?? await SharedPreferences.getInstance();
+      _preferences = preferences;
+      await preferences.setBool(_autoCheckUpdatesKey, value);
+    } catch (_) {
+      // 偏好写入失败时仍保留本次会话的选择。
+    }
+  }
   int get treeRevision => _treeRevision;
   Capabilities get capabilities =>
       _session?.capabilities ?? const Capabilities.member();
@@ -350,6 +371,7 @@ class AppController extends ChangeNotifier {
       _restoreTransferHistory(preferences);
       _restoreThemeMode(preferences);
       _restoreThumbnailSize(preferences);
+      _restoreAutoCheckUpdates(preferences);
       _transferHistoryReady = true;
     } catch (_) {
       // 偏好读取失败不应阻断会话恢复。
@@ -773,6 +795,10 @@ class AppController extends ChangeNotifier {
       'large' => ThumbnailSize.large,
       _ => ThumbnailSize.medium,
     };
+  }
+
+  void _restoreAutoCheckUpdates(SharedPreferences preferences) {
+    _autoCheckUpdates = preferences.getBool(_autoCheckUpdatesKey) ?? true;
   }
 
   FileSortOption _fileSortOptionForPath(String path) =>

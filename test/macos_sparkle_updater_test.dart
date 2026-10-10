@@ -19,6 +19,12 @@ class _FakeSparkleApi implements SparkleUpdaterApi {
   @override
   Future<void> checkForUpdates({bool? inBackground}) async =>
       checkCalls.add(inBackground);
+
+  @override
+  Future<void> setScheduledCheckInterval(int interval) async =>
+      scheduledCheckIntervals.add(interval);
+
+  final List<int> scheduledCheckIntervals = <int>[];
 }
 
 AppcastItem _item(String version) => AppcastItem(

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:auto_updater/auto_updater.dart';
 import 'package:flutter/foundation.dart';
 
+import '../../../core/constants/app_constants.dart';
+
 bool usesSparkleUpdate(TargetPlatform platform) =>
     platform == TargetPlatform.macOS;
 
@@ -15,6 +17,7 @@ abstract class SparkleUpdaterApi {
   void addListener(UpdaterListener listener);
   Future<void> setFeedURL(String feedUrl);
   Future<void> checkForUpdates({bool? inBackground});
+  Future<void> setScheduledCheckInterval(int interval);
 }
 
 class PluginSparkleUpdaterApi implements SparkleUpdaterApi {
@@ -31,6 +34,10 @@ class PluginSparkleUpdaterApi implements SparkleUpdaterApi {
   @override
   Future<void> checkForUpdates({bool? inBackground}) =>
       AutoUpdater.instance.checkForUpdates(inBackground: inBackground);
+
+  @override
+  Future<void> setScheduledCheckInterval(int interval) =>
+      AutoUpdater.instance.setScheduledCheckInterval(interval);
 }
 
 /// macOS 端 Sparkle 自更新适配层。
@@ -70,6 +77,11 @@ class MacosSparkleUpdater implements UpdaterListener {
     if (_initialized) return;
     _api.addListener(this);
     await _api.setFeedURL(feedUrl);
+    // Sparkle 原生层在插件初始化时就已 start，会按默认 86400s 自行调度检查；
+    // 调试环境关闭该自动调度（0 = 禁用），手动检查不受影响。
+    if (AppConstants.disableStartupUpdateCheck) {
+      await _api.setScheduledCheckInterval(0);
+    }
     _initialized = true;
   }
 

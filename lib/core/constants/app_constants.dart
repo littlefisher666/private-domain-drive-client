@@ -21,4 +21,8 @@ class AppConstants {
   /// FC HTTP 触发器要求签名请求；如本地调试入口明确关闭鉴权，可显式传入 false。
   static const fcSignRequests =
       bool.fromEnvironment('FC_SIGN_REQUESTS', defaultValue: true);
+
+  /// 关闭启动时的自动更新检查（Sparkle 静默检查）；设置页手动检查不受影响。
+  static const disableStartupUpdateCheck =
+      bool.fromEnvironment('DISABLE_STARTUP_UPDATE_CHECK');
 }
