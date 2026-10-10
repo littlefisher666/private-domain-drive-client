@@ -48,12 +48,13 @@ class _DirectoryPickerDialogState extends State<_DirectoryPickerDialog> {
 
   Future<List<_DirectoryOption>> _load(String path) async {
     // 对话框只展示文件夹名称，用轻量前缀列举即可，避免工作区浏览的
-    // 逐目录统计请求拖慢进出目录速度。
-    final directories = await widget.controller.listSubdirectories(path);
+    // 逐目录统计请求拖慢进出目录速度。根目录下同时合并别名条目。
+    final directories = await widget.controller.listPickerDirectories(path);
     return directories
         .map((item) => _DirectoryOption(
               path: item.path,
               name: item.name,
+              isAlias: item.isAlias,
               disabled: widget.invalidPrefixes
                   .any((prefix) => item.path.startsWith(prefix)),
             ))
@@ -175,15 +176,25 @@ class _DirectoryPickerDialogState extends State<_DirectoryPickerDialog> {
                       final option = options[index];
                       return ListTile(
                         dense: true,
-                        leading: Icon(
-                          Icons.folder_outlined,
-                          size: 20,
-                          color: option.disabled
-                              ? scheme.onSurfaceVariant
-                              : scheme.primary,
-                        ),
+                        leading: option.isAlias
+                            ? Icon(
+                                Icons.link,
+                                size: 20,
+                                color: option.disabled
+                                    ? scheme.onSurfaceVariant
+                                    : scheme.primary,
+                              )
+                            : Icon(
+                                Icons.folder_outlined,
+                                size: 20,
+                                color: option.disabled
+                                    ? scheme.onSurfaceVariant
+                                    : scheme.primary,
+                              ),
                         title: Text(
-                          option.name,
+                          option.isAlias
+                              ? '${option.name}（链接）'
+                              : option.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -223,10 +234,12 @@ class _DirectoryOption {
   const _DirectoryOption({
     required this.path,
     required this.name,
+    required this.isAlias,
     required this.disabled,
   });
 
   final String path;
   final String name;
+  final bool isAlias;
   final bool disabled;
 }

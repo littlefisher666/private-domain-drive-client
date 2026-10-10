@@ -7,6 +7,9 @@ class FileItem {
     this.itemCount,
     this.updatedAt,
     this.takenAt,
+    this.isAlias = false,
+    this.aliasId,
+    this.createdBy,
   });
 
   final String path;
@@ -20,6 +23,15 @@ class FileItem {
 
   /// 图片 EXIF 中的拍摄时间；非图片或缺少 EXIF 时为空。
   final DateTime? takenAt;
+
+  /// 虚拟目录别名条目：仅在会话根目录渲染，path 即目标真实前缀。
+  final bool isAlias;
+
+  /// 别名在 links.json 中的条目 id；非别名为空。
+  final String? aliasId;
+
+  /// 别名创建者用户名，仅用于展示；非别名或缺失时为空。
+  final String? createdBy;
 }
 
 enum BrowseMode { list, grid }
@@ -148,6 +160,9 @@ extension FileItemX on FileItem {
     int? itemCount,
     DateTime? updatedAt,
     DateTime? takenAt,
+    bool? isAlias,
+    String? aliasId,
+    String? createdBy,
   }) {
     return FileItem(
       path: path ?? this.path,
@@ -157,6 +172,9 @@ extension FileItemX on FileItem {
       itemCount: itemCount ?? this.itemCount,
       updatedAt: updatedAt ?? this.updatedAt,
       takenAt: takenAt ?? this.takenAt,
+      isAlias: isAlias ?? this.isAlias,
+      aliasId: aliasId ?? this.aliasId,
+      createdBy: createdBy ?? this.createdBy,
     );
   }
 }

@@ -310,6 +310,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
         onRenameSubmit: (_, __) async => false,
         onRenameCancel: () {},
         onDelete: (_) {},
+        onCreateLink: (_) {},
       );
     }
     return WorkspaceListView(
@@ -338,6 +339,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       onRenameSubmit: (_, __) async => false,
       onRenameCancel: () {},
       onDelete: (_) {},
+      onCreateLink: (_) {},
     );
   }
 

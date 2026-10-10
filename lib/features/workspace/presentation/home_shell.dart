@@ -50,10 +50,10 @@ class _HomeShellState extends State<HomeShell> {
     final controller = AppScope.of(context);
 
     // 移动端系统后退键：回收站内非根目录先向上返回；回收站根目录及其他
-    // 非「文件」tab 切回「文件」；「文件」tab 内非根目录返回上级；
-    // 仅「文件」tab 且位于根目录时才允许退出应用。
+    // 非「文件」tab 切回「文件」；「文件」tab 内非根目录返回上级（别名
+    // 根层级返回会话根目录）；仅「文件」tab 且位于根目录时才允许退出应用。
     return PopScope(
-      canPop: _index == 0 && controller.currentPath == AppController.rootPrefix,
+      canPop: _index == 0 && controller.backNavigationPath() == null,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) {
           return;
@@ -72,10 +72,9 @@ class _HomeShellState extends State<HomeShell> {
           _select(0);
           return;
         }
-        if (controller.currentPath != AppController.rootPrefix) {
-          controller.setCurrentPath(
-            controller.parentPath(controller.currentPath),
-          );
+        final target = controller.backNavigationPath();
+        if (target != null) {
+          controller.setCurrentPath(target);
         }
       },
       child: Scaffold(
