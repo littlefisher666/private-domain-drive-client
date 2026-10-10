@@ -62,7 +62,7 @@ class OssClient {
     final page = await _platform(
       () => _native.listObjects(prefix: prefix, delimiter: '/'),
     );
-    final folders = <FileItem>[
+    return <FileItem>[
       for (final key in page.commonPrefixes)
         if (key != prefix && !_isHiddenEntry(key, prefix))
           FileItem(
@@ -70,25 +70,6 @@ class OssClient {
             name: key.substring(prefix.length).replaceFirst(RegExp(r'/$'), ''),
             isDirectory: true,
           ),
-    ];
-    final folderSummaries = await Future.wait<_DirectorySummary?>(
-      folders.map((folder) async {
-        try {
-          return await _readDirectorySummary(folder.path);
-        } catch (_) {
-          // 文件夹统计失败不应阻断当前目录的浏览，界面会回退显示“文件夹”。
-          return null;
-        }
-      }),
-    );
-    return <FileItem>[
-      for (var index = 0; index < folders.length; index++)
-        folderSummaries[index] == null
-            ? folders[index]
-            : folders[index].copyWith(
-                itemCount: folderSummaries[index]!.itemCount,
-                updatedAt: folderSummaries[index]!.updatedAt,
-              ),
       for (final object in page.objects)
         if (object.key != prefix &&
             !object.key.substring(prefix.length).contains('/') &&
@@ -108,8 +89,17 @@ class OssClient {
     ];
   }
 
-  /// 读取文件夹直属内容及最新直属对象的更新时间，不递归遍历子目录。
-  Future<_DirectorySummary> _readDirectorySummary(String path) async {
+  /// 统计指定文件夹的直属条目数与最新更新时间，不递归遍历子目录。
+  /// 每次调用完整翻页遍历该文件夹，调用方需自行控制并发与频率。
+  Future<DirectorySummary> directorySummary(
+    String path,
+    UserSession session,
+  ) async {
+    await _ensureConfigured(session);
+    return _readDirectorySummary(path);
+  }
+
+  Future<DirectorySummary> _readDirectorySummary(String path) async {
     final prefix = _dir(path);
     var itemCount = 0;
     DateTime? updatedAt;
@@ -140,7 +130,7 @@ class OssClient {
         throw AppError('OSS 分页响应缺少下一页标识', code: 'OSS_INVALID_RESPONSE');
       }
     } while (marker != null && marker.isNotEmpty);
-    return _DirectorySummary(itemCount: itemCount, updatedAt: updatedAt);
+    return DirectorySummary(itemCount: itemCount, updatedAt: updatedAt);
   }
 
   DateTime? _latestUpdatedAt(DateTime? current, OssNativeObject object) {
@@ -869,8 +859,8 @@ class OssClient {
   String _dir(String value) => value.endsWith('/') ? value : '$value/';
 }
 
-class _DirectorySummary {
-  const _DirectorySummary({required this.itemCount, required this.updatedAt});
+class DirectorySummary {
+  const DirectorySummary({required this.itemCount, required this.updatedAt});
 
   final int itemCount;
   final DateTime? updatedAt;

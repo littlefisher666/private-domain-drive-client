@@ -9,7 +9,7 @@ import 'package:private_domain_drive_client/features/workspace/infrastructure/os
 import 'package:private_domain_oss/private_domain_oss.dart';
 
 void main() {
-  test('列表通过原生 facade 返回统一对象模型', () async {
+  test('列表通过原生 facade 返回统一对象模型，不再内联统计子文件夹', () async {
     final native = _FakeNative()
       ..listPage = const OssListPage(
         objects: <OssNativeObject>[
@@ -34,11 +34,46 @@ void main() {
     final items = await OssClient(native: native).list('shared/', _session());
 
     expect(items.map((item) => item.name), <String>['folder', 'a.txt']);
-    expect(items.first.itemCount, 2);
-    expect(items.first.updatedAt, isNotNull);
+    // 文件夹统计已拆分为独立的 directorySummary 查询，list 不再翻页遍历。
+    expect(items.first.itemCount, isNull);
+    expect(items.first.updatedAt, isNull);
+    expect(
+      native.listRequests.map((request) => request.prefix),
+      <String>['shared/'],
+    );
     expect(native.configureCalls, 1);
-    expect(native.listRequests.first.prefix, 'shared/');
     expect(native.listRequests.first.delimiter, '/');
+  });
+
+  test('directorySummary 统计直属条目数与最新更新时间并过滤隐藏条目', () async {
+    final native = _FakeNative()
+      ..listPagesByPrefix['shared/folder/'] = const OssListPage(
+        objects: <OssNativeObject>[
+          OssNativeObject(
+            key: 'shared/folder/',
+            size: 0,
+            lastModifiedMilliseconds: 1778893200000,
+          ),
+          OssNativeObject(
+            key: 'shared/folder/.DS_Store',
+            size: 6,
+            lastModifiedMilliseconds: 1778899200000,
+          ),
+          OssNativeObject(key: 'shared/folder/a.txt', size: 12),
+        ],
+        commonPrefixes: <String>['shared/folder/child/'],
+        isTruncated: false,
+      );
+
+    final summary = await OssClient(
+      native: native,
+    ).directorySummary('shared/folder/', _session());
+
+    expect(summary.itemCount, 2);
+    expect(
+      summary.updatedAt,
+      DateTime.fromMillisecondsSinceEpoch(1778893200000, isUtc: true).toLocal(),
+    );
   });
 
   test('缩略图通过 SDK 图片处理参数读取受限字节', () async {
