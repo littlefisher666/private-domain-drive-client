@@ -15,6 +15,7 @@ import '../../features/preview/infrastructure/text_preview_loader.dart';
 import '../../features/workspace/domain/file_item.dart';
 import '../../features/workspace/domain/move_task_entry.dart';
 import '../../features/workspace/domain/recycle_bin_entry.dart';
+import '../../features/workspace/infrastructure/directory_summary_service.dart';
 import '../../features/workspace/infrastructure/oss_client.dart';
 import '../cache/disk_document_cache.dart';
 import '../cache/disk_image_cache.dart';
@@ -54,11 +55,15 @@ class BatchDeletePreview {
     required this.selectedCount,
     required this.directoryCount,
     required this.objectPaths,
+    this.topLevelPaths = const <String>{},
   });
 
   final int selectedCount;
   final int directoryCount;
   final Set<String> objectPaths;
+
+  /// 用户勾选的顶层条目路径（不含目录展开结果），供统计缓存按目录修正。
+  final Set<String> topLevelPaths;
   int get objectCount => objectPaths.length;
 }
 
@@ -197,6 +202,11 @@ class AppController extends ChangeNotifier {
 
   final SessionRepository _sessionRepository;
   final OssClient _ossClient;
+  late final DirectorySummaryService _directorySummaryService =
+      DirectorySummaryService(
+    ossClient: _ossClient,
+    sessionProvider: () => _session,
+  );
 
   /// 相册等模块与主控制器共用同一个 OSS 客户端（凭证配置状态共享）。
   OssClient get ossClient => _ossClient;
@@ -441,6 +451,7 @@ class AppController extends ChangeNotifier {
       if (session.isRemote) {
         await _ossClient.configureSession(session);
       }
+      _directorySummaryService.bumpGeneration();
       selectedItemListenable.value = null;
       _clearDirectorySizeCache();
       await _rememberCredentials(account: account.trim(), password: password);
@@ -479,6 +490,7 @@ class AppController extends ChangeNotifier {
     }
     await _ossClient.clearConfiguration();
     await _sessionRepository.logout();
+    _directorySummaryService.bumpGeneration();
     _session = null;
     _remoteDirectories.clear();
     selectedItemListenable.value = null;
@@ -592,6 +604,67 @@ class AppController extends ChangeNotifier {
             isDirectory: true,
           ),
     ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  }
+
+  /// 读取单个目录统计的缓存命中值；未命中返回 null。
+  Future<DirectorySummary?> cachedDirectorySummary(String path) =>
+      _directorySummaryService.cached(path);
+
+  /// 批量读取目录统计缓存命中值，key 为目录路径。
+  Future<Map<String, DirectorySummary>> cachedDirectorySummaries(
+          Iterable<String> paths) =>
+      _directorySummaryService.cachedAll(paths);
+
+  /// 后台受限并发统计子文件夹并逐个回调，不阻塞调用方。
+  Future<void> refreshDirectorySummaries(
+    Iterable<String> paths, {
+    required void Function(String path, DirectorySummary summary) onResult,
+  }) =>
+      _directorySummaryService.refresh(paths, onResult);
+
+  void noteDirectoryFilesAdded(String dir, int count, DateTime at) =>
+      _directorySummaryService.noteFilesAdded(dir, count, at);
+
+  void noteDirectoryFilesRemoved(String dir, int count) =>
+      _directorySummaryService.noteFilesRemoved(dir, count);
+
+  void invalidateDirectorySummary(String dir) =>
+      _directorySummaryService.invalidate(dir);
+
+  /// 回收站清理等不可靠路径调用 invalidate。写修正后同时触发该目录的
+  /// 后台校准，让计数最终与 OSS 一致；校准不阻塞操作反馈。
+  void _calibrateDirectorySummary(String dir) {
+    unawaited(_directorySummaryService.refresh(<String>[dir], (_, __) {}));
+  }
+
+  /// 对一组成功删除/新增的顶层条目按所属目录修正统计缓存。
+  void _noteTopLevelChanges(
+    Iterable<String> topLevelPaths,
+    Set<String> failedPaths, {
+    required int delta,
+  }) {
+    final affected = <String>{};
+    final counts = <String, int>{};
+    for (final path in topLevelPaths) {
+      final parent = _normalizeDir(parentPath(path));
+      affected.add(parent);
+      if (failedPaths.contains(path)) {
+        // 该条目未能删除/搬运，无法可靠增量，直接失效由校准重建。
+        _directorySummaryService.invalidate(parent);
+        continue;
+      }
+      counts[parent] = (counts[parent] ?? 0) + delta.abs();
+    }
+    counts.forEach((dir, count) {
+      if (delta >= 0) {
+        _directorySummaryService.noteFilesAdded(dir, count, DateTime.now());
+      } else {
+        _directorySummaryService.noteFilesRemoved(dir, count);
+      }
+    });
+    for (final dir in affected) {
+      _calibrateDirectorySummary(dir);
+    }
   }
 
   Future<List<int>> loadThumbnail(FileItem item) async {
@@ -1104,6 +1177,8 @@ class AppController extends ChangeNotifier {
     final path = '$dir$folderName/';
     await ensureSessionReady();
     await _ossClient.createFolder(path, _requireSession());
+    _directorySummaryService.noteFilesAdded(dir, 1, DateTime.now());
+    _calibrateDirectorySummary(dir);
     _clearDirectorySizeCache();
     _treeRevision++;
     notifyListeners();
@@ -1127,6 +1202,12 @@ class AppController extends ChangeNotifier {
     final session = _requireSession();
     await _ossClient.copy(item.path, newPath, session);
     await _ossClient.delete(item.path, session);
+    if (item.isDirectory) {
+      // 目录改名等价于移动，旧路径统计失效、新路径由校准重建。
+      _directorySummaryService.invalidate(item.path);
+      _directorySummaryService.invalidate(newPath);
+      _calibrateDirectorySummary(newPath);
+    }
     _treeRevision++;
     _clearDirectorySizeCache();
     notifyListeners();
@@ -1161,6 +1242,11 @@ class AppController extends ChangeNotifier {
     }
     _treeRevision++;
     _clearDirectorySizeCache();
+    _noteTopLevelChanges(
+      <String>[item.path],
+      const <String>{},
+      delta: -1,
+    );
 
     if (selectedItemListenable.value?.path == item.path) {
       selectedItemListenable.value = null;
@@ -1188,6 +1274,7 @@ class AppController extends ChangeNotifier {
       selectedCount: selected.length,
       directoryCount: selected.where((item) => item.isDirectory).length,
       objectPaths: paths,
+      topLevelPaths: selected.map((item) => item.path).toSet(),
     );
   }
 
@@ -1215,6 +1302,7 @@ class AppController extends ChangeNotifier {
       }
       _treeRevision++;
       selectedItemListenable.value = null;
+      _noteTopLevelChanges(preview.topLevelPaths, failed.toSet(), delta: -1);
       unawaited(_galleryHooks?.onObjectsDeleted(deleted.toSet()));
       notifyListeners();
     }
@@ -1314,6 +1402,15 @@ class AppController extends ChangeNotifier {
     }
     _treeRevision++;
     _clearDirectorySizeCache();
+    // 还原目标位置可能带改名后缀，逐个失效还原目录，由校准重建。
+    final restoredDirs = <String>{
+      for (final destination in restored.values)
+        _normalizeDir(parentPath(destination)),
+    };
+    for (final dir in restoredDirs) {
+      _directorySummaryService.invalidate(dir);
+      _calibrateDirectorySummary(dir);
+    }
     unawaited(_galleryHooks?.onObjectsRestored(restored.values.toSet()));
     notifyListeners();
   }
@@ -1334,6 +1431,10 @@ class AppController extends ChangeNotifier {
       throw AppError('有 ${failed.length} 个对象删除失败，请稍后重试',
           code: 'OSS_DELETE_FAILED');
     }
+    // 清空回收批次不影响可浏览目录的计数，仅失效原目录由校准重建。
+    final originalDir = _normalizeDir(parentPath(entry.originalPath));
+    _directorySummaryService.invalidate(originalDir);
+    _calibrateDirectorySummary(originalDir);
     notifyListeners();
   }
 
@@ -1986,6 +2087,18 @@ class AppController extends ChangeNotifier {
     _remoteDirectories.addAll(addedPrefixes.map(_normalizeDir));
     _treeRevision++;
     _clearDirectorySizeCache();
+    // 移动同时修正源目录与目标目录：正向移动 removedPrefixes 为源条目、
+    // addedPrefixes 为目标落点；撤销移动时两者互换，同一套修正逻辑成立。
+    _noteTopLevelChanges(
+      removedPrefixes,
+      summary.hasFailures ? removedPrefixes.toSet() : const <String>{},
+      delta: -1,
+    );
+    _noteTopLevelChanges(
+      addedPrefixes,
+      summary.hasFailures ? addedPrefixes.toSet() : const <String>{},
+      delta: 1,
+    );
     if (selectedItemListenable.value != null &&
         removedPrefixes.any((prefix) =>
             selectedItemListenable.value!.path.startsWith(_normalizeDir(prefix)))) {
@@ -2058,6 +2171,8 @@ class AppController extends ChangeNotifier {
           onProgress: report,
         );
         if (isCanceled()) throw const TransferCanceledException();
+        _directorySummaryService.noteFilesAdded(dir, 1, DateTime.now());
+        _calibrateDirectorySummary(dir);
         _treeRevision++;
         _clearDirectorySizeCache();
         notifyListeners();
@@ -2562,6 +2677,9 @@ class AppController extends ChangeNotifier {
       }
     }
     _pendingShareItems = const <ShareImportItem>[];
+    // 分享导入经传输队列异步完成，计数路径不可靠，失效目标目录由校准重建。
+    _directorySummaryService.invalidate(_shareTargetPath);
+    _calibrateDirectorySummary(_shareTargetPath);
     notifyListeners();
     // 多文件分享导入归属同一批次，传输中心可展示整批上传汇总。
     final batchId = items.length > 1

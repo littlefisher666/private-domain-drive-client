@@ -20,6 +20,7 @@ import '../../preview/domain/preview_type.dart';
 import '../../preview/presentation/preview_page.dart';
 import '../domain/file_item.dart';
 import '../domain/move_task_entry.dart';
+import '../infrastructure/oss_client.dart';
 import 'directory_picker_dialog.dart';
 
 class WorkspacePage extends StatefulWidget {
@@ -168,6 +169,16 @@ class _WorkspacePageState extends State<WorkspacePage> {
   String? _renamingPath;
   bool _pendingMovesChecked = false;
 
+  /// 子文件夹统计的异步回填值，按目录路径覆盖列表条目。
+  Map<String, DirectorySummary> _summaryOverrides = const <String,
+      DirectorySummary>{};
+
+  /// 目录切换/手动刷新时递增，丢弃旧目录的统计回调。
+  int _summaryGeneration = 0;
+
+  /// 已启动统计回填的 _itemsFuture 实例，避免同一份列表重复触发。
+  Object? _summaryFillKey;
+
   @override
   void initState() {
     super.initState();
@@ -191,6 +202,13 @@ class _WorkspacePageState extends State<WorkspacePage> {
     _boundPath = controller.currentPath;
     _boundTreeRevision = controller.treeRevision;
     _itemsFuture = controller.listDirectory(controller.currentPath);
+    _resetSummaryFill();
+  }
+
+  void _resetSummaryFill() {
+    _summaryGeneration++;
+    _summaryOverrides = const <String, DirectorySummary>{};
+    _summaryFillKey = null;
   }
 
   @override
@@ -212,8 +230,45 @@ class _WorkspacePageState extends State<WorkspacePage> {
       _itemsFuture = future;
       _boundPath = controller.currentPath;
       _boundTreeRevision = controller.treeRevision;
+      _resetSummaryFill();
     });
     await future;
+  }
+
+  /// 目录列表展示后异步补齐子文件夹统计：先合并本地缓存命中值，再后台
+  /// 受限并发刷新逐条回填；目录切换（generation 递增）后丢弃过期回调。
+  void _fillSummaries(List<FileItem> items) {
+    final controller = AppScope.of(context);
+    final dirPaths = <String>[
+      for (final item in items)
+        if (item.isDirectory) item.path,
+    ];
+    if (dirPaths.isEmpty) return;
+    final generation = _summaryGeneration;
+    unawaited(() async {
+      final cached = await controller.cachedDirectorySummaries(dirPaths);
+      if (!mounted || generation != _summaryGeneration) return;
+      if (cached.isNotEmpty) {
+        setState(() {
+          _summaryOverrides = <String, DirectorySummary>{
+            ..._summaryOverrides,
+            ...cached,
+          };
+        });
+      }
+      await controller.refreshDirectorySummaries(
+        dirPaths,
+        onResult: (path, summary) {
+          if (!mounted || generation != _summaryGeneration) return;
+          setState(() {
+            _summaryOverrides = <String, DirectorySummary>{
+              ..._summaryOverrides,
+              path: summary,
+            };
+          });
+        },
+      );
+    }());
   }
 
   Future<void> _setSortOption(FileSortOption option) async {
@@ -285,8 +340,23 @@ class _WorkspacePageState extends State<WorkspacePage> {
           );
         }
 
-        final items = snapshot.data ?? const <FileItem>[];
+        final baseItems = snapshot.data ?? const <FileItem>[];
+        // 合并异步回填的子文件夹统计；列表顺序沿用列举排序，不受回填影响。
+        final items = <FileItem>[
+          for (final item in baseItems)
+            if (item.isDirectory && _summaryOverrides[item.path] != null)
+              item.copyWith(
+                itemCount: _summaryOverrides[item.path]!.itemCount,
+                updatedAt: _summaryOverrides[item.path]!.updatedAt,
+              )
+            else
+              item,
+        ];
         _visibleItems = items;
+        if (_summaryFillKey != _itemsFuture) {
+          _summaryFillKey = _itemsFuture;
+          _fillSummaries(baseItems);
+        }
         if (desktop) {
           _ensureDefaultSelection(items);
         }
