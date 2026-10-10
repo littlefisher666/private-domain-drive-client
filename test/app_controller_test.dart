@@ -563,7 +563,9 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('云端已存在同名文件'), findsOneWidget);
-      // 保留两者为默认选项，直接确认。
+      // 默认选中跳过，切到保留两者后直接确认。
+      await tester.tap(find.text('保留两者'));
+      await tester.pump();
       await tester.tap(find.text('确认'));
       await tester.pumpAndSettle();
 
