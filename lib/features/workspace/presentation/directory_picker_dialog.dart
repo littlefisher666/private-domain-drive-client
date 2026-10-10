@@ -7,6 +7,7 @@ Future<String?> showDirectoryPickerDialog(
   BuildContext context, {
   required AppController controller,
   Set<String> invalidPrefixes = const <String>{},
+  Set<String> invalidPaths = const <String>{},
   String title = '选择目标目录',
   String confirmLabel = '移动到此处',
 }) {
@@ -15,6 +16,7 @@ Future<String?> showDirectoryPickerDialog(
     builder: (_) => _DirectoryPickerDialog(
       controller: controller,
       invalidPrefixes: invalidPrefixes,
+      invalidPaths: invalidPaths,
       title: title,
       confirmLabel: confirmLabel,
     ),
@@ -25,12 +27,14 @@ class _DirectoryPickerDialog extends StatefulWidget {
   const _DirectoryPickerDialog({
     required this.controller,
     required this.invalidPrefixes,
+    required this.invalidPaths,
     required this.title,
     required this.confirmLabel,
   });
 
   final AppController controller;
   final Set<String> invalidPrefixes;
+  final Set<String> invalidPaths;
   final String title;
   final String confirmLabel;
 
@@ -43,16 +47,15 @@ class _DirectoryPickerDialogState extends State<_DirectoryPickerDialog> {
   late Future<List<_DirectoryOption>> _future = _load(_path);
 
   Future<List<_DirectoryOption>> _load(String path) async {
-    final items = await widget.controller.listDirectory(path);
-    final directories = items.where((item) => item.isDirectory).toList()
-      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    // 对话框只展示文件夹名称，用轻量前缀列举即可，避免工作区浏览的
+    // 逐目录统计请求拖慢进出目录速度。
+    final directories = await widget.controller.listSubdirectories(path);
     return directories
         .map((item) => _DirectoryOption(
               path: item.path,
               name: item.name,
-              disabled: widget.invalidPrefixes.contains(item.path) ||
-                  widget.invalidPrefixes
-                      .any((prefix) => item.path.startsWith(prefix)),
+              disabled: widget.invalidPrefixes
+                  .any((prefix) => item.path.startsWith(prefix)),
             ))
         .toList(growable: false);
   }
@@ -69,10 +72,12 @@ class _DirectoryPickerDialogState extends State<_DirectoryPickerDialog> {
   }
 
   bool get _canConfirm =>
-      !widget.controller.isMoving && !widget.invalidPrefixes.contains(_path);
+      !widget.controller.isMoving &&
+      !widget.invalidPaths.contains(_path) &&
+      !widget.invalidPrefixes.any((prefix) => _path.startsWith(prefix));
 
   List<(String, String)> get _breadcrumbs {
-    final root = widget.controller.currentPath;
+    final root = widget.controller.workspaceRoot;
     final segments = <(String, String)>[
       (widget.controller.displayPath(root), root),
     ];
@@ -131,7 +136,7 @@ class _DirectoryPickerDialogState extends State<_DirectoryPickerDialog> {
                 ],
               ],
             ),
-            if (_path != widget.controller.currentPath)
+            if (_path != widget.controller.workspaceRoot)
               Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton.icon(

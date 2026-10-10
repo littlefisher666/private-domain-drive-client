@@ -896,15 +896,18 @@ class _WorkspacePageState extends State<WorkspacePage> {
       AppFeedback.showSnack(context, '已有移动任务进行中，请等待完成');
       return;
     }
-    // 非法目标：任何源目录自身/子树，以及源所在目录（无需移动）。
-    final invalidTargets = <String>{
+    // 非法目标：任何源目录自身/子树（含后代全部禁用），以及源所在目录（仅禁其自身）。
+    final invalidPrefixes = <String>{
       for (final item in items.where((item) => item.isDirectory)) item.path,
+    };
+    final invalidPaths = <String>{
       if (items.isNotEmpty) controller.parentPath(items.first.path),
     };
     final target = await showDirectoryPickerDialog(
       context,
       controller: controller,
-      invalidPrefixes: invalidTargets,
+      invalidPrefixes: invalidPrefixes,
+      invalidPaths: invalidPaths,
     );
     if (target == null || !mounted) {
       return;
@@ -994,28 +997,37 @@ class _WorkspacePageState extends State<WorkspacePage> {
     final mi = createdAt.minute.toString().padLeft(2, '0');
     return showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('存在未完成的移动任务'),
-        content: Text(
-          '${entry.sourcePrefixes.length} 项内容正在移动到'
-          '「${controller.displayPath(entry.targetPrefix)}」时中断'
-          '（$mm-$dd $hh:$mi）。可以选择继续移动，或撤销并恢复到原位置。',
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('暂不处理'),
+      builder: (dialogContext) {
+        final sources = entry.sourcePrefixes
+            .map((prefix) => '「${controller.displayPath(prefix)}」')
+            .toList();
+        final sourceText = sources.length == 1
+            ? sources.first
+            : '${sources.first} 等 ${sources.length} 项';
+        return AlertDialog(
+          title: const Text('存在未完成的移动任务'),
+          content: Text(
+            '一次移动在 $mm-$dd $hh:$mi 中断：原计划把 $sourceText '
+            '移动到「${controller.displayPath(entry.targetPrefix)}」。\n\n'
+            '「继续移动」会接着完成这次搬运；「撤销移动」会把已经搬到'
+            '「${controller.displayPath(entry.targetPrefix)}」的内容搬回原位置。',
           ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('撤销移动'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('继续移动'),
-          ),
-        ],
-      ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('暂不处理'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('撤销移动'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('继续移动'),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -3007,7 +3019,9 @@ class _MoveProgressBanner extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              '正在移动 ${progress.processed}/${progress.total} 个对象…',
+              progress.isUndo
+                  ? '正在撤销移动，搬回 ${progress.processed}/${progress.total} 个对象…'
+                  : '正在移动 ${progress.processed}/${progress.total} 个对象…',
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
@@ -3015,6 +3029,18 @@ class _MoveProgressBanner extends StatelessWidget {
               ),
             ),
           ),
+          if (progress.isCounting)
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: Tooltip(
+                message: '仍在统计待迁移文件总数',
+                child: const SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ),
         ],
       ),
     );

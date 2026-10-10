@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -87,10 +88,22 @@ class BatchDownloadEnqueueResult {
 enum MoveConflictResolution { skip, keepBoth }
 
 class MoveProgress {
-  const MoveProgress({required this.processed, required this.total});
+  const MoveProgress({
+    required this.processed,
+    required this.total,
+    this.isUndo = false,
+    this.isCounting = false,
+  });
 
   final int processed;
   final int total;
+
+  /// 撤销移动（反向搬回）与正向移动共用进度通道，文案据此区分。
+  final bool isUndo;
+
+  /// 仍在递归列举待迁移对象总数；为 true 时总数随每页列举结果递增，
+  /// 列举完成后转为确定的「已处理/总数」。
+  final bool isCounting;
 }
 
 class MoveSummary {
@@ -289,6 +302,12 @@ class AppController extends ChangeNotifier {
   UserSession? get session => _session;
   bool get isLoggedIn => _session != null;
   String get currentPath => _currentPath;
+
+  /// 当前会话的工作区根目录，供目录选择器等需要全树导航的场景使用。
+  String get workspaceRoot =>
+      _session?.rootPrefix.isNotEmpty == true
+          ? _normalizeDir(_session!.rootPrefix)
+          : rootPrefix;
 
   String _recycleBinPath = rootPrefix;
 
@@ -553,6 +572,26 @@ class AppController extends ChangeNotifier {
       _session!,
       _fileSortOptionForPath(path ?? _currentPath),
     );
+  }
+
+  /// 目录选择器专用：仅前缀列举子目录（单次请求），不做子内容统计。
+  Future<List<FileItem>> listSubdirectories(String path) async {
+    final session = _session;
+    if (session == null || !session.isRemote || session.credentials == null) {
+      throw AppError('请先登录', code: 'REMOTE_SESSION_REQUIRED');
+    }
+    await ensureSessionReady();
+    final prefix = _normalizeDir(path);
+    final prefixes = await _ossClient.listPrefixes(prefix, session);
+    return <FileItem>[
+      for (final dirPrefix in prefixes)
+        if (!dirPrefix.substring(prefix.length).startsWith('.'))
+          FileItem(
+            path: dirPrefix,
+            name: dirPrefix.substring(prefix.length, dirPrefix.length - 1),
+            isDirectory: true,
+          ),
+    ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   }
 
   Future<List<int>> loadThumbnail(FileItem item) async {
@@ -1405,14 +1444,16 @@ class AppController extends ChangeNotifier {
     String targetPrefix,
     UserSession session,
   ) async {
-    final conflicts = <FileItem>[];
-    for (final item in sources) {
-      final desired =
-          '$targetPrefix${item.name}${item.isDirectory ? '/' : ''}';
-      if (await _ossClient.objectExists(desired, session)) {
-        conflicts.add(item);
-      }
-    }
+    final desiredPaths = <String>[
+      for (final item in sources)
+        '$targetPrefix${item.name}${item.isDirectory ? '/' : ''}',
+    ];
+    final exists = await Future.wait(desiredPaths
+        .map((desired) => _ossClient.objectExists(desired, session)));
+    final conflicts = <FileItem>[
+      for (var index = 0; index < sources.length; index++)
+        if (exists[index]) sources[index],
+    ];
     var resolution = MoveConflictResolution.keepBoth;
     if (conflicts.isNotEmpty) {
       final decision =
@@ -1485,49 +1526,109 @@ class AppController extends ChangeNotifier {
     List<_MovePlanPair> plan,
     UserSession session,
   ) async {
-    final work = <({String key, String dst})>[];
-    for (final pair in plan) {
-      final keys = <String>{pair.source};
-      if (pair.source.endsWith('/')) {
-        keys.addAll(await _ossClient.listAllObjectKeys(pair.source, session));
-      }
-      for (final key in keys) {
-        final dst = key == pair.source
-            ? pair.renameRoot
-            : '${pair.renameRoot}${key.substring(pair.source.length)}';
-        work.add((key: key, dst: dst));
-      }
-    }
-    final failed = <String>[];
+    final failed = <String>{};
+    final sourceKeys = <String>{};
+    final destinationKeys = <String>{};
     var processed = 0;
-    moveStateListenable.value = MoveProgress(processed: 0, total: work.length);
-    for (final item in work) {
-      try {
-        await _ossClient.copy(item.key, item.dst, session);
-        await _ossClient.delete(item.key, session);
-      } catch (_) {
-        // 复制失败可能源于上一轮已完成搬运（源已消失）：目标侧存在且源
-        // 已不存在即视为完成；目录标记缺失时改用建目录方式补齐。
-        final sourceExists = await _safeObjectExists(item.key, session);
-        if (!sourceExists && await _safeObjectExists(item.dst, session)) {
-          // 已在上一轮完成。
-        } else if (!sourceExists &&
-            item.key.endsWith('/') &&
-            await _createDirectoryMarker(item.dst, session)) {
-          // 空目录标记补齐。
-        } else {
-          failed.add(item.key);
-        }
-      }
-      processed++;
-      moveStateListenable.value =
-          MoveProgress(processed: processed, total: work.length);
+    var total = 0;
+    var counting = true;
+
+    void publish() {
+      moveStateListenable.value = MoveProgress(
+        processed: processed,
+        total: total,
+        isCounting: counting,
+      );
     }
+
+    publish();
+
+    // 把一批（≤并发数）对象 copy → deleteMany；单对象 copy 先于其源
+    // delete 的不变式在批粒度成立，中断重跑幂等收敛。
+    Future<void> moveChunk(List<({String key, String dst})> chunk) async {
+      await Future.wait(chunk.map((item) async {
+        try {
+          await _ossClient.copy(item.key, item.dst, session);
+        } catch (_) {
+          // 复制失败可能源于上一轮已完成搬运（源已消失）：目标侧存在且源
+          // 已不存在即视为完成；目录标记缺失时改用建目录方式补齐。
+          final sourceExists = await _safeObjectExists(item.key, session);
+          if (sourceExists) {
+            failed.add(item.key);
+          } else if (await _safeObjectExists(item.dst, session) ||
+              (item.key.endsWith('/') &&
+                  await _createDirectoryMarker(item.dst, session))) {
+            // 已在上一轮完成 / 空目录标记补齐。
+          } else {
+            failed.add(item.key);
+          }
+        }
+        processed++;
+        publish();
+      }));
+      final pendingDeletes = chunk
+          .map((item) => item.key)
+          .where((key) => !failed.contains(key))
+          .toSet();
+      if (pendingDeletes.isEmpty) return;
+      try {
+        final result = await _ossClient.deleteMany(pendingDeletes, session);
+        failed.addAll(result.failedPaths);
+      } catch (_) {
+        // 复制已成功但删除失败：目标侧已有副本，重跑可幂等收敛。
+        failed.addAll(pendingDeletes);
+      }
+    }
+
+    // 把一组 key 投入搬运（按批并发），并计入进度总数。
+    Future<void> moveKeys(Iterable<String> keys, _MovePlanPair pair) async {
+      final work = <({String key, String dst})>[
+        for (final key in keys)
+          (
+            key: key,
+            dst: key == pair.source
+                ? pair.renameRoot
+                : '${pair.renameRoot}${key.substring(pair.source.length)}',
+          ),
+      ];
+      if (work.isEmpty) return;
+      total += work.length;
+      publish();
+      sourceKeys.addAll(work.map((item) => item.key));
+      destinationKeys.addAll(work.map((item) => item.dst));
+      const concurrency = 6;
+      for (var start = 0; start < work.length; start += concurrency) {
+        final end = start + concurrency > work.length
+            ? work.length
+            : start + concurrency;
+        await moveChunk(work.sublist(start, end));
+      }
+    }
+
+    // 边列举边搬运：递归列举每返回一页即把该页投入搬运，列举下一页与
+    // 搬运并发进行，总耗时 ≈ max(列举, 搬运) 而非两者相加。
+    final pageJobs = <Future<void>>[];
+    for (final pair in plan) {
+      if (!pair.source.endsWith('/')) {
+        pageJobs.add(moveKeys(<String>[pair.source], pair));
+        continue;
+      }
+      // 目录标记单独投入：已完成的续迁中标记可能已随源消失，按幂等处理。
+      pageJobs.add(moveKeys(<String>[pair.source], pair));
+      await _ossClient.forEachObjectKeyPage(pair.source, session, (keys) async {
+        final page = keys.where((key) => key != pair.source).toList();
+        if (page.isEmpty) return;
+        pageJobs.add(moveKeys(page, pair));
+      });
+    }
+    counting = false;
+    publish();
+    await Future.wait(pageJobs);
     return MoveSummary(
-      movedCount: work.length - failed.length,
-      failedKeys: failed,
-      sourceKeys: work.map((item) => item.key).toSet(),
-      destinationKeys: work.map((item) => item.dst).toSet(),
+      movedCount: sourceKeys.length - failed.length,
+      failedKeys: failed.toList(growable: false),
+      sourceKeys: sourceKeys,
+      destinationKeys: destinationKeys,
     );
   }
 
@@ -1683,51 +1784,125 @@ class AppController extends ChangeNotifier {
     await ensureSessionReady();
     final session = _requireSession();
     final plan = _planFromEntry(entry);
-    final work = <({String key, String dst})>[];
-    for (final pair in plan) {
-      if (!await _safeObjectExists(pair.renameRoot, session)) {
-        // 目标侧不存在：未开始搬运或已被撤销，无需处理。
-        continue;
-      }
-      final keys = <String>{pair.renameRoot};
-      if (pair.source.endsWith('/')) {
-        keys.addAll(
-            await _ossClient.listAllObjectKeys(pair.renameRoot, session));
-      }
-      for (final key in keys) {
-        final relative = key.startsWith(pair.renameRoot) &&
-                pair.renameRoot.length > entry.targetPrefix.length
-            ? key.substring(pair.renameRoot.length)
-            : key.substring(entry.targetPrefix.length);
-        var dst = '${pair.source}$relative';
-        if (await _safeObjectExists(dst, session)) {
-          dst = await _nonConflictingObjectPath(dst, session);
-        }
-        work.add((key: key, dst: dst));
-      }
-    }
     _isMoving = true;
     notifyListeners();
-    final failed = <String>[];
+    final failed = <String>{};
+    final deletedKeys = <String>{};
+    final restoredKeys = <String>{};
+    var processed = 0;
+    var total = 0;
+    var counting = true;
+
+    void publish() {
+      moveStateListenable.value = MoveProgress(
+        processed: processed,
+        total: total,
+        isUndo: true,
+        isCounting: counting,
+      );
+    }
+
     try {
-      moveStateListenable.value =
-          MoveProgress(processed: 0, total: work.length);
-      var processed = 0;
-      for (final item in work) {
+      // 规划阶段要逐个探测源/目标对象（多次请求），先把“撤销中”状态
+      // 公布出去，避免界面长时间无反馈。
+      publish();
+      Future<void> undoChunk(
+          List<({String key, String dst, bool copyBack})> chunk) async {
+        await Future.wait(chunk.map((item) async {
+          if (item.copyBack) {
+            try {
+              await _ossClient.copy(item.key, item.dst, session);
+            } catch (_) {
+              failed.add(item.key);
+            }
+          }
+          processed++;
+          publish();
+        }));
+        final pendingDeletes = chunk
+            .map((item) => item.key)
+            .where((key) => !failed.contains(key))
+            .toSet();
+        if (pendingDeletes.isEmpty) return;
         try {
-          await _ossClient.copy(item.key, item.dst, session);
-          await _ossClient.delete(item.key, session);
+          final result = await _ossClient.deleteMany(pendingDeletes, session);
+          failed.addAll(result.failedPaths);
         } catch (_) {
-          failed.add(item.key);
+          failed.addAll(pendingDeletes);
         }
-        processed++;
-        moveStateListenable.value =
-            MoveProgress(processed: processed, total: work.length);
+      }
+
+      // 探测一组 key 的源位置占用并解析最终 dst，随后按批并发搬回。
+      Future<void> undoKeys(List<String> keys, _MovePlanPair pair) async {
+        const concurrency = 6;
+        for (var start = 0; start < keys.length; start += concurrency) {
+          final end =
+              start + concurrency > keys.length ? keys.length : start + concurrency;
+          final chunk = keys.sublist(start, end);
+          final resolved = <({String key, String dst, bool copyBack})>[];
+          await Future.wait(chunk.map((key) async {
+            final relative = key.startsWith(pair.renameRoot) &&
+                    pair.renameRoot.length > entry.targetPrefix.length
+                ? key.substring(pair.renameRoot.length)
+                : key.substring(entry.targetPrefix.length);
+            var dst = '${pair.source}$relative';
+            if (await _safeObjectExists(dst, session)) {
+              // 源位置已有同名对象：中断批次常使源、目标两侧各存一份相同副本
+              // （复制完成后尚未删源），此时直接丢弃目标侧副本即可恢复移动前
+              // 状态；仅当两侧内容不同（源位置在移动期间被重新占用）时才改名
+              // 保留目标侧副本。目录标记恒为 0 字节，直接判同。
+              final duplicate = key.endsWith('/') ||
+                  await _isSameObjectSize(key, dst, session);
+              if (duplicate) {
+                resolved.add((key: key, dst: key, copyBack: false));
+                return;
+              }
+              dst = await _nonConflictingObjectPath(dst, session);
+            }
+            resolved.add((key: key, dst: dst, copyBack: true));
+          }));
+          total += resolved.length;
+          publish();
+          deletedKeys.addAll(resolved.map((item) => item.key));
+          restoredKeys.addAll(
+              resolved.where((item) => item.copyBack).map((item) => item.dst));
+          await undoChunk(resolved);
+        }
+      }
+
+      // 边列举边搬回：与正向移动一致，每页 key 到达即投入处理。
+      final pageJobs = <Future<void>>[];
+      for (final pair in plan) {
+        if (!await _safeObjectExists(pair.renameRoot, session)) {
+          // 目标侧不存在：未开始搬运或已被撤销，无需处理。
+          debugPrint('[move] 撤销跳过：目标侧不存在 ${pair.renameRoot}');
+          continue;
+        }
+        if (!pair.source.endsWith('/')) {
+          pageJobs.add(undoKeys(<String>[pair.renameRoot], pair));
+          continue;
+        }
+        // 目录标记单独投入：已撤销过的续跑中标记可能已随目标侧消失，幂等处理。
+        pageJobs.add(undoKeys(<String>[pair.renameRoot], pair));
+        await _ossClient.forEachObjectKeyPage(
+            pair.renameRoot, session, (keys) async {
+          final page = keys.where((key) => key != pair.renameRoot).toList();
+          if (page.isEmpty) return;
+          pageJobs.add(undoKeys(page, pair));
+        });
+      }
+      counting = false;
+      publish();
+      await Future.wait(pageJobs);
+      if (kDebugMode) {
+        debugPrint(
+          '[move] 撤销计划：${plan.map((p) => '${p.source} <= ${p.renameRoot}').join('；')}，待搬回 $total 项',
+        );
       }
       if (failed.isEmpty) {
         try {
-          await _ossClient.delete('$_movesRoot${entry.id}/manifest.json',
-              session);
+          await _ossClient.delete(
+              '$_movesRoot${entry.id}/manifest.json', session);
         } catch (_) {
           // manifest 删除失败仅残留任务，不影响撤销结果。
         }
@@ -1737,11 +1912,43 @@ class AppController extends ChangeNotifier {
       moveStateListenable.value = null;
       notifyListeners();
     }
-    final destinations = work.map((item) => item.dst).toSet();
-    _refreshAfterMove(destinations, entry.sourcePrefixes.toSet(),
-        MoveSummary(movedCount: work.length - failed.length, failedKeys: failed));
+    if (kDebugMode && failed.isNotEmpty) {
+      debugPrint('[move] 撤销失败对象（前 5 个）: ${failed.take(5).join(', ')}');
+    }
+    // 撤销后失效目标侧缓存（目录从目标位置消失），源侧目录标记为存在。
+    _refreshAfterMove(
+      plan.map((pair) => pair.renameRoot).toSet(),
+      entry.sourcePrefixes.toSet(),
+      MoveSummary(
+        movedCount: total - failed.length,
+        failedKeys: failed.toList(growable: false),
+      ),
+    );
+    unawaited(_galleryHooks?.onObjectsDeleted(deletedKeys));
+    unawaited(_galleryHooks?.onObjectsRestored(restoredKeys));
     return MoveSummary(
-        movedCount: work.length - failed.length, failedKeys: failed);
+        movedCount: total - failed.length,
+        failedKeys: failed.toList(growable: false));
+  }
+
+  /// 以对象大小近似判断两个对象是否为同一副本（撤销场景的副本由复制产生）。
+  Future<bool> _isSameObjectSize(
+      String a, String b, UserSession session) async {
+    final sizeA = await _objectSize(a, session);
+    return sizeA != null && sizeA == await _objectSize(b, session);
+  }
+
+  Future<int?> _objectSize(String key, UserSession session) async {
+    try {
+      for (final object in await _ossClient.listAllObjects(key, session)) {
+        if (object.key == key) {
+          return object.size;
+        }
+      }
+    } catch (_) {
+      // 探测失败按“内容不同”处理，走改名保留路径。
+    }
+    return null;
   }
 
   List<_MovePlanPair> _planFromEntry(MoveTaskEntry entry) {
