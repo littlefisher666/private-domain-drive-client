@@ -164,7 +164,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: "3.44.1"
+          flutter-version: "3.47.7"
           cache: true
 
       - name: 安装 Flutter 依赖
@@ -203,7 +203,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: "3.44.1"
+          flutter-version: "3.47.7"
           cache: true
 
       - name: 安装 Flutter 依赖
@@ -259,7 +259,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: "3.44.1"
+          flutter-version: "3.47.7"
           # Flutter SDK 缓存约 2GB，在 macOS Runner 上还原耗时较长；保留较小的 Pub 依赖缓存。
           cache: false
           pub-cache: true
