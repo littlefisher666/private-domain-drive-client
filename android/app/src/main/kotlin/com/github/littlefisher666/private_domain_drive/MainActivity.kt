@@ -9,6 +9,8 @@ import android.media.MediaMetadataRetriever
 import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.provider.Settings
@@ -21,6 +23,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
     companion object {
@@ -33,7 +36,17 @@ class MainActivity : FlutterActivity() {
         private const val DOWNLOAD_DIRECTORY_REQUEST = 702
     }
 
-    private val pendingItems = mutableListOf<Map<String, Any>>()
+    /** 分享文件复制串行执行器；单线程保证多批次按到达顺序复制，避免并发写缓存目录。 */
+    private val shareCopyExecutor = Executors.newSingleThreadExecutor()
+
+    /** 后台复制结果统一 post 回主线程处理，用主线程串行化替代锁。 */
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * 事件信封缓冲（主线程读写）：eventSink 尚未监听时暂存事件，
+     * onListen 按产生顺序冲刷；takePendingItems 取走其中已完整的批次。
+     */
+    private val shareEventBuffer = ArrayDeque<Map<String, Any>>()
     private var eventSink: EventChannel.EventSink? = null
     private var directoryResult: MethodChannel.Result? = null
     private var pendingApkInstallPath: String? = null
@@ -44,8 +57,10 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "takePendingItems" -> {
-                        result.success(pendingItems.toList())
-                        pendingItems.clear()
+                        // 冷启动兜底：仅返回缓冲中已完整（收到 batch_done）的
+                        // 批次，取走后从缓冲移除；未完成批次留在缓冲内，
+                        // 由 onListen 冲刷后转实时推送。
+                        result.success(takeCompleteShareBatches())
                     }
                     else -> result.notImplemented()
                 }
@@ -54,6 +69,10 @@ class MainActivity : FlutterActivity() {
             .setStreamHandler(object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, sink: EventChannel.EventSink) {
                     eventSink = sink
+                    // 冲刷与后续实时推送同在主线程串行执行，顺序有保证。
+                    while (shareEventBuffer.isNotEmpty()) {
+                        sink.success(shareEventBuffer.removeFirst())
+                    }
                 }
 
                 override fun onCancel(arguments: Any?) {
@@ -130,7 +149,7 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
-        receiveShareIntent(intent, emit = false)
+        receiveShareIntent(intent)
     }
 
     override fun onResume() {
@@ -145,7 +164,7 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        receiveShareIntent(intent, emit = true)
+        receiveShareIntent(intent)
     }
 
     @Deprecated("Deprecated in Android API")
@@ -160,13 +179,109 @@ class MainActivity : FlutterActivity() {
         result.success(uri.toString())
     }
 
-    private fun receiveShareIntent(intent: Intent?, emit: Boolean) {
-        val imported = intent?.let(::copySharedFiles).orEmpty()
-        if (imported.isEmpty()) return
-        if (emit && eventSink != null) {
-            eventSink?.success(imported)
+    /**
+     * 分享接收入口：主线程仅解析 URI 列表（轻量），文件复制整体提交到
+     * 后台串行执行器，主线程不再阻塞。
+     */
+    private fun receiveShareIntent(intent: Intent?) {
+        val uris = extractSharedUris(intent ?: return)
+        if (uris.isEmpty()) return
+        val batchId = UUID.randomUUID().toString()
+        val total = uris.size
+        shareCopyExecutor.execute {
+            var succeeded = 0
+            var failed = 0
+            postShareEvent(
+                linkedMapOf(
+                    "type" to "batch_start",
+                    "batchId" to batchId,
+                    "total" to total,
+                ),
+            )
+            for (uri in uris) {
+                val item = runCatching { copySharedFile(uri) }.getOrNull()
+                if (item == null) {
+                    failed++
+                    continue
+                }
+                succeeded++
+                postShareEvent(
+                    linkedMapOf(
+                        "type" to "item",
+                        "batchId" to batchId,
+                        "item" to item,
+                    ),
+                )
+            }
+            postShareEvent(
+                linkedMapOf(
+                    "type" to "batch_done",
+                    "batchId" to batchId,
+                    "succeeded" to succeeded,
+                    "failed" to failed,
+                ),
+            )
+        }
+    }
+
+    /** 后台任务结果 post 回主线程投递；主线程内按监听状态分流推送或缓冲。 */
+    private fun postShareEvent(event: Map<String, Any>) {
+        mainHandler.post { deliverShareEvent(event) }
+    }
+
+    private fun deliverShareEvent(event: Map<String, Any>) {
+        val sink = eventSink
+        if (sink != null) {
+            sink.success(event)
         } else {
-            pendingItems += imported
+            shareEventBuffer.addLast(event)
+        }
+    }
+
+    /**
+     * 从缓冲中提取已完整（已收到 batch_done）的批次，返回信封格式的
+     * 批次列表并在取走后从缓冲移除对应事件；未完成批次的事件保持
+     * 原有顺序留在缓冲内，等待 onListen 冲刷或下次提取。
+     */
+    private fun takeCompleteShareBatches(): List<Map<String, Any>> {
+        if (shareEventBuffer.isEmpty()) return emptyList()
+        val completeBatchIds = LinkedHashSet<String>()
+        for (event in shareEventBuffer) {
+            if (event["type"] == "batch_done") {
+                (event["batchId"] as? String)?.let(completeBatchIds::add)
+            }
+        }
+        if (completeBatchIds.isEmpty()) return emptyList()
+        val remaining = ArrayDeque<Map<String, Any>>()
+        val itemsByBatch = LinkedHashMap<String, MutableList<Map<String, Any>>>()
+        val succeededByBatch = HashMap<String, Int>()
+        val failedByBatch = HashMap<String, Int>()
+        for (event in shareEventBuffer) {
+            val batchId = event["batchId"] as? String
+            if (batchId == null || !completeBatchIds.contains(batchId)) {
+                remaining.addLast(event)
+                continue
+            }
+            when (event["type"]) {
+                "item" -> itemsByBatch
+                    .getOrPut(batchId) { mutableListOf() }
+                    .add(event["item"] as Map<String, Any>)
+                "batch_done" -> {
+                    succeededByBatch[batchId] = (event["succeeded"] as Number).toInt()
+                    failedByBatch[batchId] = (event["failed"] as Number).toInt()
+                }
+            }
+        }
+        shareEventBuffer.clear()
+        shareEventBuffer.addAll(remaining)
+        return itemsByBatch.map { (batchId, items) ->
+            linkedMapOf(
+                "type" to "batch",
+                "batchId" to batchId,
+                "items" to items.toList(),
+                "succeeded" to (succeededByBatch[batchId] ?: items.size),
+                "failed" to (failedByBatch[batchId] ?: 0),
+            )
         }
     }
 
@@ -262,9 +377,10 @@ class MainActivity : FlutterActivity() {
         return metadata
     }
 
-    private fun copySharedFiles(intent: Intent): List<Map<String, Any>> {
+    /** 主线程解析分享 Intent 中的去重 URI 列表，不读取文件内容。 */
+    private fun extractSharedUris(intent: Intent): LinkedHashSet<Uri> {
         if (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_SEND_MULTIPLE) {
-            return emptyList()
+            return linkedSetOf()
         }
         val uris = linkedSetOf<Uri>()
         intent.clipData?.let { clip ->
@@ -276,7 +392,7 @@ class MainActivity : FlutterActivity() {
         } else {
             intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let(uris::addAll)
         }
-        return uris.mapNotNull(::copySharedFile)
+        return uris
     }
 
     private fun copySharedFile(uri: Uri): Map<String, Any>? {
