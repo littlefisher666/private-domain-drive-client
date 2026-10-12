@@ -4,6 +4,9 @@ enum TransferTaskStatus {
   success,
   failed,
   canceled,
+
+  /// 上传进程被中断后恢复出的任务状态：上次进程未跑完，等待用户继续或放弃。
+  interrupted,
 }
 
 enum TransferTaskType {
@@ -20,6 +23,7 @@ class TransferTask {
     required this.progress,
     this.message,
     this.target,
+    this.targetDir,
     this.sourcePath,
     this.batchId,
     this.transferredBytes = 0,
@@ -35,6 +39,10 @@ class TransferTask {
   final double progress;
   final String? message;
   final String? target;
+
+  /// 上传目标的内部目录路径（如 `/共享空间/照片/`），用于持久化恢复后
+  /// 重建上传对象键；下载任务不使用。
+  final String? targetDir;
   final String? sourcePath;
   final String? batchId;
   final int transferredBytes;
@@ -50,6 +58,7 @@ class TransferTask {
     double? progress,
     String? message,
     String? target,
+    String? targetDir,
     String? sourcePath,
     String? batchId,
     int? transferredBytes,
@@ -65,6 +74,7 @@ class TransferTask {
       progress: progress ?? this.progress,
       message: message ?? this.message,
       target: target ?? this.target,
+      targetDir: targetDir ?? this.targetDir,
       sourcePath: sourcePath ?? this.sourcePath,
       batchId: batchId ?? this.batchId,
       transferredBytes: transferredBytes ?? this.transferredBytes,
@@ -83,6 +93,7 @@ class TransferTask {
       'progress': progress,
       'message': message,
       'target': target,
+      'targetDir': targetDir,
       'sourcePath': sourcePath,
       'batchId': batchId,
       'transferredBytes': transferredBytes,
@@ -113,6 +124,7 @@ class TransferTask {
       progress: progress.toDouble(),
       message: json['message'] as String?,
       target: json['target'] as String?,
+      targetDir: json['targetDir'] as String?,
       sourcePath: json['sourcePath'] as String?,
       batchId: json['batchId'] as String?,
       transferredBytes: (json['transferredBytes'] as num?)?.toInt() ?? 0,

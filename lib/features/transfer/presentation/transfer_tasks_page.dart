@@ -7,13 +7,21 @@ import '../../../shared/widgets/app_feedback.dart';
 import '../domain/transfer_task.dart';
 
 class _TransferHeaderActions extends StatelessWidget {
-  const _TransferHeaderActions({required this.controller, required this.tasks});
+  const _TransferHeaderActions({
+    required this.controller,
+    required this.tasks,
+  });
 
   final AppController controller;
   final List<TransferTask> tasks;
 
   @override
   Widget build(BuildContext context) {
+    final interruptedCount = tasks
+        .where((task) =>
+            task.type == TransferTaskType.upload &&
+            task.status == TransferTaskStatus.interrupted)
+        .length;
     return Wrap(
       spacing: 6,
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -27,6 +35,22 @@ class _TransferHeaderActions extends StatelessWidget {
           onPressed: () => _showConcurrencyPicker(context, controller),
           icon: const Icon(Icons.tune),
         ),
+        if (interruptedCount > 0) ...<Widget>[
+          OutlinedButton(
+            onPressed: () {
+              controller.resumeAllInterruptedUploads();
+              AppFeedback.showSnack(context, '已继续上传 $interruptedCount 个中断任务');
+            },
+            child: Text('全部继续 ($interruptedCount)'),
+          ),
+          OutlinedButton(
+            onPressed: () {
+              controller.abandonAllInterruptedUploads();
+              AppFeedback.showSnack(context, '已放弃 $interruptedCount 个中断任务');
+            },
+            child: const Text('全部放弃'),
+          ),
+        ],
         OutlinedButton(
           onPressed: tasks.isEmpty
               ? null
@@ -313,6 +337,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
       TransferTaskStatus.success => '已完成',
       TransferTaskStatus.failed => '失败',
       TransferTaskStatus.canceled => '已取消',
+      TransferTaskStatus.interrupted => '已中断',
     };
   }
 
@@ -324,6 +349,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
       TransferTaskStatus.success => CupertinoDesktopTokens.success,
       TransferTaskStatus.failed => CupertinoDesktopTokens.danger,
       TransferTaskStatus.canceled => scheme.outline,
+      TransferTaskStatus.interrupted => CupertinoDesktopTokens.warning,
     };
   }
 
@@ -393,12 +419,13 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
     required ThemeData theme,
     required bool desktop,
   }) {
-    // 展示顺序：进行中 > 等待中 > 已结束；同状态内新任务在前
+    // 展示顺序：进行中 > 等待中 > 已中断 > 已结束；同状态内新任务在前
     // （任务列表按入队顺序追加，索引越大越新）。
     int statusRank(TransferTaskStatus status) => switch (status) {
           TransferTaskStatus.running => 0,
           TransferTaskStatus.pending => 1,
-          _ => 2,
+          TransferTaskStatus.interrupted => 2,
+          _ => 3,
         };
     final candidates = (_selectedType == null
             ? tasks
@@ -620,37 +647,64 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                               const SizedBox(height: 12),
                               Row(
                                 children: <Widget>[
-                                  OutlinedButton(
-                                    onPressed: task.status ==
-                                                TransferTaskStatus.failed ||
-                                            task.status ==
-                                                TransferTaskStatus.canceled
-                                        ? () {
-                                            controller.retryTask(task.id);
-                                            AppFeedback.showSnack(
-                                              context,
-                                              '已重新开始 ${task.name}',
-                                            );
-                                          }
-                                        : null,
-                                    child: const Text('重试'),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  OutlinedButton(
-                                    onPressed: task.status ==
-                                                TransferTaskStatus.running ||
-                                            task.status ==
-                                                TransferTaskStatus.pending
-                                        ? () {
-                                            controller.cancelTask(task.id);
-                                            AppFeedback.showSnack(
-                                              context,
-                                              '已取消 ${task.name}',
-                                            );
-                                          }
-                                        : null,
-                                    child: const Text('取消'),
-                                  ),
+                                  if (task.status ==
+                                      TransferTaskStatus.interrupted) ...<Widget>[
+                                    OutlinedButton(
+                                      onPressed: () {
+                                        controller
+                                            .resumeInterruptedUpload(task.id);
+                                        AppFeedback.showSnack(
+                                          context,
+                                          '已继续上传 ${task.name}',
+                                        );
+                                      },
+                                      child: const Text('继续上传'),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    OutlinedButton(
+                                      onPressed: () {
+                                        controller
+                                            .abandonInterruptedUpload(task.id);
+                                        AppFeedback.showSnack(
+                                          context,
+                                          '已放弃 ${task.name}',
+                                        );
+                                      },
+                                      child: const Text('放弃'),
+                                    ),
+                                  ] else ...<Widget>[
+                                    OutlinedButton(
+                                      onPressed: task.status ==
+                                                  TransferTaskStatus.failed ||
+                                              task.status ==
+                                                  TransferTaskStatus.canceled
+                                          ? () {
+                                              controller.retryTask(task.id);
+                                              AppFeedback.showSnack(
+                                                context,
+                                                '已重新开始 ${task.name}',
+                                              );
+                                            }
+                                          : null,
+                                      child: const Text('重试'),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    OutlinedButton(
+                                      onPressed: task.status ==
+                                                  TransferTaskStatus.running ||
+                                              task.status ==
+                                                  TransferTaskStatus.pending
+                                          ? () {
+                                              controller.cancelTask(task.id);
+                                              AppFeedback.showSnack(
+                                                context,
+                                                '已取消 ${task.name}',
+                                              );
+                                            }
+                                          : null,
+                                      child: const Text('取消'),
+                                    ),
+                                  ],
                                 ],
                               ),
                             ],
@@ -678,12 +732,18 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
         .fold<double>(0, (sum, task) => sum + (task.bytesPerSecond ?? 0));
     final statsStyle = theme.textTheme.bodySmall
         ?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    final interruptedCount = tasks
+        .where((task) =>
+            task.type == TransferTaskType.upload &&
+            task.status == TransferTaskStatus.interrupted)
+        .length;
     // 任务总数由下方筛选 Tab 展示，这里不再重复，避免长文本截断进度。
     final statsText = tasks.isEmpty
         ? '上传、下载、重试与取消'
         : <String>[
             '${controller.runningTransferCount} 进行中 · '
                 '${controller.pendingTransferCount} 等待',
+            if (interruptedCount > 0) '$interruptedCount 个已中断',
             if (unfinishedTotalBytes > 0)
               '${_formatBytes(unfinishedTransferredBytes)} / ${_formatBytes(unfinishedTotalBytes)}',
             if (globalSpeed > 0) '${_formatBytes(globalSpeed.round())}/s',
@@ -713,11 +773,31 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                       PopupMenuButton<String>(
                         tooltip: '传输设置',
                         onSelected: (value) {
-                          controller.clearCompletedTasks();
-                          AppFeedback.showSnack(context, '已清除已结束任务');
+                          if (value == 'resume-all') {
+                            controller.resumeAllInterruptedUploads();
+                            AppFeedback.showSnack(
+                                context, '已继续上传 $interruptedCount 个中断任务');
+                          } else if (value == 'abandon-all') {
+                            controller.abandonAllInterruptedUploads();
+                            AppFeedback.showSnack(
+                                context, '已放弃 $interruptedCount 个中断任务');
+                          } else if (value == 'clear') {
+                            controller.clearCompletedTasks();
+                            AppFeedback.showSnack(context, '已清除已结束任务');
+                          }
                         },
-                        itemBuilder: (_) => const <PopupMenuEntry<String>>[
-                          PopupMenuItem(
+                        itemBuilder: (_) => <PopupMenuEntry<String>>[
+                          if (interruptedCount > 0) ...<PopupMenuEntry<String>>[
+                            PopupMenuItem(
+                              value: 'resume-all',
+                              child: Text('全部继续 ($interruptedCount)'),
+                            ),
+                            const PopupMenuItem(
+                              value: 'abandon-all',
+                              child: Text('全部放弃'),
+                            ),
+                          ],
+                          const PopupMenuItem(
                             value: 'clear',
                             child: Text('清除已结束任务'),
                           ),
@@ -774,6 +854,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
     required TransferTask task,
   }) {
     final progressLabel = '${(task.progress * 100).round()}%';
+    final isInterrupted = task.status == TransferTaskStatus.interrupted;
     final canRetry = task.status == TransferTaskStatus.failed ||
         task.status == TransferTaskStatus.canceled;
     final canCancel = task.status == TransferTaskStatus.running ||
@@ -881,7 +962,10 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                 ),
               ],
             ),
-            if (progressText.isNotEmpty || canRetry || canCancel) ...<Widget>[
+            if (progressText.isNotEmpty ||
+                isInterrupted ||
+                canRetry ||
+                canCancel) ...<Widget>[
               const SizedBox(height: 4),
               Row(
                 children: <Widget>[
@@ -895,6 +979,32 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                       ),
                     ),
                   ),
+                  if (isInterrupted) ...<Widget>[
+                    IconButton(
+                      tooltip: '继续上传',
+                      visualDensity: VisualDensity.compact,
+                      constraints:
+                          const BoxConstraints.tightFor(width: 32, height: 32),
+                      padding: EdgeInsets.zero,
+                      onPressed: () {
+                        controller.resumeInterruptedUpload(task.id);
+                        AppFeedback.showSnack(context, '已继续上传 ${task.name}');
+                      },
+                      icon: const Icon(Icons.play_arrow_rounded, size: 20),
+                    ),
+                    IconButton(
+                      tooltip: '放弃任务',
+                      visualDensity: VisualDensity.compact,
+                      constraints:
+                          const BoxConstraints.tightFor(width: 32, height: 32),
+                      padding: EdgeInsets.zero,
+                      onPressed: () {
+                        controller.abandonInterruptedUpload(task.id);
+                        AppFeedback.showSnack(context, '已放弃 ${task.name}');
+                      },
+                      icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                    ),
+                  ],
                   if (canRetry)
                     IconButton(
                       tooltip: '重试',

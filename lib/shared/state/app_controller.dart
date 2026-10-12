@@ -11,6 +11,7 @@ import '../../features/auth/domain/user_session.dart';
 import '../../features/auth/infrastructure/saved_credentials_store.dart';
 import '../../features/auth/infrastructure/session_repository.dart';
 import '../../features/transfer/domain/transfer_task.dart';
+import '../../features/transfer/infrastructure/upload_staging.dart';
 import '../../features/preview/infrastructure/text_preview_loader.dart';
 import '../../features/workspace/domain/file_item.dart';
 import '../../features/workspace/domain/directory_alias.dart';
@@ -194,11 +195,21 @@ class AppController extends ChangeNotifier {
   AppController(
       {required SessionRepository sessionRepository,
       OssClient? ossClient,
-      SavedCredentialsStore? savedCredentialsStore})
+      SavedCredentialsStore? savedCredentialsStore,
+      UploadStaging? uploadStaging})
       : _sessionRepository = sessionRepository,
         _ossClient = ossClient ?? OssClient(),
         _savedCredentialsStore =
-            savedCredentialsStore ?? SavedCredentialsStore() {
+            savedCredentialsStore ?? SavedCredentialsStore(),
+
+        // testWidgets（FakeAsync）环境下未 mock 的 platform channel 永远
+        // 不会回复，path_provider 调用会阻塞入队路径；测试默认禁用 staging
+        // 迁移以保持与改造前一致的同步入队行为，需要验证 staging 的测试
+        // 应显式注入 UploadStaging 假实现。
+        _uploadStaging = uploadStaging ??
+            (Platform.environment.containsKey('FLUTTER_TEST')
+                ? null
+                : UploadStaging()) {
     _ossClient.onCredentialExpired = handleCredentialExpired;
     _aliasRepository = AliasRepository(ossClient: _ossClient);
   }
@@ -215,6 +226,7 @@ class AppController extends ChangeNotifier {
   /// 相册等模块与主控制器共用同一个 OSS 客户端（凭证配置状态共享）。
   OssClient get ossClient => _ossClient;
   final SavedCredentialsStore _savedCredentialsStore;
+  final UploadStaging? _uploadStaging;
   GalleryIndexHooks? _galleryHooks;
 
   /// 注入相册索引挂钩（上传增量更新、删除清理、还原恢复）。
@@ -241,6 +253,7 @@ class AppController extends ChangeNotifier {
   static const _movesRoot = '$rootPrefix.moves/';
   static const _transferConcurrencyKey = 'transfer_concurrency';
   static const _transferHistoryKey = 'transfer_history:v1';
+  static const _uploadPendingKey = 'upload_pending:v1';
   static const _fileSortOptionKey = 'file_sort_option';
   static const _fileSortOptionsByDirectoryKey =
       'file_sort_options_by_directory';
@@ -322,6 +335,16 @@ class AppController extends ChangeNotifier {
   bool _transferHistoryReady = false;
   bool _isSavingTransferHistory = false;
   bool _transferHistoryDirty = false;
+  bool _isSavingUploadPending = false;
+  bool _uploadPendingDirty = false;
+
+  /// 最近一次写入 `upload_pending:v1` 的任务状态签名（id:status 集合）。
+  /// 上传进度回调只改进度不改状态，签名不变即可跳过整表重写。
+  Set<String> _uploadPendingSignature = <String>{};
+
+  /// 签名是否与磁盘记录对齐；bootstrap 后首次写入前为 false，
+  /// 保证「记录被清空到零」这类集合不变的场景也会回写一次。
+  bool _uploadPendingSignatureAligned = false;
 
   UserSession? get session => _session;
   bool get isLoggedIn => _session != null;
@@ -436,10 +459,12 @@ class AppController extends ChangeNotifier {
       }
       _restoreSortPreferences(preferences);
       _restoreTransferHistory(preferences);
+      await _restoreUploadPending(preferences);
       _restoreThemeMode(preferences);
       _restoreThumbnailSize(preferences);
       _restoreAutoCheckUpdates(preferences);
       _transferHistoryReady = true;
+      _saveUploadPending();
     } catch (_) {
       // 偏好读取失败不应阻断会话恢复。
     }
@@ -2406,6 +2431,9 @@ class AppController extends ChangeNotifier {
     _ensureUploadCapability();
     final dir = _normalizeDir(targetPath ?? _currentPath);
     final taskId = _newTransferId('upload');
+    // 缓存目录中的源文件（系统分享、部分选择器结果）先迁移到持久 staging
+    // 目录，应用被杀后源文件不随 cacheDir 清理而丢失。
+    final stagedPath = await _migrateToStagingSafe(localPath, taskId);
     _enqueueTransfer(
       TransferTask(
         id: taskId,
@@ -2414,77 +2442,107 @@ class AppController extends ChangeNotifier {
         status: TransferTaskStatus.pending,
         progress: 0,
         target: displayPath(dir),
-        sourcePath: localPath,
+        targetDir: dir,
+        sourcePath: stagedPath,
         batchId: batchId,
         totalBytes: fileSize,
       ),
-      _QueuedTransfer((report, isCanceled) async {
-        if (isCanceled()) throw const TransferCanceledException();
-        await ensureSessionReady();
-        final session = _requireSession();
-        var objectPath = '$dir$fileName';
-        // 上传前校验目标是否已存在；放在队列闭包内使重试同样经过校验。
-        if (await _ossClient.objectExists(objectPath, session)) {
-          final resolution = await _resolveUploadConflict(
-            batchId: batchId,
-            fileName: fileName,
-            targetDisplayPath: displayPath(dir),
-          );
-          if (isCanceled()) throw const TransferCanceledException();
-          switch (resolution) {
-            case UploadConflictResolution.skip:
-              throw const _UploadSkippedException();
-            case UploadConflictResolution.overwrite:
-              break;
-            case UploadConflictResolution.keepBoth:
-              objectPath = await _availableUploadPath(objectPath, session);
-          }
-        }
-        if (isCanceled()) throw const TransferCanceledException();
-        // 视频上传前启动截帧，超大图片上传前本地生成缩略图，均与上传
-        // 并行准备；失败不影响上传本身。
-        Future<String?>? thumbnailFuture;
-        final extension = fileName.split('.').last.toLowerCase();
-        if (_videoFileExtensions.contains(extension)) {
-          thumbnailFuture =
-              _galleryHooks?.prepareVideoThumbnail(objectPath, localPath);
-        } else if (_imageFileExtensions.contains(extension)) {
-          thumbnailFuture =
-              _galleryHooks?.prepareImageThumbnail(objectPath, localPath);
-        }
-        await _ossClient.uploadFile(
-          objectPath,
-          localPath,
-          session,
-          taskId: taskId,
-          onProgress: report,
+      _buildUploadClosure(
+        taskId: taskId,
+        fileName: fileName,
+        localPath: stagedPath,
+        dir: dir,
+        batchId: batchId,
+      ),
+    );
+  }
+
+  /// staging 迁移失败不阻塞上传：降级为使用原路径。
+  Future<String> _migrateToStagingSafe(String localPath, String taskId) async {
+    final staging = _uploadStaging;
+    if (staging == null) return localPath;
+    try {
+      return await staging.migrateIfNeeded(localPath, taskId);
+    } catch (_) {
+      return localPath;
+    }
+  }
+
+  /// 构造上传执行闭包：uploadFile 入队与「已中断任务继续上传」共用，
+  /// 冲突解析、会话恢复与媒体索引挂钩行为保持一致。
+  _QueuedTransfer _buildUploadClosure({
+    required String taskId,
+    required String fileName,
+    required String localPath,
+    required String dir,
+    String? batchId,
+  }) {
+    return _QueuedTransfer((report, isCanceled) async {
+      if (isCanceled()) throw const TransferCanceledException();
+      await ensureSessionReady();
+      final session = _requireSession();
+      var objectPath = '$dir$fileName';
+      // 上传前校验目标是否已存在；放在队列闭包内使重试同样经过校验。
+      if (await _ossClient.objectExists(objectPath, session)) {
+        final resolution = await _resolveUploadConflict(
+          batchId: batchId,
+          fileName: fileName,
+          targetDisplayPath: displayPath(dir),
         );
         if (isCanceled()) throw const TransferCanceledException();
-        _directorySummaryService.noteFilesAdded(dir, 1, DateTime.now());
-        _calibrateDirectorySummary(dir);
-        _treeRevision++;
-        _clearDirectorySizeCache();
-        notifyListeners();
-        // 上传成功后触发索引增量更新；挂钩异常不影响任务成功状态。
-        if (_galleryHooks != null) {
-          String? thumbPath;
-          try {
-            thumbPath = await thumbnailFuture;
-          } catch (_) {
-            thumbPath = null;
-          }
-          try {
-            await _galleryHooks!.onMediaUploaded(
-              objectPath: objectPath,
-              localPath: localPath,
-              thumbLocalPath: thumbPath,
-            );
-          } catch (error) {
-            debugPrint('[gallery] 索引增量更新挂钩失败: $error');
-          }
+        switch (resolution) {
+          case UploadConflictResolution.skip:
+            throw const _UploadSkippedException();
+          case UploadConflictResolution.overwrite:
+            break;
+          case UploadConflictResolution.keepBoth:
+            objectPath = await _availableUploadPath(objectPath, session);
         }
-      }),
-    );
+      }
+      if (isCanceled()) throw const TransferCanceledException();
+      // 视频上传前启动截帧，超大图片上传前本地生成缩略图，均与上传
+      // 并行准备；失败不影响上传本身。
+      Future<String?>? thumbnailFuture;
+      final extension = fileName.split('.').last.toLowerCase();
+      if (_videoFileExtensions.contains(extension)) {
+        thumbnailFuture =
+            _galleryHooks?.prepareVideoThumbnail(objectPath, localPath);
+      } else if (_imageFileExtensions.contains(extension)) {
+        thumbnailFuture =
+            _galleryHooks?.prepareImageThumbnail(objectPath, localPath);
+      }
+      await _ossClient.uploadFile(
+        objectPath,
+        localPath,
+        session,
+        taskId: taskId,
+        onProgress: report,
+      );
+      if (isCanceled()) throw const TransferCanceledException();
+      _directorySummaryService.noteFilesAdded(dir, 1, DateTime.now());
+      _calibrateDirectorySummary(dir);
+      _treeRevision++;
+      _clearDirectorySizeCache();
+      notifyListeners();
+      // 上传成功后触发索引增量更新；挂钩异常不影响任务成功状态。
+      if (_galleryHooks != null) {
+        String? thumbPath;
+        try {
+          thumbPath = await thumbnailFuture;
+        } catch (_) {
+          thumbPath = null;
+        }
+        try {
+          await _galleryHooks!.onMediaUploaded(
+            objectPath: objectPath,
+            localPath: localPath,
+            thumbLocalPath: thumbPath,
+          );
+        } catch (error) {
+          debugPrint('[gallery] 索引增量更新挂钩失败: $error');
+        }
+      }
+    });
   }
 
   /// 解析上传冲突的处置决策；同批任务通过共享 Completer 保证只弹一次对话框。
@@ -2872,6 +2930,44 @@ class AppController extends ChangeNotifier {
       return;
     }
     if (!_queuedTransfers.containsKey(taskId)) {
+      // 冷启动恢复出的上传任务：按持久化字段重建执行器后正常入队。
+      final dir = task.targetDir;
+      final source = task.sourcePath;
+      if (task.type == TransferTaskType.upload &&
+          dir != null &&
+          source != null &&
+          source.isNotEmpty) {
+        if (!File(source).existsSync()) {
+          _replaceTask(
+              taskId,
+              (value) => value.copyWith(
+                    status: TransferTaskStatus.failed,
+                    message: '失败',
+                    error: '源文件已丢失',
+                  ));
+          return;
+        }
+        _canceledTransferIds.remove(taskId);
+        _queuedTransfers[taskId] = _buildUploadClosure(
+          taskId: taskId,
+          fileName: task.name,
+          localPath: source,
+          dir: dir,
+          batchId: task.batchId,
+        );
+        _replaceTask(
+            taskId,
+            (value) => value.copyWith(
+                  status: TransferTaskStatus.pending,
+                  progress: 0,
+                  transferredBytes: 0,
+                  bytesPerSecond: null,
+                  message: '重新开始',
+                ));
+        _pendingTransferIds.add(taskId);
+        _drainTransferQueue();
+        return;
+      }
       // 兼容应用恢复前遗留或测试注入的任务；真实任务均有执行器。
       _replaceTask(
           taskId,
@@ -2902,6 +2998,95 @@ class AppController extends ChangeNotifier {
     }
   }
 
+  /// 继续「已中断」的上传任务：复用既有上传闭包重新入队，进度归零、
+  /// 从头重传（OSS 无断点续传）。源文件缺失时直接标记失败。
+  void resumeInterruptedUpload(String taskId) {
+    final task = tasks.where((item) => item.id == taskId).firstOrNull;
+    if (task == null ||
+        task.type != TransferTaskType.upload ||
+        task.status != TransferTaskStatus.interrupted) {
+      return;
+    }
+    final dir = task.targetDir;
+    final source = task.sourcePath;
+    if (dir == null ||
+        source == null ||
+        source.isEmpty ||
+        !File(source).existsSync()) {
+      _replaceTask(
+          taskId,
+          (value) => value.copyWith(
+                status: TransferTaskStatus.failed,
+                message: '失败',
+                error: '源文件已丢失',
+              ));
+      return;
+    }
+    _canceledTransferIds.remove(taskId);
+    _queuedTransfers[taskId] = _buildUploadClosure(
+      taskId: taskId,
+      fileName: task.name,
+      localPath: source,
+      dir: dir,
+      batchId: task.batchId,
+    );
+    _replaceTask(
+        taskId,
+        (value) => value.copyWith(
+              status: TransferTaskStatus.pending,
+              progress: 0,
+              transferredBytes: 0,
+              bytesPerSecond: null,
+              message: '重新开始',
+            ));
+    _pendingTransferIds.add(taskId);
+    _drainTransferQueue();
+  }
+
+  /// 批量继续全部已中断上传任务（纯便利入口，逐个调用单任务操作）。
+  void resumeAllInterruptedUploads() {
+    for (final taskId in interruptedUploadTaskIds.toList(growable: false)) {
+      resumeInterruptedUpload(taskId);
+    }
+  }
+
+  /// 放弃「已中断」的上传任务：转已取消并清理对应 staging 文件。
+  void abandonInterruptedUpload(String taskId) {
+    final task = tasks.where((item) => item.id == taskId).firstOrNull;
+    if (task == null ||
+        task.type != TransferTaskType.upload ||
+        task.status != TransferTaskStatus.interrupted) {
+      return;
+    }
+    final abandoned = task.copyWith(
+      status: TransferTaskStatus.canceled,
+      message: '已放弃',
+    );
+    _replaceTask(taskId, (value) => abandoned);
+    _cleanupStagingForTask(abandoned);
+  }
+
+  /// 批量放弃全部已中断上传任务（纯便利入口，逐个调用单任务操作）。
+  void abandonAllInterruptedUploads() {
+    for (final taskId in interruptedUploadTaskIds.toList(growable: false)) {
+      abandonInterruptedUpload(taskId);
+    }
+  }
+
+  Set<String> get interruptedUploadTaskIds => tasks
+      .where((task) =>
+          task.type == TransferTaskType.upload &&
+          task.status == TransferTaskStatus.interrupted)
+      .map((task) => task.id)
+      .toSet();
+
+  /// 任务不再需要时清理其 staging 源文件（判定依据：sourcePath 位于
+  /// staging 目录内）；持久路径源文件不删除。
+  void _cleanupStagingForTask(TransferTask task) {
+    if (task.type != TransferTaskType.upload) return;
+    unawaited(_uploadStaging?.cleanup(task.sourcePath));
+  }
+
   void cancelTask(String taskId) {
     final task = tasks.where((item) => item.id == taskId).firstOrNull;
     if (task == null ||
@@ -2930,6 +3115,17 @@ class AppController extends ChangeNotifier {
   }
 
   void clearCompletedTasks() {
+    final removed = tasksListenable.value
+        .where(
+          (task) =>
+              task.status == TransferTaskStatus.success ||
+              task.status == TransferTaskStatus.canceled,
+        )
+        .toList(growable: false);
+    // 已结束任务从列表移除后不再可重试，对应 staging 源文件一并清理。
+    for (final task in removed) {
+      _cleanupStagingForTask(task);
+    }
     _setTasks(
       tasksListenable.value
           .where(
@@ -3098,6 +3294,12 @@ class AppController extends ChangeNotifier {
     } finally {
       _runningTransferIds.remove(taskId);
       _canceledTransferIds.remove(taskId);
+      // 上传任务到达成功终态后清理 staging 源文件；失败与取消保留源文件
+      // 供重试，任务从列表移除时再清理。
+      final finished = tasks.where((item) => item.id == taskId).firstOrNull;
+      if (finished != null && finished.status == TransferTaskStatus.success) {
+        _cleanupStagingForTask(finished);
+      }
       _drainTransferQueue();
     }
   }
@@ -3172,6 +3374,7 @@ class AppController extends ChangeNotifier {
   void _setTasks(List<TransferTask> next) {
     tasksListenable.value = List<TransferTask>.unmodifiable(next);
     _saveTransferHistory();
+    _saveUploadPending();
   }
 
   void _restoreTransferHistory(SharedPreferences preferences) {
@@ -3224,6 +3427,125 @@ class AppController extends ChangeNotifier {
     } finally {
       _isSavingTransferHistory = false;
       if (_transferHistoryDirty) _saveTransferHistory();
+    }
+  }
+
+  /// 未完成上传任务是否需要进入 `upload_pending:v1` 持久化记录。
+  /// 失败任务保留在记录中以便重启后恢复或重试（见 upload-persistence 规格）；
+  /// 源文件已缺失的失败任务（恢复时标记）不保留，其记录随之清理。
+  bool _isPersistentUploadTask(TransferTask task) {
+    if (task.type != TransferTaskType.upload) return false;
+    return switch (task.status) {
+      TransferTaskStatus.pending ||
+      TransferTaskStatus.running ||
+      TransferTaskStatus.interrupted =>
+        true,
+      TransferTaskStatus.failed => _uploadSourceExists(task),
+      TransferTaskStatus.success || TransferTaskStatus.canceled => false,
+    };
+  }
+
+  bool _uploadSourceExists(TransferTask task) {
+    final source = task.sourcePath;
+    if (source == null || source.isEmpty) return false;
+    return File(source).existsSync();
+  }
+
+  /// 任务状态签名（id:status 集合）发生变化才整表重写持久化记录；
+  /// 上传进度回调只更新进度字段，不会触发写入（见设计 D7）。
+  void _saveUploadPending() {
+    if (!_transferHistoryReady) return;
+    final signature = <String>{
+      for (final task in tasks.where(_isPersistentUploadTask))
+        '${task.id}:${task.status.name}',
+    };
+    if (_uploadPendingSignatureAligned &&
+        _sameStringSet(signature, _uploadPendingSignature)) {
+      return;
+    }
+    _uploadPendingSignature = signature;
+    _uploadPendingSignatureAligned = true;
+    _uploadPendingDirty = true;
+    if (_isSavingUploadPending) return;
+    _isSavingUploadPending = true;
+    unawaited(_persistUploadPending());
+  }
+
+  static bool _sameStringSet(Set<String> a, Set<String> b) {
+    return a.length == b.length && a.containsAll(b);
+  }
+
+  Future<void> _persistUploadPending() async {
+    try {
+      final preferences = _preferences ?? await SharedPreferences.getInstance();
+      _preferences = preferences;
+      while (_uploadPendingDirty) {
+        _uploadPendingDirty = false;
+        final pending = tasks.where(_isPersistentUploadTask).toList();
+        await preferences.setString(
+          _uploadPendingKey,
+          jsonEncode(pending.map((task) => task.toJson()).toList()),
+        );
+      }
+    } catch (_) {
+      // 未完成任务记录写入失败不影响当前传输。
+    } finally {
+      _isSavingUploadPending = false;
+      if (_uploadPendingDirty) _saveUploadPending();
+    }
+  }
+
+  /// 冷启动恢复未完成上传任务：源文件存在 → interrupted 等待用户操作；
+  /// 源文件缺失 → failed（源文件已丢失）并从持久化记录清理。
+  /// 恢复不自动入队，不阻塞应用启动。
+  Future<void> _restoreUploadPending(SharedPreferences preferences) async {
+    final raw = preferences.getString(_uploadPendingKey);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return;
+      final records = decoded
+          .whereType<Map>()
+          .map((item) => TransferTask.fromJson(
+                item.map((key, value) => MapEntry(key.toString(), value)),
+              ))
+          .whereType<TransferTask>()
+          .where(_isPersistentUploadTask)
+          .toList(growable: false);
+      if (records.isEmpty) return;
+      final exists = await Future.wait<bool>(records.map((task) {
+        final source = task.sourcePath;
+        if (source == null || source.isEmpty) {
+          return Future<bool>.value(false);
+        }
+        return File(source).exists();
+      }));
+      final restored = <TransferTask>[];
+      for (var index = 0; index < records.length; index++) {
+        final task = records[index];
+        if (exists[index]) {
+          restored.add(task.copyWith(
+            status: TransferTaskStatus.interrupted,
+            progress: 0,
+            transferredBytes: 0,
+            bytesPerSecond: null,
+            message: '已中断',
+            error: null,
+          ));
+        } else {
+          restored.add(task.copyWith(
+            status: TransferTaskStatus.failed,
+            message: '失败',
+            error: '源文件已丢失',
+          ));
+        }
+      }
+      tasksListenable.value = List<TransferTask>.unmodifiable([
+        ...tasksListenable.value,
+        ...restored,
+      ]);
+    } catch (_) {
+      // 本地记录损坏时忽略，避免影响应用启动。
     }
   }
 
