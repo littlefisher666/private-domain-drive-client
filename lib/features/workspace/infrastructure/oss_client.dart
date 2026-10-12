@@ -531,11 +531,8 @@ class OssClient {
             }
           }
         }
-      } catch (error) {
+      } catch (_) {
         // 图片处理接口失败或格式不支持时，保留文件头解析结果。
-        if (kDebugMode) {
-          debugPrint('[exif] image/exif 兜底失败 $path: $error');
-        }
       }
     }
     return ImageExifInfo(
@@ -836,16 +833,41 @@ class OssClient {
     });
     try {
       if (isCanceled?.call() == true) throw const TransferCanceledException();
-      await _platform(operation);
+      // 传输任务按字节有进度回调，不设整体超时，仅依赖 SDK 的
+      // 连接/读超时判定连接失效。
+      await _platform(operation, timeout: null);
       if (isCanceled?.call() == true) throw const TransferCanceledException();
     } finally {
       await subscription.cancel();
     }
   }
 
-  Future<T> _platform<T>(Future<T> Function() operation) async {
+  /// 非传输类 OSS 调用的整体超时：超过该时长即向用户提示失败。
+  /// 弱网下 DNS 解析阻塞时 SDK 自身的连接/读超时不覆盖解析阶段，
+  /// 需要外层统一兜底，避免长时间无反馈的加载转圈。
+  static const Duration _requestTimeout = Duration(seconds: 10);
+
+  /// testWidgets（FakeAsync）环境下未 mock 的 platform channel 永远不会
+  /// 回复，超时定时器会挂在 fake 时钟上导致测试失败；测试环境不设超时。
+  static final bool _timeoutEnabled =
+      !Platform.environment.containsKey('FLUTTER_TEST');
+
+  Future<T> _platform<T>(
+    Future<T> Function() operation, {
+    Duration? timeout = _requestTimeout,
+  }) async {
+    final effectiveTimeout = _timeoutEnabled ? timeout : null;
+    final bounded = effectiveTimeout == null
+        ? operation()
+        : operation().timeout(
+            effectiveTimeout,
+            onTimeout: () => throw AppError(
+              '请求超时，请检查网络后重试',
+              code: 'OSS_REQUEST_TIMEOUT',
+            ),
+          );
     try {
-      return await operation();
+      return await bounded;
     } on PlatformException catch (error) {
       if (error.code == OssErrorCode.canceled.name) {
         throw const TransferCanceledException();
