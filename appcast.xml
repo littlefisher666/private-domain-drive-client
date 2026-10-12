@@ -6,6 +6,104 @@
     <description>私域网盘 macOS 客户端 Sparkle 更新清单</description>
     <language>zh-cn</language>
     <item>
+      <title>私域网盘 macOS v1.0.9</title>
+      <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.9</link>
+      <sparkle:version>83</sparkle:version>
+      <sparkle:shortVersionString>1.0.9</sparkle:shortVersionString>
+      <pubDate>Mon, 12 Oct 2026 02:11:14 +0000</pubDate>
+      <description>【新功能】
+- 创建链接合并为单对话框（workspace）
+- 目录别名支持挂载到任意层级（workspace）
+- 根目录目录别名（虚拟目录链接）（workspace）
+- 子目录统计改为懒加载异步补齐并新增本地缓存（workspace）
+- 上传同名文件冲突对话框默认勾选改为跳过（workspace）
+- 支持文件与文件夹移动（copy+delete 幂等搬运）（workspace）
+- 详情页新增 PDF/文本/Markdown/CSV 直接预览与音频播放（preview）
+- 接入 Sparkle 自更新并关闭 App Sandbox（macos）
+- 视频播放网速角标与移动端自定义控制层（gallery）
+- 重建索引入口与存量缩略图补齐并发化（gallery）
+- 查看器视频内嵌流式播放（media_kit + 预签名 URL）（gallery）
+- 移动端传输页固定统计头部、上传同名存在性校验与任务排序（transfer）
+- 内部对象收敛至 .gallery 点前缀并统一隐藏规则、查看器手势重构（gallery）
+- 超大图本地缩略图、拍摄时间推断增强与交互细节完善（gallery）
+- 新增相册功能（时间线、索引、原图缓存、查看器、多选与剪贴板）（gallery）
+- 图片预览支持四向滑动切换与推移动画、缩略图先行加载及沉浸式界面（preview）
+- 检查更新即时反馈、失败兜底、请求超时与系统代理支持（update）
+- 版本发布按平台拆分版本号，更新检查按平台前缀匹配（update）
+- 系统后退支持回收站内逐级返回，根目录后退切回文件页（recycle-bin）
+- 系统后退键拦截统一到 HomeShell，其他 tab 后退先切回文件页（workspace）
+- 移动端回收站条目操作菜单支持恢复与立即删除（recycle-bin）
+- 分享导入目录选择弹窗支持内联新建文件夹（share）
+- 移动端缩略图改为系统相册式统一网格并移除尺寸设置（workspace）
+- 安卓系统后退键改为返回上级目录而非退出应用（workspace）
+- 会话持久化到安全存储实现冷启动免登录（auth）
+- 分享导入改为直接弹目录选择并立即上传（share）
+- 移动端新增回收站页签并紧凑化列表与排序弹层（ui）
+- 缩略图与图片预览接入本地磁盘缓存（cache）
+- 登录记住最近凭据并在设置页提供修改密码入口（auth）
+- 支持立即删除回收批次并修复列表展开与刷新问题（recycle-bin）
+- 凭证架构迁移为双 AKSK 直连（不兼容变更）
+- 新增回收站与首次登录强制改密流程
+- 支持缩略图大小切换（工作区）
+- 接入 Gitee 发布与检查（更新）
+- 完善更新检查与设置体验（客户端）
+- 增加 GitHub Releases 升级能力（update）
+- 完善移动端分享下载与界面适配（android）
+- 支持深浅模式切换并修复传输中心崩溃
+- 完善文件浏览与传输任务体验（客户端）
+- 支持按文件夹排序并读取照片拍摄时间（workspace）
+- 接入原生 OSS 文件管理与桌面工作区体验
+- 支持文件批量操作与传输队列（workspace）
+- 接入 OSS 文件读写能力（storage）
+- 完善客户端文件管理与分享功能
+- 添加 macOS 桌面平台支持（client）
+- 初始化 Flutter 客户端工程骨架（client）
+
+【修复】
+- 同层别名指向同层目录时并列展示（workspace）
+- rebase 懒加载统计后融合别名统计调用（workspace）
+- 移动端列表底部留白避免悬浮添加按钮遮挡三点菜单（workspace）
+- 启动更新检查可关闭并完善 OSS 错误诊断与 EXIF 兜底（platform）
+- 适配 macOS 红绿灯避让并移除非图片预览的圆角框（preview）
+- 修正 Sparkle 更新提示版本号与误报失败状态（macos）
+- Android 预签名改用 presignConstrainedObjectURL（oss）
+- 移动端任务卡片进度文案省略号截断修复（transfer）
+- 修复我的页姓名行被压缩导致头像与文字错位（settings）
+- 更新检查选取平台最高版本而非列表首个匹配（update）
+- 保留 OSS SDK 泛型签名修复 release 目录加载失败（android）
+- 修复分享导入无法闭环的两处路由缺陷（share）
+- 回收站按 payload 对象路径展开虚拟目录树（recycle-bin）
+- 测试注入内存凭据存储避免 CI 平台通道挂起（test）
+- 版本准备失败时跳过双端打包 job（ci）
+- FC 地址变量名修正为 FC_BASE_URL（ci）
+- 修正 Android 签名密钥口令 secret 名称（ci）
+- 使用静态清单检查新版本（update）
+- 续接授权后的安装流程（update）
+- 修复阿里云请求签名器编译错误
+- 适配 macOS 会话存储
+- 接入FC HTTP触发器签名认证（network）
+
+【优化】
+- 构建产物限定为纯 arm64 架构（macos）
+- 升级 pdfrx 至 2.6.5 并将 macOS Podfile 平台版本提升至 12.0
+- Gradle 仓库按 CI 环境区分镜像（android）
+- 移动改为流式边列举边搬运并加速目录选择（workspace）
+- 开启混淆与 R8 压缩并剔除 Web 平台专用资源（release）
+- 限定 ABI 为 arm64-v8a，移除插件原生库的多 ABI 死重（android）
+- 双端 Debug 构建使用独立包名与应用名（platform）
+- 移动端底部导航选中态图标与文字样式优化（theme）
+- 卡片去除描边并紧凑化我的页面移动端布局（theme）
+- 升级 file_picker、flutter_secure_storage 与 flutter_lints 并适配空安全（deps）
+- 调整按钮主题尺寸并优化改密页与设置页桌面布局（ui）
+- 文案面向普通用户优化并统一为用户名密码表述（ui）
+- 移除客户端标识符后缀
+- 统一客户端应用标识符
+- 更新应用图标资源（assets）
+- 升级文件选择器依赖（依赖）
+- 清理无效启动与高频日志（macos）</description>
+      <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.9/private-domain-drive-macos-v1.0.9.zip" length="24566835" type="application/zip" sparkle:edSignature="ct0TuPV4j1IqVeqjZ/iBP+vxmmy9XUl3fTBJ4nF0k00L8I8wEsb0+oD18/frghxn90qRIM3iweK7GmbeF17lCA==" />
+    </item>
+    <item>
       <title>私域网盘 macOS v1.0.8</title>
       <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.8</link>
       <sparkle:version>81</sparkle:version>
