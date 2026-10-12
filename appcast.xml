@@ -6,6 +6,22 @@
     <description>私域网盘 macOS 客户端 Sparkle 更新清单</description>
     <language>zh-cn</language>
     <item>
+      <title>私域网盘 macOS v1.0.10</title>
+      <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.10</link>
+      <sparkle:version>84</sparkle:version>
+      <sparkle:shortVersionString>1.0.10</sparkle:shortVersionString>
+      <pubDate>Mon, 12 Oct 2026 09:17:04 +0000</pubDate>
+      <description>【新功能】
+- 上传任务持久化与冷启动恢复（transfer）
+- Android 分享文件后台异步复制与批次进度反馈（share-import）
+
+【修复】
+- 非传输调用增加 10s 整体超时兜底（oss）
+- 显式声明状态栏样式，修复浅色主题下白色图标残留（ui）
+- MainActivity 启动模式调整为 singleTask（android）</description>
+      <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.10/private-domain-drive-macos-v1.0.10.zip" length="24578546" type="application/zip" sparkle:edSignature="KY10uPrx6CAuIgXN8Jfr52gQVOAQpAinMc8URuzq0kGwl8j1EYA1daVMxXW0lJX5FJPxayFkNoxdXJICg6nmDA==" />
+    </item>
+    <item>
       <title>私域网盘 macOS v1.0.9</title>
       <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.9</link>
       <sparkle:version>83</sparkle:version>
