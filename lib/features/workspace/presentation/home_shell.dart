@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 
 import '../../../app/theme/cupertino_desktop.dart';
 import '../../../shared/state/app_controller.dart';
@@ -52,76 +53,84 @@ class _HomeShellState extends State<HomeShell> {
     // 移动端系统后退键：回收站内非根目录先向上返回；回收站根目录及其他
     // 非「文件」tab 切回「文件」；「文件」tab 内非根目录返回上级（别名
     // 根层级返回会话根目录）；仅「文件」tab 且位于根目录时才允许退出应用。
-    return PopScope(
-      canPop: _index == 0 && controller.backNavigationPath() == null,
-      onPopInvokedWithResult: (didPop, _) {
-        if (didPop) {
-          return;
-        }
-        if (_index == 3) {
-          if (controller.recycleBinPath != AppController.rootPrefix) {
-            controller.setRecycleBinPath(
-              controller.parentPath(controller.recycleBinPath),
-            );
+    // 壳层统一声明状态栏样式：各 tab 共用同一画布，进入带 AppBar 的页面
+    // （如相册、文件预览）会改写系统状态栏图标颜色，返回时由这里兜底恢复。
+    final overlayStyle = Theme.of(context).brightness == Brightness.dark
+        ? SystemUiOverlayStyle.light
+        : SystemUiOverlayStyle.dark;
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: overlayStyle,
+      child: PopScope(
+        canPop: _index == 0 && controller.backNavigationPath() == null,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) {
             return;
           }
-          _select(0);
-          return;
-        }
-        if (_index != 0) {
-          _select(0);
-          return;
-        }
-        final target = controller.backNavigationPath();
-        if (target != null) {
-          controller.setCurrentPath(target);
-        }
-      },
-      child: Scaffold(
-        body: IndexedStack(
-          index: _index.clamp(0, 4),
-          children: <Widget>[
-            const WorkspacePage(),
-            GalleryPage(key: ValueKey<String>('gallery-mobile')),
-            const TransferTasksPage(embedded: true),
-            RecycleBinPage(
-              key: ValueKey<String>('recycle-bin-mobile-$_recycleBinVisit'),
-              embedded: true,
-              visitToken: _recycleBinVisit,
-            ),
-            SettingsPage(embedded: true, visitToken: _settingsVisit),
-          ],
-        ),
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _index,
-          onDestinationSelected: _select,
-          destinations: const <NavigationDestination>[
-            NavigationDestination(
-              icon: Icon(Icons.folder_outlined),
-              selectedIcon: Icon(Icons.folder),
-              label: '文件',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.photo_outlined),
-              selectedIcon: Icon(Icons.photo),
-              label: '相册',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.swap_vert_circle_outlined),
-              selectedIcon: Icon(Icons.swap_vert_circle),
-              label: '传输',
-            ),
-            NavigationDestination(
-              icon: Icon(CupertinoIcons.trash),
-              selectedIcon: Icon(CupertinoIcons.trash_fill),
-              label: '回收站',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.person_outline),
-              selectedIcon: Icon(Icons.person),
-              label: '我的',
-            ),
-          ],
+          if (_index == 3) {
+            if (controller.recycleBinPath != AppController.rootPrefix) {
+              controller.setRecycleBinPath(
+                controller.parentPath(controller.recycleBinPath),
+              );
+              return;
+            }
+            _select(0);
+            return;
+          }
+          if (_index != 0) {
+            _select(0);
+            return;
+          }
+          final target = controller.backNavigationPath();
+          if (target != null) {
+            controller.setCurrentPath(target);
+          }
+        },
+        child: Scaffold(
+          body: IndexedStack(
+            index: _index.clamp(0, 4),
+            children: <Widget>[
+              const WorkspacePage(),
+              GalleryPage(key: ValueKey<String>('gallery-mobile')),
+              const TransferTasksPage(embedded: true),
+              RecycleBinPage(
+                key: ValueKey<String>('recycle-bin-mobile-$_recycleBinVisit'),
+                embedded: true,
+                visitToken: _recycleBinVisit,
+              ),
+              SettingsPage(embedded: true, visitToken: _settingsVisit),
+            ],
+          ),
+          bottomNavigationBar: NavigationBar(
+            selectedIndex: _index,
+            onDestinationSelected: _select,
+            destinations: const <NavigationDestination>[
+              NavigationDestination(
+                icon: Icon(Icons.folder_outlined),
+                selectedIcon: Icon(Icons.folder),
+                label: '文件',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.photo_outlined),
+                selectedIcon: Icon(Icons.photo),
+                label: '相册',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.swap_vert_circle_outlined),
+                selectedIcon: Icon(Icons.swap_vert_circle),
+                label: '传输',
+              ),
+              NavigationDestination(
+                icon: Icon(CupertinoIcons.trash),
+                selectedIcon: Icon(CupertinoIcons.trash_fill),
+                label: '回收站',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.person_outline),
+                selectedIcon: Icon(Icons.person),
+                label: '我的',
+              ),
+            ],
+          ),
         ),
       ),
     );

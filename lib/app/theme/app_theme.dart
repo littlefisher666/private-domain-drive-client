@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 
 class AppTheme {
   AppTheme._();
@@ -63,21 +64,33 @@ class AppTheme {
     final isDark = colorScheme.brightness == Brightness.dark;
 
     return base.copyWith(
-      scaffoldBackgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
-      textTheme: base.textTheme.apply(
-        bodyColor: colorScheme.onSurface,
-        displayColor: colorScheme.onSurface,
-      ).copyWith(
-        headlineMedium: base.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700),
-        headlineSmall: base.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
-        titleLarge: base.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
-        titleMedium: base.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-      ),
+      scaffoldBackgroundColor:
+          isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
+      textTheme: base.textTheme
+          .apply(
+            bodyColor: colorScheme.onSurface,
+            displayColor: colorScheme.onSurface,
+          )
+          .copyWith(
+            headlineMedium: base.textTheme.headlineMedium
+                ?.copyWith(fontWeight: FontWeight.w700),
+            headlineSmall: base.textTheme.headlineSmall
+                ?.copyWith(fontWeight: FontWeight.w700),
+            titleLarge: base.textTheme.titleLarge
+                ?.copyWith(fontWeight: FontWeight.w600),
+            titleMedium: base.textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.w600),
+          ),
       appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
         foregroundColor: colorScheme.onSurface,
         elevation: 0,
         scrolledUnderElevation: 0,
+        // 透明背景在亮度计算中等价于纯黑，Material AppBar 会据此推导出
+        // 白色状态栏图标并在离开页面后残留；必须显式声明与主题亮度一致
+        // 的状态栏样式（浅色主题用深色图标，深色主题用浅色图标）。
+        systemOverlayStyle:
+            isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
       ),
       cardTheme: CardThemeData(
         color: isDark ? const Color(0xFF111827) : Colors.white,
@@ -89,7 +102,8 @@ class AppTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: isDark ? const Color(0xFF111827) : Colors.white,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
           borderSide: BorderSide(color: colorScheme.outline),
@@ -128,7 +142,8 @@ class AppTheme {
         iconTheme: WidgetStateProperty.resolveWith((states) {
           final selected = states.contains(WidgetState.selected);
           return IconThemeData(
-            color: selected ? colorScheme.primary : colorScheme.onSurfaceVariant,
+            color:
+                selected ? colorScheme.primary : colorScheme.onSurfaceVariant,
           );
         }),
         labelTextStyle: WidgetStateProperty.resolveWith((states) {
@@ -136,7 +151,8 @@ class AppTheme {
           return TextStyle(
             fontSize: 12,
             fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-            color: selected ? colorScheme.primary : colorScheme.onSurfaceVariant,
+            color:
+                selected ? colorScheme.primary : colorScheme.onSurfaceVariant,
           );
         }),
       ),
@@ -144,7 +160,8 @@ class AppTheme {
         style: FilledButton.styleFrom(
           minimumSize: const Size(0, 44),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
         ),
       ),
@@ -152,7 +169,8 @@ class AppTheme {
         style: OutlinedButton.styleFrom(
           minimumSize: const Size(0, 40),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           side: BorderSide(color: colorScheme.outline),
           textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
         ),
