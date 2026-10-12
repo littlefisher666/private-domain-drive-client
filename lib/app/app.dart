@@ -29,7 +29,7 @@ class PrivateDomainDriveApp extends StatefulWidget {
 
 class _PrivateDomainDriveAppState extends State<PrivateDomainDriveApp> {
   final _navigatorKey = GlobalKey<NavigatorState>();
-  StreamSubscription<List<ShareImportItem>>? _shareSubscription;
+  StreamSubscription<ShareImportEvent>? _shareSubscription;
   String? _openedShareSignature;
   bool _shareDialogShowing = false;
   bool? _lastLoggedIn;
@@ -40,11 +40,19 @@ class _PrivateDomainDriveAppState extends State<PrivateDomainDriveApp> {
     // 传输队列内的上传冲突处置对话框需要全局导航上下文。
     widget.controller.setNavigatorKey(_navigatorKey);
     if (defaultTargetPlatform == TargetPlatform.android) {
-      _shareSubscription = AndroidShareImportBridge.incomingItems.listen(
-        _receiveSharedItems,
+      _shareSubscription = AndroidShareImportBridge.events.listen(
+        _handleShareEvent,
+        onError: (Object error) {
+          debugPrint('[share-import] 分享事件流异常: $error');
+        },
       );
       WidgetsBinding.instance.addPostFrameCallback((_) async {
-        _receiveSharedItems(await AndroidShareImportBridge.takePendingItems());
+        // 冷启动兜底：原生缓冲中已完整的批次直接并入为「立即完成」批次。
+        final batches = await AndroidShareImportBridge.takePendingBatches();
+        for (final batch in batches) {
+          widget.controller.addCompletedShareBatch(batch);
+        }
+        _showShareTargetDialogIfNeeded();
       });
     }
   }
@@ -56,22 +64,39 @@ class _PrivateDomainDriveAppState extends State<PrivateDomainDriveApp> {
     super.dispose();
   }
 
-  void _receiveSharedItems(List<ShareImportItem> items) {
-    if (items.isEmpty) return;
-    widget.controller.prepareShareImport(items: items);
+  /// 信封事件分发：批次开始/逐项到达/批次完成均交给控制器渐进接收。
+  void _handleShareEvent(ShareImportEvent event) {
+    final controller = widget.controller;
+    switch (event) {
+      case ShareImportBatchStart(:final batchId, :final total):
+        controller.beginShareImportBatch(batchId, total);
+      case ShareImportItemEvent(:final batchId, :final item):
+        controller.addShareImportItem(batchId, item);
+      case ShareImportBatchDone(
+          :final batchId,
+          :final succeeded,
+          :final failed,
+        ):
+        controller.finishShareImportBatch(
+          batchId,
+          succeeded: succeeded,
+          failed: failed,
+        );
+    }
     _showShareTargetDialogIfNeeded();
   }
 
-  /// 分享进入后不落地中间页，直接弹目录选择框；确认后立即开始上传。
+  /// 分享进入后不落地中间页，直接弹目录选择框；弹窗可先于复制完成
+  /// 弹出（进度在弹窗内展示），确认后立即开始上传。
   void _showShareTargetDialogIfNeeded() {
-    if (_shareDialogShowing ||
-        !widget.controller.isLoggedIn ||
-        widget.controller.pendingShareItems.isEmpty) {
+    final controller = widget.controller;
+    if (_shareDialogShowing || !controller.isLoggedIn) {
       return;
     }
-    final signature =
-        widget.controller.pendingShareItems.map((item) => item.id).join('|');
-    if (signature == _openedShareSignature) return;
+    // 防重入签名以批次 id 为准：同一批次不重复弹窗；取消弹窗时清除
+    // 签名，重新分享同一批内容仍能再次弹出。
+    final signature = controller.pendingShareBatchIds.join('|');
+    if (signature.isEmpty || signature == _openedShareSignature) return;
     _openedShareSignature = signature;
     _shareDialogShowing = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -94,8 +119,8 @@ class _PrivateDomainDriveAppState extends State<PrivateDomainDriveApp> {
           ShareTargetDialog(initialPath: controller.shareTargetPath),
     );
     if (selected == null) {
-      // 用户取消即放弃本次导入，避免残留待上传项；同时清除防重入签名，
-      // 让用户建完文件夹后重新分享同一批内容仍能再次弹出目录选择。
+      // 用户取消即放弃本次导入，避免残留待上传项；同时清除防重入签名
+      // 与批次进度，让用户建完文件夹后重新分享仍能再次弹出目录选择。
       _openedShareSignature = null;
       controller.prepareShareImport(items: const <ShareImportItem>[]);
       return;

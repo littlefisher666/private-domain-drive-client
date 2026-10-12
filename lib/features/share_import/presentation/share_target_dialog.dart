@@ -105,50 +105,93 @@ class _ShareTargetDialogState extends State<ShareTargetDialog> {
   Widget build(BuildContext context) {
     final controller = AppScope.read(context);
     final theme = Theme.of(context);
-    return AlertDialog(
-      title: const Text('选择上传目录'),
-      content: SizedBox(
-        width: 320,
-        height: 360,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Row(
+    // 分享批次渐进到达：监听控制器，导入进度与确认按钮状态实时刷新。
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final batch = controller.activeShareBatch;
+        final importing = batch != null && !batch.finished;
+        final failedCount =
+            batch?.finished == true ? batch!.failedCount : 0;
+        // 批次复制完成且有待上传内容才允许确认上传。
+        final canConfirm =
+            !importing && controller.pendingShareItems.isNotEmpty;
+        return AlertDialog(
+          title: const Text('选择上传目录'),
+          content: SizedBox(
+            width: 320,
+            height: 360,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                IconButton(
-                  tooltip: '上一级',
-                  onPressed: _canGoUp ? _goUp : null,
-                  icon: const Icon(Icons.arrow_upward),
+                Row(
+                  children: <Widget>[
+                    IconButton(
+                      tooltip: '上一级',
+                      onPressed: _canGoUp ? _goUp : null,
+                      icon: const Icon(Icons.arrow_upward),
+                    ),
+                    Expanded(
+                      child: Text(
+                        controller.displayPath(_currentPath),
+                        style: theme.textTheme.titleSmall,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '新建文件夹',
+                      onPressed: _createFolder,
+                      icon: const Icon(Icons.create_new_folder_outlined),
+                    ),
+                  ],
                 ),
-                Expanded(
-                  child: Text(
-                    controller.displayPath(_currentPath),
-                    style: theme.textTheme.titleSmall,
-                    overflow: TextOverflow.ellipsis,
+                if (batch != null && (importing || failedCount > 0))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Row(
+                      children: <Widget>[
+                        if (importing) ...<Widget>[
+                          const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        Expanded(
+                          child: Text(
+                            importing
+                                ? '正在导入 ${batch.received}/${batch.total}'
+                                : '$failedCount 个文件导入失败',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: failedCount > 0 && !importing
+                                  ? theme.colorScheme.error
+                                  : theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                IconButton(
-                  tooltip: '新建文件夹',
-                  onPressed: _createFolder,
-                  icon: const Icon(Icons.create_new_folder_outlined),
-                ),
+                const Divider(height: 1),
+                Expanded(child: _buildBody(theme)),
               ],
             ),
-            const Divider(height: 1),
-            Expanded(child: _buildBody(theme)),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: canConfirm
+                  ? () => Navigator.of(context).pop(_currentPath)
+                  : null,
+              child: const Text('上传到此处'),
+            ),
           ],
-        ),
-      ),
-      actions: <Widget>[
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(_currentPath),
-          child: const Text('上传到此处'),
-        ),
-      ],
+        );
+      },
     );
   }
 
