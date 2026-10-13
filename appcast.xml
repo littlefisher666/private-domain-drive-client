@@ -11,11 +11,11 @@
       <sparkle:version>84</sparkle:version>
       <sparkle:shortVersionString>1.0.10</sparkle:shortVersionString>
       <pubDate>Mon, 12 Oct 2026 09:17:04 +0000</pubDate>
-      <description>【新功能】
+      <description type="markdown">### 新功能
 - 上传任务持久化与冷启动恢复（transfer）
 - Android 分享文件后台异步复制与批次进度反馈（share-import）
 
-【修复】
+### 修复
 - 非传输调用增加 10s 整体超时兜底（oss）
 - 显式声明状态栏样式，修复浅色主题下白色图标残留（ui）
 - MainActivity 启动模式调整为 singleTask（android）</description>
@@ -27,7 +27,7 @@
       <sparkle:version>83</sparkle:version>
       <sparkle:shortVersionString>1.0.9</sparkle:shortVersionString>
       <pubDate>Mon, 12 Oct 2026 02:11:14 +0000</pubDate>
-      <description>【新功能】
+      <description type="markdown">### 新功能
 - 创建链接合并为单对话框（workspace）
 - 目录别名支持挂载到任意层级（workspace）
 - 根目录目录别名（虚拟目录链接）（workspace）
@@ -38,7 +38,7 @@
 - 接入 Sparkle 自更新并关闭 App Sandbox（macos）
 - 视频播放网速角标与移动端自定义控制层（gallery）
 - 重建索引入口与存量缩略图补齐并发化（gallery）
-- 查看器视频内嵌流式播放（media_kit + 预签名 URL）（gallery）
+- 查看器视频内嵌流式播放（media\_kit + 预签名 URL）（gallery）
 - 移动端传输页固定统计头部、上传同名存在性校验与任务排序（transfer）
 - 内部对象收敛至 .gallery 点前缀并统一隐藏规则、查看器手势重构（gallery）
 - 超大图本地缩略图、拍摄时间推断增强与交互细节完善（gallery）
@@ -75,7 +75,7 @@
 - 添加 macOS 桌面平台支持（client）
 - 初始化 Flutter 客户端工程骨架（client）
 
-【修复】
+### 修复
 - 同层别名指向同层目录时并列展示（workspace）
 - rebase 懒加载统计后融合别名统计调用（workspace）
 - 移动端列表底部留白避免悬浮添加按钮遮挡三点菜单（workspace）
@@ -91,7 +91,7 @@
 - 回收站按 payload 对象路径展开虚拟目录树（recycle-bin）
 - 测试注入内存凭据存储避免 CI 平台通道挂起（test）
 - 版本准备失败时跳过双端打包 job（ci）
-- FC 地址变量名修正为 FC_BASE_URL（ci）
+- FC 地址变量名修正为 FC\_BASE\_URL（ci）
 - 修正 Android 签名密钥口令 secret 名称（ci）
 - 使用静态清单检查新版本（update）
 - 续接授权后的安装流程（update）
@@ -99,7 +99,7 @@
 - 适配 macOS 会话存储
 - 接入FC HTTP触发器签名认证（network）
 
-【优化】
+### 优化
 - 构建产物限定为纯 arm64 架构（macos）
 - 升级 pdfrx 至 2.6.5 并将 macOS Podfile 平台版本提升至 12.0
 - Gradle 仓库按 CI 环境区分镜像（android）
@@ -109,7 +109,7 @@
 - 双端 Debug 构建使用独立包名与应用名（platform）
 - 移动端底部导航选中态图标与文字样式优化（theme）
 - 卡片去除描边并紧凑化我的页面移动端布局（theme）
-- 升级 file_picker、flutter_secure_storage 与 flutter_lints 并适配空安全（deps）
+- 升级 file\_picker、flutter\_secure\_storage 与 flutter\_lints 并适配空安全（deps）
 - 调整按钮主题尺寸并优化改密页与设置页桌面布局（ui）
 - 文案面向普通用户优化并统一为用户名密码表述（ui）
 - 移除客户端标识符后缀
@@ -125,7 +125,7 @@
       <sparkle:version>81</sparkle:version>
       <sparkle:shortVersionString>1.0.8</sparkle:shortVersionString>
       <pubDate>Sat, 10 Oct 2026 07:03:53 +0000</pubDate>
-      <description>【新功能】
+      <description type="markdown">### 新功能
 - 创建链接合并为单对话框（workspace）
 - 目录别名支持挂载到任意层级（workspace）
 - 根目录目录别名（虚拟目录链接）（workspace）
@@ -133,13 +133,13 @@
 - 上传同名文件冲突对话框默认勾选改为跳过（workspace）
 - 支持文件与文件夹移动（copy+delete 幂等搬运）（workspace）
 
-【修复】
+### 修复
 - 同层别名指向同层目录时并列展示（workspace）
 - rebase 懒加载统计后融合别名统计调用（workspace）
 - 移动端列表底部留白避免悬浮添加按钮遮挡三点菜单（workspace）
 - 启动更新检查可关闭并完善 OSS 错误诊断与 EXIF 兜底（platform）
 
-【优化】
+### 优化
 - Gradle 仓库按 CI 环境区分镜像（android）
 - 移动改为流式边列举边搬运并加速目录选择（workspace）
 - 开启混淆与 R8 压缩并剔除 Web 平台专用资源（release）
@@ -152,10 +152,10 @@
       <sparkle:version>78</sparkle:version>
       <sparkle:shortVersionString>1.0.7</sparkle:shortVersionString>
       <pubDate>Fri, 09 Oct 2026 06:59:26 +0000</pubDate>
-      <description>【新功能】
+      <description type="markdown">### 新功能
 - 详情页新增 PDF/文本/Markdown/CSV 直接预览与音频播放（preview）
 
-【修复】
+### 修复
 - 适配 macOS 红绿灯避让并移除非图片预览的圆角框（preview）</description>
       <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.7/private-domain-drive-macos-v1.0.7.zip" length="48270218" type="application/zip" sparkle:edSignature="pA4EBmYDpT8htmGegpai/7O0eOl9Sbo/wF0ch3DvSUPuhGcESeyYUsf9l8/oz/n9St3sQH7SJmsYiG48SPJ5AA==" />
     </item>
@@ -165,7 +165,7 @@
       <sparkle:version>77</sparkle:version>
       <sparkle:shortVersionString>1.0.6</sparkle:shortVersionString>
       <pubDate>Fri, 09 Oct 2026 03:35:59 +0000</pubDate>
-      <description>【修复】
+      <description type="markdown">### 修复
 - 修正 Sparkle 更新提示版本号与误报失败状态（macos）</description>
       <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.6/private-domain-drive-macos-v1.0.6.zip" length="40250560" type="application/zip" sparkle:edSignature="gg4+hy09O6gF6vV/fVkZz9FgYBub3znZeRMWi5Y9ku1CL3awW6okEEGnoNkIhH/BynpSyhxndQT+9Dw/Nd+TAQ==" />
     </item>
@@ -175,7 +175,7 @@
       <sparkle:version>76</sparkle:version>
       <sparkle:shortVersionString>1.0.5</sparkle:shortVersionString>
       <pubDate>Fri, 09 Oct 2026 02:08:05 +0000</pubDate>
-      <description>【优化】
+      <description type="markdown">### 优化
 - 例行发布，无用户可感知的变更。</description>
       <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.5/private-domain-drive-macos-v1.0.5.zip" length="40251072" type="application/zip" sparkle:edSignature="dXVdIJYLsctQwfOfojFo3nak0j1XcimKjLvFtH8Ni0zBOEB+V2D7/jlVT9HplKCjNfMvzNdfyHsDs6Er8e/xBQ==" />
     </item>
@@ -185,7 +185,7 @@
       <sparkle:version>74</sparkle:version>
       <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
       <pubDate>Fri, 09 Oct 2026 01:00:20 +0000</pubDate>
-      <description>【新功能】
+      <description type="markdown">### 新功能
 - 接入 Sparkle 自更新并关闭 App Sandbox（macos）</description>
       <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.3/private-domain-drive-macos-v1.0.3.zip" length="40251074" type="application/zip" sparkle:edSignature="zwwFCaTgzSbXqG/Cs8fj0ZNKGsxm7HqdWN2ue+6BZ0JW9gDbiq0P7mRXnOoSfza+TWMOikqZXciEgq2CGDcgAQ==" />
     </item>
