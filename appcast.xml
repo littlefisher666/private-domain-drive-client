@@ -11,7 +11,7 @@
       <sparkle:version>84</sparkle:version>
       <sparkle:shortVersionString>1.0.10</sparkle:shortVersionString>
       <pubDate>Mon, 12 Oct 2026 09:17:04 +0000</pubDate>
-      <description type="markdown">### 新功能
+      <description sparkle:format="markdown">### 新功能
 - 上传任务持久化与冷启动恢复（transfer）
 - Android 分享文件后台异步复制与批次进度反馈（share-import）
 
@@ -27,7 +27,7 @@
       <sparkle:version>83</sparkle:version>
       <sparkle:shortVersionString>1.0.9</sparkle:shortVersionString>
       <pubDate>Mon, 12 Oct 2026 02:11:14 +0000</pubDate>
-      <description type="markdown">### 新功能
+      <description sparkle:format="markdown">### 新功能
 - 创建链接合并为单对话框（workspace）
 - 目录别名支持挂载到任意层级（workspace）
 - 根目录目录别名（虚拟目录链接）（workspace）
@@ -125,7 +125,7 @@
       <sparkle:version>81</sparkle:version>
       <sparkle:shortVersionString>1.0.8</sparkle:shortVersionString>
       <pubDate>Sat, 10 Oct 2026 07:03:53 +0000</pubDate>
-      <description type="markdown">### 新功能
+      <description sparkle:format="markdown">### 新功能
 - 创建链接合并为单对话框（workspace）
 - 目录别名支持挂载到任意层级（workspace）
 - 根目录目录别名（虚拟目录链接）（workspace）
@@ -152,7 +152,7 @@
       <sparkle:version>78</sparkle:version>
       <sparkle:shortVersionString>1.0.7</sparkle:shortVersionString>
       <pubDate>Fri, 09 Oct 2026 06:59:26 +0000</pubDate>
-      <description type="markdown">### 新功能
+      <description sparkle:format="markdown">### 新功能
 - 详情页新增 PDF/文本/Markdown/CSV 直接预览与音频播放（preview）
 
 ### 修复
@@ -165,7 +165,7 @@
       <sparkle:version>77</sparkle:version>
       <sparkle:shortVersionString>1.0.6</sparkle:shortVersionString>
       <pubDate>Fri, 09 Oct 2026 03:35:59 +0000</pubDate>
-      <description type="markdown">### 修复
+      <description sparkle:format="markdown">### 修复
 - 修正 Sparkle 更新提示版本号与误报失败状态（macos）</description>
       <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.6/private-domain-drive-macos-v1.0.6.zip" length="40250560" type="application/zip" sparkle:edSignature="gg4+hy09O6gF6vV/fVkZz9FgYBub3znZeRMWi5Y9ku1CL3awW6okEEGnoNkIhH/BynpSyhxndQT+9Dw/Nd+TAQ==" />
     </item>
@@ -175,7 +175,7 @@
       <sparkle:version>76</sparkle:version>
       <sparkle:shortVersionString>1.0.5</sparkle:shortVersionString>
       <pubDate>Fri, 09 Oct 2026 02:08:05 +0000</pubDate>
-      <description type="markdown">### 优化
+      <description sparkle:format="markdown">### 优化
 - 例行发布，无用户可感知的变更。</description>
       <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.5/private-domain-drive-macos-v1.0.5.zip" length="40251072" type="application/zip" sparkle:edSignature="dXVdIJYLsctQwfOfojFo3nak0j1XcimKjLvFtH8Ni0zBOEB+V2D7/jlVT9HplKCjNfMvzNdfyHsDs6Er8e/xBQ==" />
     </item>
@@ -185,7 +185,7 @@
       <sparkle:version>74</sparkle:version>
       <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
       <pubDate>Fri, 09 Oct 2026 01:00:20 +0000</pubDate>
-      <description type="markdown">### 新功能
+      <description sparkle:format="markdown">### 新功能
 - 接入 Sparkle 自更新并关闭 App Sandbox（macos）</description>
       <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.3/private-domain-drive-macos-v1.0.3.zip" length="40251074" type="application/zip" sparkle:edSignature="zwwFCaTgzSbXqG/Cs8fj0ZNKGsxm7HqdWN2ue+6BZ0JW9gDbiq0P7mRXnOoSfza+TWMOikqZXciEgq2CGDcgAQ==" />
     </item>
