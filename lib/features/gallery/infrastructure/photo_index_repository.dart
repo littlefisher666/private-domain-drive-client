@@ -149,7 +149,8 @@ class PhotoIndexRepository {
               entries: const <PhotoEntry>[],
               formatVersion: PhotoManifest.currentFormatVersion,
             );
-      } on FormatException {
+      } on FormatException catch (error) {
+        debugPrint('[gallery] 清单读取解析失败: $error');
         return const ManifestWriteConflictExceeded();
       }
       var next = mutate(current);
@@ -168,9 +169,12 @@ class PhotoIndexRepository {
       try {
         final latest = await loadManifest(session);
         if (latest != null && latest.$2 != currentEtag) {
+          debugPrint('[gallery] 清单写回 ETag 复查变化，重试($attempt)：'
+              '$currentEtag -> ${latest.$2}');
           continue;
         }
-      } on FormatException {
+      } on FormatException catch (error) {
+        debugPrint('[gallery] 清单复查解析失败: $error');
         return const ManifestWriteConflictExceeded();
       } catch (_) {
         // 复查失败时按原计划写入；极端冲突由全量扫描兜底。
@@ -402,12 +406,14 @@ class PhotoIndexRepository {
       });
       switch (result) {
         case ManifestWriteSuccess(:final version):
+          debugPrint('[gallery] 扫描清单写回成功: version=$version');
           await _database.writeIndexMeta(PhotoIndexMeta(
             version: version,
             scannedAt: manifest.scannedAt,
             needsRepair: false,
           ));
         case ManifestWriteConflictExceeded():
+          debugPrint('[gallery] 扫描清单写回冲突超限，标记待修复');
           await _database.writeIndexMeta(PhotoIndexMeta(
             version: manifest.version,
             scannedAt: manifest.scannedAt,
