@@ -50,18 +50,25 @@ void main() {
       await _waitForKeepaliveCall(keepalive, (call) => !call.active);
       expect(keepalive.calls.last.active, isFalse);
       expect(keepalive.calls.last.summary, isNull);
-      // 进度摘要与队列统计一致：进度上报后出现过 0/1 已完成、25%。
+      // 进度上报会触发保活同步：等待字节进度落地到任务状态。
+      final progressDeadline = DateTime.now().add(const Duration(seconds: 5));
+      while (controller.tasks.single.progress < 0.25) {
+        if (DateTime.now().isAfter(progressDeadline)) {
+          fail('进度上报未落地：${controller.tasks.single.progress}');
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      // 进度摘要与队列统计一致：百分比按文件数计，字节进度变化不改变摘要。
       expect(
-        keepalive.calls.any(
-          (call) =>
-              call.active &&
-              call.summary ==
-                  const TransferProgressSummary(
-                      remainingCount: 1,
-                      completedCount: 0,
-                      totalCount: 1,
-                      percent: 25),
-        ),
+        keepalive.calls
+            .where((call) => call.active)
+            .every((call) =>
+                call.summary ==
+                const TransferProgressSummary(
+                    remainingCount: 1,
+                    completedCount: 0,
+                    totalCount: 1,
+                    percent: 0)),
         isTrue,
       );
     });
