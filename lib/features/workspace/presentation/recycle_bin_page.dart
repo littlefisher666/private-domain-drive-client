@@ -12,7 +12,8 @@ import '../domain/file_item.dart';
 import '../domain/recycle_bin_entry.dart';
 import 'workspace_page.dart';
 
-/// 复用共享空间浏览器外壳，并以删除批次组成虚拟目录树。
+/// 复用共享空间浏览器外壳；根层平铺展示每个删除条目，
+/// 目录条目可进入查看删除前的内部结构。
 class RecycleBinPage extends StatefulWidget {
   const RecycleBinPage({super.key, this.embedded = false, this.visitToken = 0});
   final bool embedded;
@@ -69,10 +70,54 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
 
   String _folder(String path) => path.endsWith('/') ? path : '$path/';
 
+  static final String _rootDir = _staticFolder(AppController.rootPrefix);
+  static final String _trashPrefix =
+      _staticFolder('${AppController.rootPrefix}.trash');
+
+  static String _staticFolder(String path) =>
+      path.endsWith('/') ? path : '$path/';
+
+  /// 条目内对象共同的原路径前缀（含末段目录名，以 / 结尾），作为条目
+  /// 虚拟树与真实源路径之间的映射基准；兼容旧批次与单文件条目。
+  String _entryBase(RecycleBinEntry entry) {
+    final sources = entry.objects.keys.toList(growable: false);
+    if (sources.isEmpty) {
+      final original = entry.originalPath.endsWith('/')
+          ? entry.originalPath.substring(0, entry.originalPath.length - 1)
+          : entry.originalPath;
+      final slash = original.lastIndexOf('/');
+      return _staticFolder(slash < 0 ? '' : original.substring(0, slash));
+    }
+    var common = sources.first;
+    for (final source in sources.skip(1)) {
+      var i = 0;
+      while (i < common.length && i < source.length && common[i] == source[i]) {
+        i++;
+      }
+      common = common.substring(0, i);
+    }
+    final slash = common.lastIndexOf('/');
+    return slash < 0 ? '' : common.substring(0, slash + 1);
+  }
+
+  /// 虚拟展示路径对应的真实源路径：根层条目即 originalPath，
+  /// 条目内部按基准前缀映射，供预览加载与原位置展示使用。
+  String _sourceKeyFor(FileItem item, RecycleBinEntry entry) {
+    final entryKey = '$_trashPrefix${entry.id}';
+    if (item.path == entryKey || item.path == _staticFolder(entryKey)) {
+      return entry.originalPath;
+    }
+    final rel = item.path.startsWith('$_trashPrefix${entry.id}/')
+        ? item.path.substring('$_trashPrefix${entry.id}/'.length)
+        : item.path;
+    return _staticFolder(_entryBase(entry) + rel);
+  }
+
   List<FileItem> _itemsFor(List<RecycleBinEntry> entries) {
     final result = <String, FileItem>{};
     final owners = <String, RecycleBinEntry>{};
-    final current = _folder(AppScope.of(context).recycleBinPath);
+    final controller = AppScope.of(context);
+    final current = _folder(controller.recycleBinPath);
 
     void add(String path, String name, bool directory, RecycleBinEntry entry) {
       final canonical = directory ? _folder(path) : path;
@@ -85,23 +130,38 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       owners[canonical] = entry;
     }
 
-    for (final entry in entries) {
-      // 统一按 payload 对象路径展开（批量删除的文件条目 originalPath 记录的
-      // 是删除时所在目录而非文件本身，不能作为来源），并按“源路径的第一段”
-      // 构成虚拟目录树，避免虚拟文件夹进入后为空。
-      final sources = entry.objects.keys;
-      for (final source in sources) {
-        if (!source.startsWith(current)) continue;
-        final relative = source.substring(current.length);
-        if (relative.isEmpty) continue;
-        final slash = relative.indexOf('/');
-        final name = slash < 0 ? relative : relative.substring(0, slash);
-        if (name.isEmpty) continue;
-        add('$current$name', name, slash >= 0 || relative.endsWith('/'), entry);
+    if (current == _rootDir) {
+      // 根层平铺：每个删除条目一行，独立展示名与删除时间。
+      for (final entry in entries) {
+        final directory =
+            entry.isDirectory || entry.originalPath.endsWith('/');
+        add('$_trashPrefix${entry.id}', entry.name, directory, entry);
+      }
+    } else if (current.startsWith(_trashPrefix)) {
+      // 条目内部：按该条目自己的对象以源路径首段构成虚拟目录树。
+      final rest = current.substring(_trashPrefix.length);
+      final slash = rest.indexOf('/');
+      final id = slash < 0 ? rest : rest.substring(0, slash);
+      final entry =
+          entries.where((candidate) => candidate.id == id).firstOrNull;
+      if (entry != null) {
+        final prefix = _staticFolder(_entryBase(entry) +
+            current.substring('$_trashPrefix$id/'.length));
+        for (final source in entry.objects.keys) {
+          if (!source.startsWith(prefix)) continue;
+          final relative = source.substring(prefix.length);
+          if (relative.isEmpty) continue;
+          final nameEnd = relative.indexOf('/');
+          final name =
+              nameEnd < 0 ? relative : relative.substring(0, nameEnd);
+          if (name.isEmpty) continue;
+          add('$current$name', name, nameEnd >= 0 || relative.endsWith('/'),
+              entry);
+        }
       }
     }
     _itemEntries = owners;
-    return sortFileItems(result.values, AppScope.of(context).fileSortOption);
+    return sortFileItems(result.values, controller.fileSortOption);
   }
 
   void _open(FileItem item) {
@@ -113,14 +173,15 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
     _openPreview(item);
   }
 
-  /// 回收站文件的真实存储位置在批次 payload 下，
-  /// 预览按批次内对象路径加载，界面展示仍用原位置。
+  /// 回收站文件的真实存储位置在条目 payload 下，
+  /// 预览按条目内对象路径加载，界面展示仍用原位置。
   void _openPreview(FileItem item) {
     if (item.isDirectory) return;
     if (PreviewTypeResolver.fromFileName(item.name) != PreviewType.image) {
       return;
     }
-    final tappedTrashPath = _itemEntries[item.path]?.objects[item.path];
+    final entry = _itemEntries[item.path];
+    final tappedTrashPath = entry?.objects[_sourceKeyFor(item, entry!)];
     if (tappedTrashPath == null) return;
     final imageFiles = <FileItem>[];
     final displayPaths = <String, String>{};
@@ -129,7 +190,9 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       if (PreviewTypeResolver.fromFileName(file.name) != PreviewType.image) {
         continue;
       }
-      final trashPath = _itemEntries[file.path]?.objects[file.path];
+      final fileEntry = _itemEntries[file.path];
+      final trashPath =
+          fileEntry?.objects[_sourceKeyFor(file, fileEntry!)];
       if (trashPath == null) continue;
       imageFiles.add(
         FileItem(
@@ -139,7 +202,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
           updatedAt: file.updatedAt,
         ),
       );
-      displayPaths[trashPath] = file.path;
+      displayPaths[trashPath] = _sourceKeyFor(file, fileEntry!);
     }
     if (imageFiles.isEmpty) return;
     Navigator.of(context).pushNamed(
@@ -208,9 +271,9 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
 
   void _goUp() {
     final controller = AppScope.of(context);
-    if (controller.recycleBinPath == AppController.rootPrefix) return;
-    controller
-        .setRecycleBinPath(controller.parentPath(controller.recycleBinPath));
+    final up = controller.recycleBinUpPath();
+    if (up == controller.recycleBinPath) return;
+    controller.setRecycleBinPath(up);
     _selected.value = null;
   }
 
@@ -241,7 +304,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
     final confirmed = await AppFeedback.confirm(
       context,
       title: '立即删除“${entry.name}”？',
-      message: '将永久删除该批次，删除后无法再恢复。',
+      message: '将永久删除该项，删除后无法再恢复。',
       confirmLabel: '删除',
     );
     if (!confirmed) return;
@@ -260,6 +323,26 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
     if (remaining <= Duration.zero) return '等待 OSS 自动清理';
     if (remaining.inHours < 24) return '约剩余不足 1 天';
     return '约剩余 ${remaining.inDays + 1} 天';
+  }
+
+  String _pathLabel(String recycleBinPath, List<RecycleBinEntry> entries) {
+    final current = _folder(recycleBinPath);
+    if (current == _rootDir) return '回收站';
+    if (current.startsWith(_trashPrefix)) {
+      final rest = current.substring(_trashPrefix.length);
+      final slash = rest.indexOf('/');
+      final id = slash < 0 ? rest : rest.substring(0, slash);
+      final name = entries
+              .where((entry) => entry.id == id)
+              .firstOrNull
+              ?.name ??
+          id;
+      final relative = slash < 0 ? '' : rest.substring(slash + 1);
+      return relative.isEmpty
+          ? '回收站 / $name'
+          : '回收站 / $name / $relative';
+    }
+    return '回收站 / ${current.substring(_rootDir.length)}';
   }
 
   String _date(DateTime value) =>
@@ -361,7 +444,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
               const SizedBox(height: 12),
               Text('类型：${item.typeLabel}'),
               Text(
-                  '原位置：${AppScope.of(context).displayPath(entry.originalPath)}'),
+                  '原位置：${AppScope.of(context).displayPath(_sourceKeyFor(item, entry))}'),
               Text('删除于：${_date(entry.deletedAt)}'),
               Text('永久删除：${_date(entry.expiresAt)}'),
               Text(_remaining(entry.expiresAt)),
@@ -395,9 +478,8 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
           }
           final items = _itemsFor(snapshot.data ?? const <RecycleBinEntry>[]);
           final recycleBinPath = controller.recycleBinPath;
-          final pathLabel = recycleBinPath == AppController.rootPrefix
-              ? '回收站'
-              : '回收站 / ${recycleBinPath.substring(AppController.rootPrefix.length)}';
+          final pathLabel =
+              _pathLabel(recycleBinPath, snapshot.data ?? const []);
           if (desktop) {
             return WorkspaceDesktopBody(
               path: pathLabel,
