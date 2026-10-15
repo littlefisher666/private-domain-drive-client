@@ -1096,6 +1096,13 @@ class _FakeOssClient extends OssClient {
       downloadResult;
 
   @override
+  Future<List<String>> listPrefixes(
+    String prefix,
+    UserSession session,
+  ) async =>
+      const <String>[];
+
+  @override
   Future<void> downloadToFile(
     String path,
     UserSession session,

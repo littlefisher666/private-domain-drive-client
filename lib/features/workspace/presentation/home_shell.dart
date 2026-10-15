@@ -68,10 +68,9 @@ class _HomeShellState extends State<HomeShell> {
             return;
           }
           if (_index == 3) {
-            if (controller.recycleBinPath != AppController.rootPrefix) {
-              controller.setRecycleBinPath(
-                controller.parentPath(controller.recycleBinPath),
-              );
+            final up = controller.recycleBinUpPath();
+            if (up != controller.recycleBinPath) {
+              controller.setRecycleBinPath(up);
               return;
             }
             _select(0);

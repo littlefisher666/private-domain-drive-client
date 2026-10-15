@@ -593,6 +593,13 @@ class _FakeOssClient extends OssClient {
       String path, String content, UserSession session) async {}
 
   @override
+  Future<List<String>> listPrefixes(
+    String prefix,
+    UserSession session,
+  ) async =>
+      const <String>[];
+
+  @override
   Future<List<FileItem>> list(String path, UserSession session) async =>
       itemsByPath[path] ?? const <FileItem>[];
 
