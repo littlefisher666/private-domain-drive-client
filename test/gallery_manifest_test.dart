@@ -118,7 +118,7 @@ void main() {
       (manifest) => manifest,
     );
 
-    expect(result, ManifestWriteResult.conflictExceeded);
+    expect(result, isA<ManifestWriteConflictExceeded>());
     expect(oss.uploads, isEmpty);
   });
 
@@ -149,7 +149,8 @@ void main() {
       ),
     );
 
-    expect(result, ManifestWriteResult.success);
+    expect(result, isA<ManifestWriteSuccess>());
+    expect((result as ManifestWriteSuccess).version, 2);
     expect(oss.uploads, hasLength(1));
     final written = PhotoManifest.decode(oss.uploads.single);
     expect(written.version, 2);
@@ -178,7 +179,7 @@ void main() {
       (manifest) => manifest,
     );
 
-    expect(result, ManifestWriteResult.conflictExceeded);
+    expect(result, isA<ManifestWriteConflictExceeded>());
     expect(oss.uploads, isEmpty);
   });
 }

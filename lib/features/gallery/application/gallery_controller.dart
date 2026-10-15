@@ -63,6 +63,12 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   String? _repairNotice;
   bool _thumbBackfillStarted = false;
 
+  /// 全量扫描进行中标记与增量记账：扫描期间上传/还原、删除的 key，
+  /// 由扫描写回时合并，避免整体覆盖造成条目丢失或复活。
+  bool _scanInProgress = false;
+  final Set<String> _scanPendingUpserts = <String>{};
+  final Set<String> _scanPendingDeletes = <String>{};
+
   /// 已缓存原图的对象 key 集合（角标与秒开判断依据）。
   final ValueNotifier<Set<String>> cachedKeysListenable =
       ValueNotifier<Set<String>>(<String>{});
@@ -225,12 +231,17 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   }
 
   Future<void> _runFullScan(UserSession session) async {
+    _scanPendingUpserts.clear();
+    _scanPendingDeletes.clear();
+    _scanInProgress = true;
     try {
       final manifest = await _repository.fullScan(
         session,
         onProgress: (processed, total) {
           scanProgressListenable.value = (processed, total);
         },
+        pendingUpsertKeys: _scanPendingUpserts,
+        pendingDeleteKeys: _scanPendingDeletes,
       );
       _entries = manifest.entries;
       _repairNotice = manifest.needsRepair ? '索引清单暂未同步，稍后将自动重试' : null;
@@ -240,6 +251,9 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
       _phase = GalleryPhase.error;
       _errorMessage = '建立照片索引失败，请稍后重试';
     } finally {
+      _scanInProgress = false;
+      _scanPendingUpserts.clear();
+      _scanPendingDeletes.clear();
       scanProgressListenable.value = null;
       await _refreshCachedKeys();
       notifyListeners();
@@ -754,6 +768,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
       thumbLocalPath: thumbLocalPath,
     );
     if (entry == null) return;
+    if (_scanInProgress) _scanPendingUpserts.add(entry.key);
     _entries = await _database.readAllEntries();
     notifyListeners();
   }
@@ -762,6 +777,10 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   Future<void> onObjectsDeleted(Set<String> objectKeys) async {
     final session = _app.session;
     if (session == null || !session.isRemote) return;
+    if (_scanInProgress) {
+      _scanPendingDeletes
+          .addAll(objectKeys.where(_repository.isMediaKey));
+    }
     await _repository.removeDeletedMedia(session, objectKeys);
     await _cacheStore.removeCached(objectKeys);
     _entries = await _database.readAllEntries();
@@ -773,6 +792,10 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   Future<void> onObjectsRestored(Set<String> objectKeys) async {
     final session = _app.session;
     if (session == null || !session.isRemote) return;
+    if (_scanInProgress) {
+      _scanPendingUpserts
+          .addAll(objectKeys.where(_repository.isMediaKey));
+    }
     await _repository.restoreMedia(session, objectKeys);
     _entries = await _database.readAllEntries();
     notifyListeners();

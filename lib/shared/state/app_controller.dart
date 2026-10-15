@@ -2627,23 +2627,27 @@ class AppController extends ChangeNotifier {
       _treeRevision++;
       _clearDirectorySizeCache();
       notifyListeners();
-      // 上传成功后触发索引增量更新；挂钩异常不影响任务成功状态。
+      // 上传成功后触发索引增量更新；挂钩在后台执行，不阻塞任务
+      // 完成状态、不占用传输并发槽，挂钩异常不影响任务成功状态。
       if (_galleryHooks != null) {
-        String? thumbPath;
-        try {
-          thumbPath = await thumbnailFuture;
-        } catch (_) {
-          thumbPath = null;
-        }
-        try {
-          await _galleryHooks!.onMediaUploaded(
-            objectPath: objectPath,
-            localPath: localPath,
-            thumbLocalPath: thumbPath,
-          );
-        } catch (error) {
-          debugPrint('[gallery] 索引增量更新挂钩失败: $error');
-        }
+        final hooks = _galleryHooks!;
+        unawaited(() async {
+          String? thumbPath;
+          try {
+            thumbPath = await thumbnailFuture;
+          } catch (_) {
+            thumbPath = null;
+          }
+          try {
+            await hooks.onMediaUploaded(
+              objectPath: objectPath,
+              localPath: localPath,
+              thumbLocalPath: thumbPath,
+            );
+          } catch (error) {
+            debugPrint('[gallery] 索引增量更新挂钩失败: $error');
+          }
+        }());
       }
     });
   }

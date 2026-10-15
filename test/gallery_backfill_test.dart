@@ -241,6 +241,8 @@ void main() {
     final repository = _repository(oss, database);
 
     final count = await repository.backfillMissingThumbnails(_session());
+    // 清单写回已改为后台合并队列，等待队列排空后再断言。
+    await repository.flushPendingManifestWrites();
 
     expect(count, 2);
     final manifestKey =
