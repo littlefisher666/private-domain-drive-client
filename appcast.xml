@@ -6,6 +6,21 @@
     <description>私域网盘 macOS 客户端 Sparkle 更新清单</description>
     <language>zh-cn</language>
     <item>
+      <title>私域网盘 macOS v1.0.11</title>
+      <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.11</link>
+      <sparkle:version>86</sparkle:version>
+      <sparkle:shortVersionString>1.0.11</sparkle:shortVersionString>
+      <pubDate>Thu, 15 Oct 2026 07:07:43 +0000</pubDate>
+      <description sparkle:format="markdown">### 新功能
+- macOS 分片上传支持断点续传（oss）
+- 新增 Android 传输保活前台服务与流体云胶囊进度（transfer）
+- 删除改为非阻塞进度反馈并防止重复提交（workspace）
+
+### 修复
+- 更新日志按 markdown 渲染修复换行被折叠（macos）</description>
+      <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.11/private-domain-drive-macos-v1.0.11.zip" length="24594127" type="application/zip" sparkle:edSignature="59TQm5TVDan2ZTFsDiBtBYRpf3cvny0bSJPZrRcEWt1ZCyViOO2ia7PXxXTyvKEOgRALtgvTjuW0A4y2noLxAg==" />
+    </item>
+    <item>
       <title>私域网盘 macOS v1.0.10</title>
       <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.10</link>
       <sparkle:version>84</sparkle:version>
