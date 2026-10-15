@@ -13,8 +13,119 @@ import 'package:private_domain_drive_client/features/workspace/domain/file_item.
 import 'package:private_domain_drive_client/features/workspace/domain/recycle_bin_entry.dart';
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
 import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/shared/transfer_keepalive.dart';
 
 void main() {
+  group('传输保活', () {
+    test('首个任务启动推送 active:true，进度摘要与队列统计一致', () async {
+      final gate = Completer<void>();
+      final oss = _FakeOssClient()
+        ..downloadGate = gate
+        // 首报落在 100ms UI 节流窗口内会被跳过，第二次上报才到达任务状态。
+        ..progressReports = const <(int, int)>[(50, 200), (50, 200)]
+        ..progressInterval = const Duration(milliseconds: 150);
+      final keepalive = _RecordingKeepalive();
+      final controller = await _controller(oss: oss, keepalive: keepalive);
+      addTearDown(controller.dispose);
+      final directory = await Directory.systemTemp.createTemp('pdd-keepalive-');
+      addTearDown(() => directory.delete(recursive: true));
+
+      controller.enqueueDownload(
+        const FileItem(
+          path: 'shared/a.txt',
+          name: 'a.txt',
+          isDirectory: false,
+          size: 200,
+        ),
+        targetDirectory: directory.path,
+      );
+      await _waitForKeepaliveCall(keepalive, (call) => call.active);
+      expect(keepalive.calls.first.active, isTrue);
+      expect(keepalive.calls.first.summary,
+          const TransferProgressSummary(
+              remainingCount: 1, completedCount: 0, totalCount: 1, percent: 0));
+
+      gate.complete();
+      await _waitForTaskStatus(controller, TransferTaskStatus.success);
+      await _waitForKeepaliveCall(keepalive, (call) => !call.active);
+      expect(keepalive.calls.last.active, isFalse);
+      expect(keepalive.calls.last.summary, isNull);
+      // 进度摘要与队列统计一致：进度上报后出现过 0/1 已完成、25%。
+      expect(
+        keepalive.calls.any(
+          (call) =>
+              call.active &&
+              call.summary ==
+                  const TransferProgressSummary(
+                      remainingCount: 1,
+                      completedCount: 0,
+                      totalCount: 1,
+                      percent: 25),
+        ),
+        isTrue,
+      );
+    });
+
+    test('取消全部任务后推送 active:false', () async {
+      final gate = Completer<void>();
+      final oss = _FakeOssClient()..downloadGate = gate;
+      final keepalive = _RecordingKeepalive();
+      final controller = await _controller(oss: oss, keepalive: keepalive);
+      addTearDown(controller.dispose);
+      final directory = await Directory.systemTemp.createTemp('pdd-keepalive-');
+      addTearDown(() => directory.delete(recursive: true));
+
+      controller.enqueueDownload(
+        const FileItem(
+          path: 'shared/a.txt',
+          name: 'a.txt',
+          isDirectory: false,
+          size: 200,
+        ),
+        targetDirectory: directory.path,
+      );
+      await _waitForKeepaliveCall(keepalive, (call) => call.active);
+      expect(keepalive.calls.first.active, isTrue);
+
+      controller.cancelTask(controller.tasks.single.id);
+      gate.complete();
+      await _waitForKeepaliveCall(keepalive, (call) => !call.active);
+      expect(keepalive.calls.last.active, isFalse);
+      expect(keepalive.calls.last.summary, isNull);
+    });
+
+    test('通知权限请求只在首个任务发起时调用一次', () async {
+      final keepalive = _RecordingKeepalive();
+      final controller = await _controller(keepalive: keepalive);
+      addTearDown(controller.dispose);
+      final directory = await Directory.systemTemp.createTemp('pdd-keepalive-');
+      addTearDown(() => directory.delete(recursive: true));
+
+      await controller.uploadFile(
+        fileName: 'a.txt',
+        localPath: '/fake/a.txt',
+        fileSize: 1,
+      );
+      controller.enqueueDownload(
+        const FileItem(
+            path: 'shared/b.txt', name: 'b.txt', isDirectory: false),
+        targetDirectory: directory.path,
+      );
+      controller.enqueueDownload(
+        const FileItem(
+            path: 'shared/c.txt', name: 'c.txt', isDirectory: false),
+        targetDirectory: directory.path,
+      );
+      await _waitForTaskStatus(
+        controller,
+        TransferTaskStatus.success,
+        taskCount: 3,
+      );
+
+      expect(keepalive.permissionRequests, 1);
+    });
+  });
+
   group('AppController', () {
     test('登录失败会返回明确错误', () async {
       final controller =
@@ -787,14 +898,46 @@ void main() {
   });
 }
 
-Future<AppController> _controller({_FakeOssClient? oss}) async {
+Future<AppController> _controller(
+    {_FakeOssClient? oss, TransferKeepaliveService? keepalive}) async {
   SharedPreferences.setMockInitialValues(<String, Object>{});
   final controller = AppController(
     sessionRepository: _FakeSessionRepository(_remoteSession()),
     ossClient: oss ?? _FakeOssClient(),
+    transferKeepalive: keepalive,
   );
   await controller.bootstrap();
   return controller;
+}
+
+class _RecordingKeepalive extends TransferKeepaliveService {
+  final List<({bool active, TransferProgressSummary? summary})> calls =
+      <({bool active, TransferProgressSummary? summary})>[];
+  int permissionRequests = 0;
+
+  @override
+  Future<void> sync(
+      {required bool active, TransferProgressSummary? summary}) async {
+    calls.add((active: active, summary: summary));
+  }
+
+  @override
+  Future<void> requestNotificationPermissionIfNeeded() async {
+    permissionRequests++;
+  }
+}
+
+Future<void> _waitForKeepaliveCall(
+  _RecordingKeepalive keepalive,
+  bool Function(({bool active, TransferProgressSummary? summary})) predicate,
+) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 5));
+  while (!keepalive.calls.any(predicate)) {
+    if (DateTime.now().isAfter(deadline)) {
+      fail('keepalive 未收到预期调用：${keepalive.calls}');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
 }
 
 Future<void> _waitForTaskStatus(

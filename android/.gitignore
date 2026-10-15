@@ -12,3 +12,5 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+# Kotlin/Native 构建产生的会话缓存目录
+.kotlin/

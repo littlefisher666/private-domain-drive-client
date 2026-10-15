@@ -10,10 +10,12 @@ class _TransferHeaderActions extends StatelessWidget {
   const _TransferHeaderActions({
     required this.controller,
     required this.tasks,
+    required this.paused,
   });
 
   final AppController controller;
   final List<TransferTask> tasks;
+  final bool paused;
 
   @override
   Widget build(BuildContext context) {
@@ -22,12 +24,16 @@ class _TransferHeaderActions extends StatelessWidget {
             task.type == TransferTaskType.upload &&
             task.status == TransferTaskStatus.interrupted)
         .length;
+    final hasActiveTasks = tasks.any((task) =>
+        task.status == TransferTaskStatus.running ||
+        task.status == TransferTaskStatus.pending);
     return Wrap(
       spacing: 6,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: <Widget>[
         Text(
-          '${controller.runningTransferCount}/${controller.transferConcurrency} 进行中 · ${controller.pendingTransferCount} 等待',
+          '${controller.runningTransferCount}/${controller.transferConcurrency} 进行中 · ${controller.pendingTransferCount} 等待'
+          '${paused ? ' · 已暂停' : ''}',
           style: Theme.of(context).textTheme.bodySmall,
         ),
         IconButton(
@@ -35,6 +41,31 @@ class _TransferHeaderActions extends StatelessWidget {
           onPressed: () => _showConcurrencyPicker(context, controller),
           icon: const Icon(Icons.tune),
         ),
+        if (hasActiveTasks) ...<Widget>[
+          OutlinedButton.icon(
+            onPressed: () {
+              if (paused) {
+                controller.resumeAllTransfers();
+                AppFeedback.showSnack(context, '已继续全部传输任务');
+              } else {
+                controller.pauseAllTransfers();
+                AppFeedback.showSnack(context, '已暂停全部传输任务');
+              }
+            },
+            icon: Icon(
+              paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+              size: 18,
+            ),
+            label: Text(paused ? '继续全部' : '暂停全部'),
+          ),
+          OutlinedButton(
+            onPressed: () {
+              controller.cancelAllTransfers();
+              AppFeedback.showSnack(context, '已取消全部未完成任务');
+            },
+            child: const Text('全部取消'),
+          ),
+        ],
         if (interruptedCount > 0) ...<Widget>[
           OutlinedButton(
             onPressed: () {
@@ -399,15 +430,17 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
       valueListenable: controller.transferConcurrencyListenable,
       builder: (context, _, __) => ValueListenableBuilder<List<TransferTask>>(
         valueListenable: controller.tasksListenable,
-        builder: (context, tasks, _) {
-          return _buildBody(
+        builder: (context, tasks, _) => ValueListenableBuilder<bool>(
+          valueListenable: controller.transferQueuePausedListenable,
+          builder: (context, paused, _) => _buildBody(
             context: context,
             controller: controller,
             tasks: tasks,
             theme: theme,
             desktop: desktop,
-          );
-        },
+            paused: paused,
+          ),
+        ),
       ),
     );
   }
@@ -418,6 +451,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
     required List<TransferTask> tasks,
     required ThemeData theme,
     required bool desktop,
+    required bool paused,
   }) {
     // 展示顺序：进行中 > 等待中 > 已中断 > 已结束；同状态内新任务在前
     // （任务列表按入队顺序追加，索引越大越新）。
@@ -508,7 +542,11 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                       ],
                     ),
                   ),
-                  _TransferHeaderActions(controller: controller, tasks: tasks),
+                  _TransferHeaderActions(
+                    controller: controller,
+                    tasks: tasks,
+                    paused: paused,
+                  ),
                 ],
               ),
             ),
@@ -737,12 +775,18 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
             task.type == TransferTaskType.upload &&
             task.status == TransferTaskStatus.interrupted)
         .length;
+    final activeCount = tasks
+        .where((task) =>
+            task.status == TransferTaskStatus.running ||
+            task.status == TransferTaskStatus.pending)
+        .length;
     // 任务总数由下方筛选 Tab 展示，这里不再重复，避免长文本截断进度。
     final statsText = tasks.isEmpty
         ? '上传、下载、重试与取消'
         : <String>[
             '${controller.runningTransferCount} 进行中 · '
                 '${controller.pendingTransferCount} 等待',
+            if (paused) '已暂停',
             if (interruptedCount > 0) '$interruptedCount 个已中断',
             if (unfinishedTotalBytes > 0)
               '${_formatBytes(unfinishedTransferredBytes)} / ${_formatBytes(unfinishedTotalBytes)}',
@@ -773,7 +817,16 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                       PopupMenuButton<String>(
                         tooltip: '传输设置',
                         onSelected: (value) {
-                          if (value == 'resume-all') {
+                          if (value == 'pause-all') {
+                            controller.pauseAllTransfers();
+                            AppFeedback.showSnack(context, '已暂停全部传输任务');
+                          } else if (value == 'resume-queue') {
+                            controller.resumeAllTransfers();
+                            AppFeedback.showSnack(context, '已继续全部传输任务');
+                          } else if (value == 'cancel-all') {
+                            controller.cancelAllTransfers();
+                            AppFeedback.showSnack(context, '已取消全部未完成任务');
+                          } else if (value == 'resume-all') {
                             controller.resumeAllInterruptedUploads();
                             AppFeedback.showSnack(
                                 context, '已继续上传 $interruptedCount 个中断任务');
@@ -787,6 +840,16 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                           }
                         },
                         itemBuilder: (_) => <PopupMenuEntry<String>>[
+                          if (activeCount > 0) ...<PopupMenuEntry<String>>[
+                            PopupMenuItem(
+                              value: paused ? 'resume-queue' : 'pause-all',
+                              child: Text(paused ? '继续全部任务' : '暂停全部任务'),
+                            ),
+                            const PopupMenuItem(
+                              value: 'cancel-all',
+                              child: Text('全部取消'),
+                            ),
+                          ],
                           if (interruptedCount > 0) ...<PopupMenuEntry<String>>[
                             PopupMenuItem(
                               value: 'resume-all',

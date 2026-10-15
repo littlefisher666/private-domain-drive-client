@@ -379,4 +379,117 @@ void main() {
 
     expect(find.text('暂无传输任务'), findsOneWidget);
   });
+
+  testWidgets('桌面端可一键暂停并继续全部任务', (tester) async {
+    final controller = await pumpTasks(
+      tester,
+      const <TransferTask>[
+        TransferTask(
+          id: 'running-1',
+          name: '进行中.zip',
+          type: TransferTaskType.upload,
+          status: TransferTaskStatus.running,
+          progress: 0.4,
+        ),
+        TransferTask(
+          id: 'pending-1',
+          name: '等待.zip',
+          type: TransferTaskType.upload,
+          status: TransferTaskStatus.pending,
+          progress: 0,
+        ),
+      ],
+    );
+
+    expect(find.text('暂停全部'), findsOneWidget);
+    expect(find.text('全部取消'), findsOneWidget);
+
+    await tester.tap(find.text('暂停全部'));
+    await tester.pump();
+    expect(controller.transferQueuePaused, isTrue);
+    expect(find.text('继续全部'), findsOneWidget);
+    expect(find.textContaining('已暂停'), findsWidgets);
+
+    await tester.tap(find.text('继续全部'));
+    await tester.pump();
+    expect(controller.transferQueuePaused, isFalse);
+    expect(find.text('暂停全部'), findsOneWidget);
+  });
+
+  testWidgets('桌面端一键取消全部未完成任务', (tester) async {
+    final controller = await pumpTasks(
+      tester,
+      const <TransferTask>[
+        TransferTask(
+          id: 'running-1',
+          name: '进行中.zip',
+          type: TransferTaskType.upload,
+          status: TransferTaskStatus.running,
+          progress: 0.4,
+        ),
+        TransferTask(
+          id: 'pending-1',
+          name: '等待.zip',
+          type: TransferTaskType.upload,
+          status: TransferTaskStatus.pending,
+          progress: 0,
+        ),
+        TransferTask(
+          id: 'done-1',
+          name: '已完成.zip',
+          type: TransferTaskType.upload,
+          status: TransferTaskStatus.success,
+          progress: 1,
+        ),
+      ],
+    );
+
+    await tester.tap(find.text('全部取消'));
+    await tester.pump();
+
+    expect(
+      controller.tasks
+          .where((task) =>
+              task.status == TransferTaskStatus.running ||
+              task.status == TransferTaskStatus.pending)
+          .map((task) => task.id),
+      isEmpty,
+    );
+    expect(
+      controller.tasks
+          .firstWhere((task) => task.id == 'done-1')
+          .status,
+      TransferTaskStatus.success,
+    );
+    expect(controller.transferQueuePaused, isFalse);
+  });
+
+  testWidgets('移动端菜单可暂停并继续全部任务', (tester) async {
+    final controller = await pumpMobileTasks(
+      tester,
+      const <TransferTask>[
+        TransferTask(
+          id: 'running-1',
+          name: '进行中.zip',
+          type: TransferTaskType.upload,
+          status: TransferTaskStatus.running,
+          progress: 0.4,
+        ),
+      ],
+    );
+
+    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('暂停全部任务'));
+    await tester.pumpAndSettle();
+    expect(controller.transferQueuePaused, isTrue);
+    expect(find.textContaining('已暂停'), findsWidgets);
+
+    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.pumpAndSettle();
+    expect(find.text('继续全部任务'), findsOneWidget);
+    await tester.tap(find.text('继续全部任务'));
+    await tester.pumpAndSettle();
+    expect(controller.transferQueuePaused, isFalse);
+  });
 }

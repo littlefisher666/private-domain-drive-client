@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">私域网盘</string>
+    <string name="notification_transfer_done_title">传输完成</string>
+    <string name="notification_transfer_done_body">全部任务已完成</string>
 </resources>

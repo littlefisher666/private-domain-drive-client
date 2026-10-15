@@ -33,6 +33,8 @@ class MainActivity : FlutterActivity() {
         private const val APP_UPDATE = "private_domain_drive/app_update"
         private const val SYSTEM_PROXY = "private_domain_drive/system_proxy"
         private const val MEDIA = "private_domain_drive/media"
+        private const val TRANSFER_KEEPALIVE = "private_domain_drive/transfer_keepalive"
+        private const val NOTIFICATION_PERMISSION_REQUEST = 703
         private const val DOWNLOAD_DIRECTORY_REQUEST = 702
     }
 
@@ -145,6 +147,47 @@ class MainActivity : FlutterActivity() {
                             return@setMethodCallHandler
                         }
                         result.success(readVideoMetadata(path))
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, TRANSFER_KEEPALIVE)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "start" -> {
+                        val completed = call.argument<Number>("completed")?.toInt() ?: 0
+                        val total = call.argument<Number>("total")?.toInt() ?: 0
+                        val percent = call.argument<Number>("percent")?.toInt() ?: 0
+                        TransferKeepaliveService.start(this, completed, total, percent)
+                        result.success(null)
+                    }
+                    "update" -> {
+                        val completed = call.argument<Number>("completed")?.toInt() ?: 0
+                        val total = call.argument<Number>("total")?.toInt() ?: 0
+                        val percent = call.argument<Number>("percent")?.toInt() ?: 0
+                        TransferKeepaliveService.update(completed, total, percent)
+                        result.success(null)
+                    }
+                    "stop" -> {
+                        TransferKeepaliveService.stop(this)
+                        // 队列转空闲时先移除常驻通知，再以完成渠道弹悬浮横幅。
+                        if (call.argument<Boolean>("completed") == true) {
+                            TransferKeepaliveService.showCompletion(this)
+                        }
+                        result.success(null)
+                    }
+                    // Android 13+ 通知运行时权限；拒绝不阻塞传输与前台服务。
+                    "requestNotificationPermission" -> {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                            PackageManager.PERMISSION_GRANTED
+                        ) {
+                            requestPermissions(
+                                arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                                NOTIFICATION_PERMISSION_REQUEST,
+                            )
+                        }
+                        result.success(null)
                     }
                     else -> result.notImplemented()
                 }

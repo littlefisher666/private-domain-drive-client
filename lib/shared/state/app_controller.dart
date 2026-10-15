@@ -22,6 +22,7 @@ import '../../features/workspace/infrastructure/alias_repository.dart';
 import '../../features/workspace/infrastructure/oss_client.dart';
 import '../cache/disk_document_cache.dart';
 import '../cache/disk_image_cache.dart';
+import '../transfer_keepalive.dart';
 
 class ShareImportItem {
   const ShareImportItem({
@@ -241,11 +242,14 @@ class AppController extends ChangeNotifier {
       {required SessionRepository sessionRepository,
       OssClient? ossClient,
       SavedCredentialsStore? savedCredentialsStore,
-      UploadStaging? uploadStaging})
+      UploadStaging? uploadStaging,
+      TransferKeepaliveService? transferKeepalive})
       : _sessionRepository = sessionRepository,
         _ossClient = ossClient ?? OssClient(),
         _savedCredentialsStore =
             savedCredentialsStore ?? SavedCredentialsStore(),
+        _transferKeepalive =
+            transferKeepalive ?? createTransferKeepaliveService(),
 
         // testWidgets（FakeAsync）环境下未 mock 的 platform channel 永远
         // 不会回复，path_provider 调用会阻塞入队路径；测试默认禁用 staging
@@ -272,6 +276,9 @@ class AppController extends ChangeNotifier {
   OssClient get ossClient => _ossClient;
   final SavedCredentialsStore _savedCredentialsStore;
   final UploadStaging? _uploadStaging;
+  final TransferKeepaliveService _transferKeepalive;
+  bool _transferKeepaliveActive = false;
+  bool _keepalivePermissionRequested = false;
   GalleryIndexHooks? _galleryHooks;
 
   /// 注入相册索引挂钩（上传增量更新、删除清理、还原恢复）。
@@ -338,6 +345,13 @@ class AppController extends ChangeNotifier {
   final ValueNotifier<int> transferConcurrencyListenable =
       ValueNotifier<int>(3);
 
+  /// 队列级暂停开关：暂停时不再从等待队列拉起新任务，运行中任务收到
+  /// 停止信号后回到等待队列，随 resumeAllTransfers 重新调度。
+  final ValueNotifier<bool> transferQueuePausedListenable =
+      ValueNotifier<bool>(false);
+
+  bool get transferQueuePaused => transferQueuePausedListenable.value;
+
   /// 移动进行中状态（已处理/总对象数）；仅工作区条目区消费，避免整页重建。
   final ValueNotifier<MoveProgress?> moveStateListenable =
       ValueNotifier<MoveProgress?>(null);
@@ -388,6 +402,7 @@ class AppController extends ChangeNotifier {
   final Map<String, _QueuedTransfer> _queuedTransfers =
       <String, _QueuedTransfer>{};
   final Set<String> _canceledTransferIds = <String>{};
+  final Set<String> _pauseRequestedTransferIds = <String>{};
   int _nextTransferId = 0;
   SharedPreferences? _preferences;
   bool _transferHistoryReady = false;
@@ -628,6 +643,8 @@ class AppController extends ChangeNotifier {
     _pendingShareItems = const <ShareImportItem>[];
     _clearShareBatchState();
     _pendingTransferIds.clear();
+    _pauseRequestedTransferIds.clear();
+    transferQueuePausedListenable.value = false;
     _batchConflictResolutions.clear();
     notifyListeners();
   }
@@ -3015,6 +3032,7 @@ class AppController extends ChangeNotifier {
             task.status != TransferTaskStatus.canceled)) {
       return;
     }
+    _requestTransferNotificationPermission();
     if (!_queuedTransfers.containsKey(taskId)) {
       // 冷启动恢复出的上传任务：按持久化字段重建执行器后正常入队。
       final dir = task.targetDir;
@@ -3093,6 +3111,7 @@ class AppController extends ChangeNotifier {
         task.status != TransferTaskStatus.interrupted) {
       return;
     }
+    _requestTransferNotificationPermission();
     final dir = task.targetDir;
     final source = task.sourcePath;
     if (dir == null ||
@@ -3182,6 +3201,8 @@ class AppController extends ChangeNotifier {
     }
     _pendingTransferIds.remove(taskId);
     _canceledTransferIds.add(taskId);
+    // 显式取消优先于暂停请求，避免运行中任务被误送回等待队列。
+    _pauseRequestedTransferIds.remove(taskId);
     if (task.status == TransferTaskStatus.running) {
       unawaited(_ossClient.cancelTransfer(taskId));
     }
@@ -3198,6 +3219,58 @@ class AppController extends ChangeNotifier {
     for (final taskId in taskIds.toSet()) {
       cancelTask(taskId);
     }
+  }
+
+  /// 一键暂停：停止调度等待中的任务；运行中的任务收到停止信号后回到
+  /// 等待队列（不支持断点续传，继续时从头传输）。
+  void pauseAllTransfers() {
+    transferQueuePausedListenable.value = true;
+    for (final taskId in _runningTransferIds.toList(growable: false)) {
+      _pauseRequestedTransferIds.add(taskId);
+      _canceledTransferIds.add(taskId);
+      unawaited(_ossClient.cancelTransfer(taskId));
+    }
+    for (final taskId in _pendingTransferIds.toList(growable: false)) {
+      _replaceTask(
+          taskId,
+          (task) => task.copyWith(
+                bytesPerSecond: null,
+                message: '已暂停',
+              ));
+    }
+  }
+
+  /// 一键继续：解除队列暂停并立即调度等待中的任务。
+  void resumeAllTransfers() {
+    if (!transferQueuePausedListenable.value) return;
+    transferQueuePausedListenable.value = false;
+    _drainTransferQueue();
+  }
+
+  /// 一键停止全部未完成任务（运行中与等待中），并解除队列暂停。
+  void cancelAllTransfers() {
+    transferQueuePausedListenable.value = false;
+    final taskIds = tasks
+        .where((task) =>
+            task.status == TransferTaskStatus.running ||
+            task.status == TransferTaskStatus.pending)
+        .map((task) => task.id)
+        .toList(growable: false);
+    cancelTasks(taskIds);
+  }
+
+  /// 暂停信号触发的任务收尾：回到等待队列并重置进度，等待继续调度。
+  void _returnRunningTransferToPending(String taskId) {
+    _pendingTransferIds.add(taskId);
+    _replaceTask(
+        taskId,
+        (task) => task.copyWith(
+              status: TransferTaskStatus.pending,
+              progress: 0,
+              transferredBytes: 0,
+              bytesPerSecond: null,
+              message: '已暂停',
+            ));
   }
 
   void clearCompletedTasks() {
@@ -3377,6 +3450,7 @@ class AppController extends ChangeNotifier {
   }
 
   void _enqueueTransfer(TransferTask task, _QueuedTransfer transfer) {
+    _requestTransferNotificationPermission();
     _queuedTransfers[task.id] = transfer;
     _setTasks(<TransferTask>[...tasks, task]);
     _pendingTransferIds.add(task.id);
@@ -3384,6 +3458,7 @@ class AppController extends ChangeNotifier {
   }
 
   void _drainTransferQueue() {
+    if (transferQueuePausedListenable.value) return;
     while (_runningTransferIds.length < transferConcurrency &&
         _pendingTransferIds.isNotEmpty) {
       final taskId = _pendingTransferIds.removeAt(0);
@@ -3431,7 +3506,9 @@ class AppController extends ChangeNotifier {
         },
         () => _canceledTransferIds.contains(taskId),
       );
-      if (_canceledTransferIds.contains(taskId)) {
+      if (_pauseRequestedTransferIds.remove(taskId)) {
+        _returnRunningTransferToPending(taskId);
+      } else if (_canceledTransferIds.contains(taskId)) {
         _replaceTask(
             taskId,
             (task) => task.copyWith(
@@ -3449,12 +3526,16 @@ class AppController extends ChangeNotifier {
                 ));
       }
     } on TransferCanceledException {
-      _replaceTask(
-          taskId,
-          (task) => task.copyWith(
-                status: TransferTaskStatus.canceled,
-                message: '已取消',
-              ));
+      if (_pauseRequestedTransferIds.remove(taskId)) {
+        _returnRunningTransferToPending(taskId);
+      } else {
+        _replaceTask(
+            taskId,
+            (task) => task.copyWith(
+                  status: TransferTaskStatus.canceled,
+                  message: '已取消',
+                ));
+      }
     } on _UploadSkippedException {
       _replaceTask(
           taskId,
@@ -3482,6 +3563,9 @@ class AppController extends ChangeNotifier {
         _cleanupStagingForTask(finished);
       }
       _drainTransferQueue();
+      // 终态任务已从运行集移除，但对应的 _replaceTask 先于此发生，
+      // 需补一次保活推送让最后一个任务结束后能转回空闲。
+      _syncTransferKeepalive();
     }
   }
 
@@ -3556,6 +3640,63 @@ class AppController extends ChangeNotifier {
     tasksListenable.value = List<TransferTask>.unmodifiable(next);
     _saveTransferHistory();
     _saveUploadPending();
+    _syncTransferKeepalive();
+  }
+
+  /// 队列活跃状态与进度摘要推送给传输保活适配层（仅 Android 生效）：
+  /// 活跃 = 进行中或等待中任务非空；空闲期间不再重复推送。
+  /// 批次计数器：从空闲转活跃开始累计本批任务总数，任务到达终态后
+  /// 累计已完成数，供通知展示「已完成 X/N」。
+  int _keepaliveBatchTotal = 0;
+  int _keepaliveBatchCompleted = 0;
+
+  void _syncTransferKeepalive() {
+    final active =
+        _runningTransferIds.isNotEmpty || _pendingTransferIds.isNotEmpty;
+    if (!active && !_transferKeepaliveActive) return;
+    final remaining = _runningTransferIds.length + _pendingTransferIds.length;
+    if (active) {
+      if (!_transferKeepaliveActive) {
+        _keepaliveBatchTotal = 0;
+        _keepaliveBatchCompleted = 0;
+      }
+      final settled = _keepaliveBatchTotal - _keepaliveBatchCompleted;
+      if (remaining > settled) {
+        _keepaliveBatchTotal += remaining - settled;
+      } else if (remaining < settled) {
+        _keepaliveBatchCompleted += settled - remaining;
+      }
+    } else {
+      _keepaliveBatchTotal = 0;
+      _keepaliveBatchCompleted = 0;
+    }
+    _transferKeepaliveActive = active;
+    unawaited(_transferKeepalive.sync(
+      active: active,
+      summary: active ? _transferProgressSummary(remaining) : null,
+    ));
+  }
+
+  /// 进度摘要复用传输中心统计口径：剩余任务数（进行中 + 等待中）、
+  /// 批次已完成/总任务数，百分比为本批次按文件数计的完成比例。
+  TransferProgressSummary _transferProgressSummary(int remaining) {
+    final total = _keepaliveBatchTotal;
+    final completed = _keepaliveBatchCompleted.clamp(0, total);
+    final percent = total > 0 ? (completed / total * 100).round().clamp(0, 100) : 0;
+    return TransferProgressSummary(
+      remainingCount: remaining,
+      completedCount: completed,
+      totalCount: total,
+      percent: percent,
+    );
+  }
+
+  /// Android 13+ 首次发起传输前请求通知权限；每个会话仅调用一次，
+  /// 拒绝授权不影响传输与前台服务。
+  void _requestTransferNotificationPermission() {
+    if (_keepalivePermissionRequested) return;
+    _keepalivePermissionRequested = true;
+    unawaited(_transferKeepalive.requestNotificationPermissionIfNeeded());
   }
 
   void _restoreTransferHistory(SharedPreferences preferences) {
