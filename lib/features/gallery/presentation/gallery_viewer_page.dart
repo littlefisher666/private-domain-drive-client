@@ -85,19 +85,26 @@ class _GalleryViewerPageState extends State<GalleryViewerPage> {
       ),
     );
     if (confirmed != true || !mounted) return;
-    final sequence = _sequenceOf(gallery);
-    final deletedIndex =
-        sequence.indexWhere((candidate) => candidate.key == entry.key);
-    await gallery.deleteEntries(<PhotoEntry>[entry]);
-    if (!mounted) return;
-    final remaining = _sequenceOf(gallery);
-    if (remaining.isEmpty) {
-      Navigator.of(context).pop();
-      return;
+    AppFeedback.showSnack(context, '正在移入回收站…');
+    try {
+      final sequence = _sequenceOf(gallery);
+      final deletedIndex =
+          sequence.indexWhere((candidate) => candidate.key == entry.key);
+      await gallery.deleteEntries(<PhotoEntry>[entry]);
+      if (!mounted) return;
+      final remaining = _sequenceOf(gallery);
+      if (remaining.isEmpty) {
+        Navigator.of(context).pop();
+        return;
+      }
+      setState(() {
+        _currentKey = remaining[deletedIndex.clamp(0, remaining.length - 1)].key;
+      });
+    } finally {
+      if (mounted) {
+        AppFeedback.showSnack(context, '已移入回收站');
+      }
     }
-    setState(() {
-      _currentKey = remaining[deletedIndex.clamp(0, remaining.length - 1)].key;
-    });
   }
 
   @override

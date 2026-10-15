@@ -168,6 +168,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
   String? _boundPath;
   int? _boundTreeRevision;
   // 链接条目与真实条目可能共用同一路径，重命名需按 (path, isAlias) 匹配。
+  // 删除期间用模态忙碌弹窗阻塞交互，防止同一批条目被重复提交删除。
+  bool _deleteBusy = false;
   ({String path, bool isAlias})? _renamingTarget;
   bool _pendingMovesChecked = false;
 
@@ -510,6 +512,17 @@ class _WorkspacePageState extends State<WorkspacePage> {
                                       progress: moveProgress),
                                 ),
                     ),
+                    ValueListenableBuilder<DeleteProgress?>(
+                      valueListenable: controller.deleteStateListenable,
+                      builder: (context, deleteProgress, _) =>
+                          deleteProgress == null
+                              ? const SizedBox.shrink()
+                              : Padding(
+                                  padding: const EdgeInsets.only(bottom: 8),
+                                  child: _DeleteProgressBanner(
+                                      progress: deleteProgress),
+                                ),
+                    ),
                     if (showBatchBar) ...<Widget>[
                       _BatchSelectionBar(
                         selectedCount: selectedItems.length,
@@ -824,6 +837,10 @@ class _WorkspacePageState extends State<WorkspacePage> {
       await _deleteLink(item);
       return;
     }
+    if (_deleteBusy) {
+      AppFeedback.showSnack(context, '正在删除中，请稍候…');
+      return;
+    }
     final controller = AppScope.of(context);
     if (!controller.capabilities.delete) {
       AppFeedback.showSnack(context, '当前身份没有删除权限');
@@ -839,6 +856,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
     if (!confirmed) {
       return;
     }
+    _deleteBusy = true;
     try {
       await controller.deleteItem(item);
       await _reload();
@@ -852,6 +870,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
           error.toString().replaceFirst('Bad state: ', ''),
         );
       }
+    } finally {
+      _deleteBusy = false;
     }
   }
 
@@ -989,6 +1009,10 @@ class _WorkspacePageState extends State<WorkspacePage> {
   }
 
   Future<void> _deleteSelected(List<FileItem> items) async {
+    if (_deleteBusy) {
+      AppFeedback.showSnack(context, '正在删除中，请稍候…');
+      return;
+    }
     final controller = AppScope.of(context);
     // 链接条目删除走单独的「删除链接」流程，批量删除只作用于真实条目，
     // 避免把别名当成真实目录展开删除。
@@ -998,6 +1022,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
       AppFeedback.showSnack(context, '链接条目请使用「删除链接」操作');
       return;
     }
+    AppFeedback.showSnack(context, '正在统计待删除对象…');
+    _deleteBusy = true;
     try {
       final preview = await controller.prepareBatchDelete(realItems);
       if (!mounted) return;
@@ -1011,6 +1037,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
         destructive: true,
       );
       if (!confirmed) return;
+      // 立即清空多选，避免删除进行中同一批条目被再次提交。
+      controller.clearMultiSelection();
       var result = await controller.deleteBatch(preview);
       if (result.failedPaths.isNotEmpty && mounted) {
         final retry = await AppFeedback.confirm(
@@ -1032,7 +1060,6 @@ class _WorkspacePageState extends State<WorkspacePage> {
         }
       }
       await _reload();
-      controller.clearMultiSelection();
       if (mounted) {
         AppFeedback.showSnack(
           context,
@@ -1046,6 +1073,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
         AppFeedback.showSnack(
             context, error.toString().replaceFirst('Bad state: ', ''));
       }
+    } finally {
+      _deleteBusy = false;
     }
   }
 
@@ -3281,6 +3310,47 @@ class _MoveProgressBanner extends StatelessWidget {
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DeleteProgressBanner extends StatelessWidget {
+  const _DeleteProgressBanner({required this.progress});
+
+  final DeleteProgress progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Row(
+        children: <Widget>[
+          const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              progress.total == 0
+                  ? '正在统计待删除对象…'
+                  : '正在移入回收站 ${progress.processed}/${progress.total} 个对象…',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: scheme.onSurface,
+              ),
+            ),
+          ),
         ],
       ),
     );

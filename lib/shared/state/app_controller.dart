@@ -151,6 +151,14 @@ class MoveProgress {
   final bool isCounting;
 }
 
+/// 删除（移入回收站）进行中状态；total 为 0 表示仍在统计待删除对象。
+class DeleteProgress {
+  const DeleteProgress({required this.processed, required this.total});
+
+  final int processed;
+  final int total;
+}
+
 class MoveSummary {
   const MoveSummary({
     required this.movedCount,
@@ -334,6 +342,10 @@ class AppController extends ChangeNotifier {
   final ValueNotifier<MoveProgress?> moveStateListenable =
       ValueNotifier<MoveProgress?>(null);
   bool _isMoving = false;
+
+  /// 删除（移入回收站）进行中状态；非阻塞横幅消费，删除期间不锁界面。
+  final ValueNotifier<DeleteProgress?> deleteStateListenable =
+      ValueNotifier<DeleteProgress?>(null);
 
   UserSession? _session;
   String _currentPath = rootPrefix;
@@ -1586,6 +1598,8 @@ class AppController extends ChangeNotifier {
     _ensureDeleteCapability();
     await ensureSessionReady();
     final session = _requireSession();
+    // 大目录先列全量 key，耗时较长；先置进度让横幅立即可见。
+    deleteStateListenable.value = const DeleteProgress(processed: 0, total: 0);
     final paths = <String>{item.path};
     if (item.isDirectory) {
       paths.addAll(await _ossClient.listAllObjectKeys(item.path, session));
@@ -1685,46 +1699,63 @@ class AppController extends ChangeNotifier {
     required bool isDirectory,
     required UserSession session,
   }) async {
-    final sources =
-        sourcePaths.toSet().where((path) => path.startsWith(rootPrefix));
+    final sources = sourcePaths
+        .toSet()
+        .where((path) => path.startsWith(rootPrefix))
+        .toList(growable: false);
+    deleteStateListenable.value =
+        DeleteProgress(processed: 0, total: sources.length);
     final id =
         '${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
     final batchRoot = '$rootPrefix.trash/$id/';
     final copied = <String, String>{};
     final failed = <String>[];
-    for (final source in sources) {
-      final target =
-          '$batchRoot' 'payload/${source.substring(rootPrefix.length)}';
-      try {
-        await _ossClient.copy(source, target, session);
-        copied[source] = target;
-      } catch (_) {
-        failed.add(source);
+    try {
+      // 与移动操作一致：小批次并发 copy，避免逐对象串行耗时过长。
+      var done = 0;
+      const concurrency = 6;
+      for (var start = 0; start < sources.length; start += concurrency) {
+        final end = min(start + concurrency, sources.length);
+        await Future.wait(sources.sublist(start, end).map((source) async {
+          final target =
+              '$batchRoot' 'payload/${source.substring(rootPrefix.length)}';
+          try {
+            await _ossClient.copy(source, target, session);
+            copied[source] = target;
+          } catch (_) {
+            failed.add(source);
+          }
+          done++;
+          deleteStateListenable.value =
+              DeleteProgress(processed: done, total: sources.length);
+        }));
       }
-    }
-    if (copied.isNotEmpty) {
-      final entry = RecycleBinEntry(
-        id: id,
-        name: name,
-        originalPath: originalPath,
-        isDirectory: isDirectory,
-        deletedAt: DateTime.now(),
-        objects: copied,
-      );
-      await _ossClient.uploadText(
-          '$batchRoot' 'manifest.json', entry.encode(), session);
-    }
-    final deleted = <String>[];
-    for (final keys in _batches(copied.keys)) {
-      try {
-        final result = await _ossClient.deleteMany(keys, session);
-        deleted.addAll(result.deletedPaths);
-        failed.addAll(result.failedPaths);
-      } catch (_) {
-        failed.addAll(keys);
+      if (copied.isNotEmpty) {
+        final entry = RecycleBinEntry(
+          id: id,
+          name: name,
+          originalPath: originalPath,
+          isDirectory: isDirectory,
+          deletedAt: DateTime.now(),
+          objects: copied,
+        );
+        await _ossClient.uploadText(
+            '$batchRoot' 'manifest.json', entry.encode(), session);
       }
+      final deleted = <String>[];
+      for (final keys in _batches(copied.keys)) {
+        try {
+          final result = await _ossClient.deleteMany(keys, session);
+          deleted.addAll(result.deletedPaths);
+          failed.addAll(result.failedPaths);
+        } catch (_) {
+          failed.addAll(keys);
+        }
+      }
+      return BatchDeleteSummary(deletedPaths: deleted, failedPaths: failed);
+    } finally {
+      deleteStateListenable.value = null;
     }
-    return BatchDeleteSummary(deletedPaths: deleted, failedPaths: failed);
   }
 
   Iterable<List<String>> _batches(Iterable<String> keys) sync* {
@@ -3728,6 +3759,7 @@ class AppController extends ChangeNotifier {
     multiSelectedPathsListenable.dispose();
     directorySizeStatesListenable.dispose();
     moveStateListenable.dispose();
+    deleteStateListenable.dispose();
     tasksListenable.dispose();
     transferConcurrencyListenable.dispose();
     super.dispose();

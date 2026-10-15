@@ -11,6 +11,44 @@ import '../domain/timeline_group.dart';
 import 'gallery_scope.dart';
 import 'gallery_viewer_page.dart';
 
+/// 确认后执行批量删除；非阻塞反馈，删除期间通过防重入避免重复提交。
+Future<void> confirmAndDeleteEntries(
+  BuildContext context,
+  GalleryController controller,
+  List<PhotoEntry> entries,
+) async {
+  if (entries.isEmpty) return;
+  if (controller.deleteBusy) {
+    AppFeedback.showSnack(context, '正在删除中，请稍候…');
+    return;
+  }
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('删除所选照片'),
+      content: Text('将 ${entries.length} 张照片和视频移入回收站？'),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(dialogContext).pop(true),
+          child: const Text('删除'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true || !context.mounted) return;
+  // 立即清空多选，避免删除进行中同一批条目被再次提交。
+  controller.clearSelection();
+  AppFeedback.showSnack(context, '正在移入回收站 ${entries.length} 项…');
+  await controller.deleteEntries(entries);
+  if (context.mounted) {
+    AppFeedback.showSnack(context, '已移入回收站');
+  }
+}
+
 /// 相册时间线页：双端共用实现，桌面端按月分组并支持框选/快捷键，
 /// 移动端按天分组并支持长按多选。
 class GalleryPage extends StatefulWidget {
@@ -743,29 +781,7 @@ class _MobileBatchBar extends StatelessWidget {
   }
 
   Future<void> _delete(BuildContext context, List<PhotoEntry> selected) async {
-    if (selected.isEmpty) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('删除所选照片'),
-        content: Text('将 ${selected.length} 张照片和视频移入回收站？'),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    await controller.deleteEntries(selected);
-    if (context.mounted) {
-      AppFeedback.showSnack(context, '已移入回收站');
-    }
+    await confirmAndDeleteEntries(context, controller, selected);
   }
 }
 
@@ -865,33 +881,15 @@ class _DesktopSelectionBar extends StatelessWidget {
                 child: const Text('下载原图'),
               ),
               TextButton(
-                onPressed: () async {
-                  final entries = selected
-                      .map(controller.entryOfKey)
-                      .whereType<PhotoEntry>()
-                      .toList();
-                  final confirmed = await showDialog<bool>(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: const Text('删除所选照片'),
-                      content: Text('将 ${entries.length} 张照片和视频移入回收站？'),
-                      actions: <Widget>[
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(false),
-                          child: const Text('取消'),
-                        ),
-                        FilledButton(
-                          onPressed: () => Navigator.of(context).pop(true),
-                          child: const Text('删除'),
-                        ),
-                      ],
-                    ),
+                onPressed: () {
+                  confirmAndDeleteEntries(
+                    context,
+                    controller,
+                    selected
+                        .map(controller.entryOfKey)
+                        .whereType<PhotoEntry>()
+                        .toList(),
                   );
-                  if (confirmed != true) return;
-                  await controller.deleteEntries(entries.toList());
-                  if (context.mounted) {
-                    AppFeedback.showSnack(context, '已移入回收站');
-                  }
                 },
                 style: TextButton.styleFrom(
                   foregroundColor: scheme.error,

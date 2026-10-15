@@ -546,7 +546,10 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   // ---------- 批量操作 ----------
 
   /// 批量删除（回收站流程）。索引与缓存清理由删除钩子完成。
+  /// 删除耗时较长且逐对象复制到回收站，进行中拒绝重复触发。
   Future<BatchDeleteSummary?> deleteEntries(Iterable<PhotoEntry> selected) async {
+    if (_deleteBusy) return null;
+    _deleteBusy = true;
     final items = selected
         .map((entry) => FileItem(
               path: entry.key,
@@ -561,8 +564,12 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
       return summary;
     } finally {
       clearSelection();
+      _deleteBusy = false;
     }
   }
+
+  bool _deleteBusy = false;
+  bool get deleteBusy => _deleteBusy;
 
   /// 批量下载原图到相册缓存（多选操作栏）。
   void downloadOriginals(Iterable<PhotoEntry> selected) {
