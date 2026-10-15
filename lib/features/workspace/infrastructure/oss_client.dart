@@ -318,9 +318,15 @@ class OssClient {
     );
   }
 
+  static int _uploadTextSeq = 0;
+
   Future<void> uploadText(
       String path, String content, UserSession session) async {
-    final file = File('${Directory.systemTemp.path}/$path.manifest');
+    // 临时文件名必须唯一：writeAsString 先截断再写入，若同一对象的并发
+    // 写入共用固定名临时文件，前一次上传的原生读取可能恰好落在截断与
+    // 写入之间，把 0 字节内容传上 OSS（曾产生空清单对象）。
+    final file = File(
+        '${Directory.systemTemp.path}/$path.manifest.${DateTime.now().microsecondsSinceEpoch}-${_uploadTextSeq++}');
     await file.parent.create(recursive: true);
     await file.writeAsString(content, flush: true);
     try {
