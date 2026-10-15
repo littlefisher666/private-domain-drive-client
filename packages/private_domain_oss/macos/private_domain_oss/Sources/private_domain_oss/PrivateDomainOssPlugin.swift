@@ -297,6 +297,126 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
         }
     }
 
+    /// 分片上传 checkpoint：记录 uploadId 与文件身份，用于断点续传。
+    /// 已上传分片以服务端 listParts 为准，不在本地逐分片落盘。
+    private struct MultipartCheckpoint: Codable {
+        let bucket: String
+        let key: String
+        let filePath: String
+        let fileSize: Int64
+        let fileMtime: Double
+        let partSize: Int
+        let uploadId: String
+    }
+
+    private func checkpointURL(bucket: String, key: String, filePath: String) -> URL {
+        // 对象键含分隔符与非 ASCII 字符，用稳定哈希生成文件名。
+        var hash: UInt64 = 5381
+        for byte in "\(bucket)|\(key)|\(filePath)".utf8 {
+            hash = hash &* 33 &+ UInt64(byte)
+        }
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        return caches
+            .appendingPathComponent("oss_multipart_checkpoints", isDirectory: true)
+            .appendingPathComponent(String(format: "%016llx", hash))
+    }
+
+    private func loadCheckpoint(
+        bucket: String,
+        key: String,
+        fileURL: URL,
+        fileSize: Int64,
+        fileMtime: Double,
+        partSize: Int
+    ) -> MultipartCheckpoint? {
+        let url = checkpointURL(bucket: bucket, key: key, filePath: fileURL.path)
+        guard
+            let data = try? Data(contentsOf: url),
+            let checkpoint = try? JSONDecoder().decode(MultipartCheckpoint.self, from: data)
+        else {
+            return nil
+        }
+        guard
+            checkpoint.bucket == bucket,
+            checkpoint.key == key,
+            checkpoint.filePath == fileURL.path,
+            checkpoint.fileSize == fileSize,
+            checkpoint.fileMtime == fileMtime,
+            checkpoint.partSize == partSize
+        else {
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+        return checkpoint
+    }
+
+    private func saveCheckpoint(_ checkpoint: MultipartCheckpoint) {
+        let url = checkpointURL(bucket: checkpoint.bucket, key: checkpoint.key, filePath: checkpoint.filePath)
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try JSONEncoder().encode(checkpoint).write(to: url, options: .atomic)
+        } catch {
+            // checkpoint 写入失败只影响断点续传，不阻断上传。
+        }
+    }
+
+    private func removeCheckpoint(bucket: String, key: String, filePath: String) {
+        try? FileManager.default.removeItem(at: checkpointURL(bucket: bucket, key: key, filePath: filePath))
+    }
+
+    private func listAllParts(
+        client: Client,
+        bucket: String,
+        key: String,
+        uploadId: String
+    ) async throws -> [Part] {
+        var all: [Part] = []
+        var marker: Int?
+        while true {
+            let response = try await client.listParts(ListPartsRequest(
+                bucket: bucket,
+                key: key,
+                uploadId: uploadId,
+                maxParts: 1000,
+                partNumberMarker: marker
+            ))
+            all.append(contentsOf: response.parts ?? [])
+            guard response.isTruncated == true else { break }
+            marker = response.nextPartNumberMarker
+        }
+        return all
+    }
+
+    private func initiateMultipart(
+        client: Client,
+        bucket: String,
+        key: String,
+        fileURL: URL,
+        fileSize: Int64,
+        fileMtime: Double,
+        partSize: Int
+    ) async throws -> String {
+        let initiated = try await client.initiateMultipartUpload(
+            InitiateMultipartUploadRequest(bucket: bucket, key: key)
+        )
+        guard let uploadId = initiated.uploadId else {
+            throw OssBridgeContract.BridgeError.unknown
+        }
+        saveCheckpoint(MultipartCheckpoint(
+            bucket: bucket,
+            key: key,
+            filePath: fileURL.path,
+            fileSize: fileSize,
+            fileMtime: fileMtime,
+            partSize: partSize,
+            uploadId: uploadId
+        ))
+        return uploadId
+    }
+
     private func multipartUpload(
         client: Client,
         bucket: String,
@@ -305,26 +425,93 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
         fileSize: Int64,
         taskId: String
     ) async throws {
-        let initiated = try await client.initiateMultipartUpload(
-            InitiateMultipartUploadRequest(bucket: bucket, key: key)
-        )
-        guard let uploadId = initiated.uploadId else {
-            throw OssBridgeContract.BridgeError.unknown
+        let partSize = 1 * 1024 * 1024
+        let partCount = max(1, Int((fileSize + Int64(partSize) - 1) / Int64(partSize)))
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let fileMtime = (attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let expectedSize = { (partNumber: Int) in
+            min(Int64(partSize), fileSize - Int64(partNumber - 1) * Int64(partSize))
         }
+
+        var uploadId: String
+        var uploadedSizes: [Int: Int64] = [:]
+        var uploadedEtags: [Int: String] = [:]
+
+        if let checkpoint = loadCheckpoint(
+            bucket: bucket,
+            key: key,
+            fileURL: fileURL,
+            fileSize: fileSize,
+            fileMtime: fileMtime,
+            partSize: partSize
+        ) {
+            do {
+                for part in try await listAllParts(
+                    client: client,
+                    bucket: bucket,
+                    key: key,
+                    uploadId: checkpoint.uploadId
+                ) {
+                    guard let number = part.partNumber, number >= 1, number <= partCount,
+                          let etag = part.etag, let size = part.size,
+                          Int64(size) == expectedSize(number) else {
+                        continue
+                    }
+                    uploadedSizes[number] = Int64(size)
+                    uploadedEtags[number] = etag
+                }
+                uploadId = checkpoint.uploadId
+            } catch {
+                // uploadId 已失效（服务端不存在或已过期）：丢弃旧 checkpoint 重新发起。
+                removeCheckpoint(bucket: bucket, key: key, filePath: fileURL.path)
+                uploadedSizes.removeAll()
+                uploadedEtags.removeAll()
+                uploadId = try await initiateMultipart(
+                    client: client,
+                    bucket: bucket,
+                    key: key,
+                    fileURL: fileURL,
+                    fileSize: fileSize,
+                    fileMtime: fileMtime,
+                    partSize: partSize
+                )
+            }
+        } else {
+            uploadId = try await initiateMultipart(
+                client: client,
+                bucket: bucket,
+                key: key,
+                fileURL: fileURL,
+                fileSize: fileSize,
+                fileMtime: fileMtime,
+                partSize: partSize
+            )
+        }
+
+        let resumedBytes = uploadedSizes.values.reduce(Int64(0), +)
+        if resumedBytes > 0 {
+            emitProgress(taskId, "upload", resumedBytes, fileSize)
+        }
+
         do {
             let handle = try FileHandle(forReadingFrom: fileURL)
             defer { try? handle.close() }
-            let partSize = 1 * 1024 * 1024
-            var uploaded: Int64 = 0
-            var partNumber = 1
-            var parts: [UploadPart] = []
-            while true {
+            var base: Int64 = 0
+            for partNumber in 1...partCount {
+                if let size = uploadedSizes[partNumber] {
+                    base += size
+                    continue
+                }
                 try Task.checkCancellation()
-                let data = try handle.read(upToCount: partSize) ?? Data()
-                if data.isEmpty { break }
-                let base = uploaded
+                let length = expectedSize(partNumber)
+                try handle.seek(toOffset: UInt64(Int64(partNumber - 1) * Int64(partSize)))
+                let data = try handle.read(upToCount: Int(length)) ?? Data()
+                guard Int64(data.count) == length else {
+                    throw OssBridgeContract.BridgeError.unknown
+                }
+                let progressBase = base
                 let progress = ProgressClosure { [weak self] _, partTransferred, _ in
-                    self?.emitProgress(taskId, "upload", base + partTransferred, fileSize)
+                    self?.emitProgress(taskId, "upload", progressBase + partTransferred, fileSize)
                 }
                 let response = try await client.uploadPart(UploadPartRequest(
                     bucket: bucket,
@@ -337,24 +524,24 @@ public final class PrivateDomainOssPlugin: NSObject, FlutterPlugin, FlutterStrea
                 guard let etag = response.etag else {
                     throw OssBridgeContract.BridgeError.unknown
                 }
-                parts.append(UploadPart(etag: etag, partNumber: partNumber))
-                uploaded += Int64(data.count)
-                emitProgress(taskId, "upload", uploaded, fileSize)
-                partNumber += 1
+                uploadedSizes[partNumber] = length
+                uploadedEtags[partNumber] = etag
+                base += length
+                emitProgress(taskId, "upload", base, fileSize)
             }
             try Task.checkCancellation()
             _ = try await client.completeMultipartUpload(CompleteMultipartUploadRequest(
                 bucket: bucket,
                 key: key,
                 uploadId: uploadId,
-                completeMultipartUpload: CompleteMultipartUpload(parts: parts)
+                completeMultipartUpload: CompleteMultipartUpload(parts: (1...partCount).map {
+                    UploadPart(etag: uploadedEtags[$0] ?? "", partNumber: $0)
+                })
             ))
+            removeCheckpoint(bucket: bucket, key: key, filePath: fileURL.path)
         } catch {
-            _ = try? await client.abortMultipartUpload(AbortMultipartUploadRequest(
-                bucket: bucket,
-                key: key,
-                uploadId: uploadId
-            ))
+            // 取消与失败均保留 checkpoint 与服务端已传分片供下次续传，
+            // 与 Android SDK ResumableUploadRequest 的行为一致。
             throw error
         }
     }

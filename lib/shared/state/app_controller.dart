@@ -3102,8 +3102,9 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  /// 继续「已中断」的上传任务：复用既有上传闭包重新入队，进度归零、
-  /// 从头重传（OSS 无断点续传）。源文件缺失时直接标记失败。
+  /// 继续「已中断」的上传任务：复用既有上传闭包重新入队。Android 与
+  /// macOS 的大文件均为分片上传并保留 checkpoint，可从已传分片续传。
+  /// 源文件缺失时直接标记失败。
   void resumeInterruptedUpload(String taskId) {
     final task = tasks.where((item) => item.id == taskId).firstOrNull;
     if (task == null ||
@@ -3222,7 +3223,8 @@ class AppController extends ChangeNotifier {
   }
 
   /// 一键暂停：停止调度等待中的任务；运行中的任务收到停止信号后回到
-  /// 等待队列（不支持断点续传，继续时从头传输）。
+  /// 等待队列。上传任务（Android 与 macOS 均为分片 checkpoint）可从
+  /// 已传分片续传；下载不支持断点，继续时从头下载。
   void pauseAllTransfers() {
     transferQueuePausedListenable.value = true;
     for (final taskId in _runningTransferIds.toList(growable: false)) {
