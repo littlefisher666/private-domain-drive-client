@@ -6,6 +6,21 @@
     <description>私域网盘 macOS 客户端 Sparkle 更新清单</description>
     <language>zh-cn</language>
     <item>
+      <title>私域网盘 macOS v1.0.12</title>
+      <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.12</link>
+      <sparkle:version>87</sparkle:version>
+      <sparkle:shortVersionString>1.0.12</sparkle:shortVersionString>
+      <pubDate>Thu, 15 Oct 2026 10:00:58 +0000</pubDate>
+      <description sparkle:format="markdown">### 新功能
+- 回收站改为逐项独立回收条目（workspace）
+- 上传与索引解耦、清单合并写与全量扫描写回合并（gallery）
+
+### 修复
+- 双击自绘标题栏触发原生窗口缩放（macos）
+- uploadText 临时文件名唯一化，避免并发写入上传空对象（oss）</description>
+      <enclosure url="https://github.com/littlefisher666/private-domain-drive-client/releases/download/macos/v1.0.12/private-domain-drive-macos-v1.0.12.zip" length="24608198" type="application/zip" sparkle:edSignature="cpfD4GGIiCnZNXL1gZovyb9KdZXkAJZx885vB5qnRicfGiPh//DHTRZP2ve+vtCFLaxCSyCKCrU9lbz5tsI6Ag==" />
+    </item>
+    <item>
       <title>私域网盘 macOS v1.0.11</title>
       <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.11</link>
       <sparkle:version>86</sparkle:version>
