@@ -23,8 +23,31 @@ class MainFlutterWindow: NSWindow {
     registerDownloadDirectoryPicker(flutterViewController)
     registerMediaBridge(flutterViewController)
     registerClipboardBridge(flutterViewController)
+    registerWindowBridge(flutterViewController)
 
     super.awakeFromNib()
+  }
+
+  /// 窗口桥：Flutter 自绘标题栏（fullSizeContentView 隐藏了原生标题栏）
+  /// 双击时转发到这里触发原生 zoom（最大化/还原）。
+  private func registerWindowBridge(_ controller: FlutterViewController) {
+    let channel = FlutterMethodChannel(
+      name: "private_domain_drive/window",
+      binaryMessenger: controller.engine.binaryMessenger
+    )
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard let window = self else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      switch call.method {
+      case "performZoom":
+        window.performZoom(nil)
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
   }
 
   private func registerDownloadDirectoryPicker(_ controller: FlutterViewController) {

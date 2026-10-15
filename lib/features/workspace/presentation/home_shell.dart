@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 
 import '../../../app/theme/cupertino_desktop.dart';
+import '../../../core/utils/window_actions.dart';
 import '../../../shared/state/app_controller.dart';
 import '../../../shared/state/app_scope.dart';
 import '../../gallery/presentation/gallery_page.dart';
@@ -331,30 +332,35 @@ class _DesktopTitleBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Leave space for native macOS traffic lights under fullSizeContentView.
-    return Container(
-      height: CupertinoDesktopTokens.titleBarHeight,
-      padding: const EdgeInsets.fromLTRB(86, 0, 14, 0),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.88),
-        border: Border(
-          bottom:
-              BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
-        ),
-      ),
-      child: Row(
-        children: <Widget>[
-          Expanded(
-            child: Text(
-              title,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: Theme.of(context).colorScheme.onSurface,
-              ),
+    // 原生标题栏已被隐藏，双击缩放需由 Flutter 侧转发。
+    return GestureDetector(
+      onDoubleTap: toggleWindowZoom,
+      child: Container(
+        height: CupertinoDesktopTokens.titleBarHeight,
+        padding: const EdgeInsets.fromLTRB(86, 0, 14, 0),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.88),
+          border: Border(
+            bottom: BorderSide(
+              color: Theme.of(context).colorScheme.outlineVariant,
             ),
           ),
-        ],
+        ),
+        child: Row(
+          children: <Widget>[
+            Expanded(
+              child: Text(
+                title,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Theme.of(context).colorScheme.onSurface,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
