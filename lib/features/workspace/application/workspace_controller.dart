@@ -531,14 +531,11 @@ class WorkspaceController extends ChangeNotifier {
     }
   }
 
-  /// 别名表持久化：经仓库写入后更新本地缓存并返回最新表；树版本、
-  /// 目录大小缓存与通知由调用方按各自语义决定（创建/删除/重命名不同）。
-  Future<DirectoryAliasTable> persistAliasTable(
-    UserSession session,
-    DirectoryAliasTable Function(DirectoryAliasTable table) transform,
-  ) async {
-    _aliasTable = await _aliasRepository.update(session, transform);
-    return _aliasTable;
+  /// 别名写入完成后由 [AliasController] 回写本地缓存：读-改-写经别名
+  /// 仓库完成；树版本、目录大小缓存与通知由调用方按各自语义决定
+  /// （创建/删除/重命名不同）。
+  void adoptAliasTable(DirectoryAliasTable table) {
+    _aliasTable = table;
   }
 
   // ---------- 偏好 ----------
