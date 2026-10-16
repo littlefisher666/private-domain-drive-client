@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -24,9 +22,11 @@ import '../../features/settings/infrastructure/github_release_client.dart';
 import '../../features/share_import/application/share_import_controller.dart';
 import '../../features/share_import/domain/share_import_models.dart';
 import '../../features/workspace/application/move_controller.dart';
+import '../../features/workspace/application/recycle_bin_controller.dart';
 import '../../features/workspace/application/workspace_controller.dart';
 import '../../features/workspace/domain/file_item.dart';
 import '../../features/workspace/domain/directory_alias.dart';
+import '../../features/workspace/domain/delete_models.dart';
 import '../../features/workspace/domain/move_models.dart';
 import '../../features/workspace/domain/move_task_entry.dart';
 import '../../features/workspace/domain/recycle_bin_entry.dart';
@@ -55,44 +55,10 @@ export '../../features/share_import/domain/share_import_models.dart'
 export '../../features/workspace/domain/move_models.dart'
     show MoveConflictResolution, MoveProgress, MoveSummary;
 
-class BatchDeletePreview {
-  const BatchDeletePreview({
-    required this.selectedCount,
-    required this.directoryCount,
-    required this.objectPaths,
-    required this.items,
-    this.topLevelPaths = const <String>{},
-  });
-
-  final int selectedCount;
-  final int directoryCount;
-  final Set<String> objectPaths;
-
-  /// 用户勾选的顶层条目，逐项建立独立回收条目时用于对象归属分组。
-  final List<FileItem> items;
-
-  /// 用户勾选的顶层条目路径（不含目录展开结果），供统计缓存按目录修正。
-  final Set<String> topLevelPaths;
-  int get objectCount => objectPaths.length;
-}
-
-class BatchDeleteSummary {
-  const BatchDeleteSummary({
-    required this.deletedPaths,
-    required this.failedPaths,
-  });
-
-  final List<String> deletedPaths;
-  final List<String> failedPaths;
-}
-
-/// 删除（移入回收站）进行中状态；total 为 0 表示仍在统计待删除对象。
-class DeleteProgress {
-  const DeleteProgress({required this.processed, required this.total});
-
-  final int processed;
-  final int total;
-}
+// 迁移期兼容：删除域模型改由 workspace 域定义，
+// 经本文件继续对外可见，避免调用方在拆除门面前感知类型移动。
+export '../../features/workspace/domain/delete_models.dart'
+    show BatchDeletePreview, BatchDeleteSummary, DeleteProgress;
 
 /// 应用状态控制器。会话与权限来自已部署的 FC，不在生产路径伪造身份。
 class AppController extends ChangeNotifier {
@@ -145,6 +111,11 @@ class AppController extends ChangeNotifier {
       workspaceController: _workspaceController,
       ossClient: _ossClient,
     )..addListener(notifyListeners);
+    _recycleBinController = RecycleBinController(
+      sessionController: _sessionController,
+      workspaceController: _workspaceController,
+      ossClient: _ossClient,
+    )..addListener(notifyListeners);
   }
 
   late final SessionController _sessionController;
@@ -163,6 +134,9 @@ class AppController extends ChangeNotifier {
 
   /// 移动编排由 [MoveController] 持有；迁移期经门面继续暴露原 API。
   late final MoveController _moveController;
+
+  /// 删除与回收站编排由 [RecycleBinController] 持有；迁移期经门面继续暴露原 API。
+  late final RecycleBinController _recycleBinController;
   final OssClient _ossClient;
 
   /// 相册等模块与主控制器共用同一个 OSS 客户端（凭证配置状态共享）。
@@ -172,13 +146,12 @@ class AppController extends ChangeNotifier {
   UpdateService get updateService => _updateService;
   final UpdateService _updateService;
   final bool _disableStartupUpdateCheck;
-  GalleryIndexHooks? _galleryHooks;
 
   /// 注入相册索引挂钩（上传增量更新、删除清理、还原恢复）。
   void setGalleryHooks(GalleryIndexHooks? hooks) {
-    _galleryHooks = hooks;
     _transferController.setGalleryHooks(hooks);
     _moveController.setGalleryHooks(hooks);
+    _recycleBinController.setGalleryHooks(hooks);
   }
 
   /// 全局 Navigator Key，供传输队列与移动流程弹出冲突处置对话框。
@@ -188,7 +161,6 @@ class AppController extends ChangeNotifier {
   }
 
   static const rootPrefix = path_utils.rootPrefix;
-  static const _trashRoot = '$rootPrefix.trash/';
   static const _themeModeKey = 'theme_mode';
   static const _autoCheckUpdatesKey = 'auto_check_updates';
 
@@ -225,9 +197,10 @@ class AppController extends ChangeNotifier {
   ValueNotifier<MoveProgress?> get moveStateListenable =>
       _moveController.moveStateListenable;
 
-  /// 删除（移入回收站）进行中状态；非阻塞横幅消费，删除期间不锁界面。
-  final ValueNotifier<DeleteProgress?> deleteStateListenable =
-      ValueNotifier<DeleteProgress?>(null);
+  /// 删除（移入回收站）进行中状态由 [RecycleBinController] 持有，
+  /// 门面返回同一实例，非阻塞横幅消费，删除期间不锁界面。
+  ValueNotifier<DeleteProgress?> get deleteStateListenable =>
+      _recycleBinController.deleteStateListenable;
 
   /// 会话状态由 [SessionController] 持有，此处保留只读引用供内部消费。
   UserSession? get _session => _sessionController.session;
@@ -248,27 +221,14 @@ class AppController extends ChangeNotifier {
   /// 当前会话的工作区根目录，供目录选择器等需要全树导航的场景使用。
   String get workspaceRoot => _workspaceController.workspaceRoot;
 
-  String _recycleBinPath = rootPrefix;
+  /// 回收站导航状态由 [RecycleBinController] 持有，门面继续暴露原 API。
+  String get recycleBinPath => _recycleBinController.recycleBinPath;
 
-  String get recycleBinPath => _recycleBinPath;
-
-  void setRecycleBinPath(String path) {
-    _recycleBinPath = _normalizeDir(path);
-    notifyListeners();
-  }
+  void setRecycleBinPath(String path) =>
+      _recycleBinController.setRecycleBinPath(path);
 
   /// 回收站内返回上一级：处于某个条目根层时回到回收站根层。
-  String recycleBinUpPath() {
-    final current = _normalizeDir(_recycleBinPath);
-    final root = _normalizeDir(rootPrefix);
-    if (current == root) return root;
-    if (current.startsWith(_trashRoot)) {
-      final rest = current.substring(_trashRoot.length);
-      final segments = rest.split('/').where((segment) => segment.isNotEmpty);
-      if (segments.length <= 1) return root;
-    }
-    return parentPath(current);
-  }
+  String recycleBinUpPath() => _recycleBinController.recycleBinUpPath();
 
   /// 将 OSS 内部对象键转换为用户可见的相对路径。
   String displayPath(String path) => _workspaceController.displayPath(path);
@@ -712,378 +672,31 @@ class AppController extends ChangeNotifier {
   Future<void> renameItem(FileItem item, String newName) =>
       _workspaceController.renameItem(item, newName);
 
-  Future<void> deleteItem(FileItem item) async {
-    _ensureDeleteCapability();
-    await ensureSessionReady();
-    final session = _requireSession();
-    // 大目录先列全量 key，耗时较长；先置进度让横幅立即可见。
-    deleteStateListenable.value = const DeleteProgress(processed: 0, total: 0);
-    final paths = <String>{item.path};
-    if (item.isDirectory) {
-      paths.addAll(await _ossClient.listAllObjectKeys(item.path, session));
-    }
-    final result = await _moveToRecycleBin(
-      _planRecycleBinItems(<FileItem>[item], paths),
-      session: session,
-    );
-    if (result.failedPaths.isNotEmpty) {
-      throw StateError('有 ${result.failedPaths.length} 个对象未能移入回收站');
-    }
-    if (item.isDirectory) {
-      final deletedPath = _normalizeDir(item.path);
-      _workspaceController.removeBrowsedDirectoriesWhere(
-        (path) => path == deletedPath || path.startsWith(deletedPath),
-      );
-      if (currentPath.startsWith(deletedPath)) {
-        _workspaceController.replaceCurrentPath(parentPath(deletedPath));
-      }
-    }
-    _workspaceController.bumpTreeRevision();
-    _workspaceController.clearDirectorySizeCache();
-    _workspaceController.noteTopLevelChanges(
-      <String>[item.path],
-      const <String>{},
-      delta: -1,
-    );
-
-    if (selectedItem?.path == item.path) {
-      _workspaceController.clearSelectedItem();
-    }
-    unawaited(_galleryHooks?.onObjectsDeleted(paths));
-    notifyListeners();
-  }
+  /// 删除单个条目（移入回收站）由 [RecycleBinController] 编排。
+  Future<void> deleteItem(FileItem item) =>
+      _recycleBinController.deleteItem(item);
 
   Future<BatchDeletePreview> prepareBatchDelete(
-    Iterable<FileItem> items,
-  ) async {
-    _ensureDeleteCapability();
-    final selected = items.toList(growable: false);
-    final paths = <String>{};
-    await ensureSessionReady();
-    final session = _requireSession();
-    for (final item in selected) {
-      _workspaceController.ensureWithinRoot(item.path);
-      paths.add(item.path);
-      if (item.isDirectory) {
-        paths.addAll(await _ossClient.listAllObjectKeys(item.path, session));
-      }
-    }
-    return BatchDeletePreview(
-      selectedCount: selected.length,
-      directoryCount: selected.where((item) => item.isDirectory).length,
-      objectPaths: paths,
-      topLevelPaths: selected.map((item) => item.path).toSet(),
-      items: selected,
-    );
-  }
+          Iterable<FileItem> items) =>
+      _recycleBinController.prepareBatchDelete(items);
 
-  Future<BatchDeleteSummary> deleteBatch(
-    BatchDeletePreview preview,
-  ) async {
-    _ensureDeleteCapability();
-    await ensureSessionReady();
-    final result = await _moveToRecycleBin(
-      _planRecycleBinItems(preview.items, preview.objectPaths),
-      session: _requireSession(),
-    );
-    final deleted = result.deletedPaths;
-    final failed = result.failedPaths;
-    if (deleted.isNotEmpty) {
-      _workspaceController.clearDirectorySizeCache();
-      _workspaceController.removeBrowsedDirectoriesWhere(
-          (path) => deleted.contains(path));
-      if (deleted.any((path) => currentPath.startsWith(_normalizeDir(path)))) {
-        _workspaceController.replaceCurrentPath(parentPath(currentPath));
-      }
-      _workspaceController.bumpTreeRevision();
-      _workspaceController.clearSelectedItem();
-      _workspaceController.noteTopLevelChanges(
-        preview.topLevelPaths,
-        failed.toSet(),
-        delta: -1,
-      );
-      unawaited(_galleryHooks?.onObjectsDeleted(deleted.toSet()));
-      notifyListeners();
-    }
-    return BatchDeleteSummary(deletedPaths: deleted, failedPaths: failed);
-  }
-
-  /// 按用户勾选的顶层条目把对象路径归组，逐条目建立独立回收条目。
-  ///
-  /// 目录条目认领其前缀下的对象；文件条目只认领自身路径。先按路径
-  /// 深度排序保证父目录先认领；未被任何条目认领的对象（如嵌套选中
-  /// 被父目录覆盖）不重复归属。条目没有任何对象时跳过。
-  List<({FileItem item, List<String> objectPaths})> _planRecycleBinItems(
-    List<FileItem> items,
-    Set<String> objectPaths,
-  ) {
-    final sources = objectPaths
-        .where((path) => path.startsWith(rootPrefix))
-        .toSet();
-    final sorted = items.toList(growable: false)
-      ..sort((a, b) {
-        final byLength = a.path.length.compareTo(b.path.length);
-        return byLength != 0 ? byLength : a.path.compareTo(b.path);
-      });
-    final claimed = <String>{};
-    final planned = <({FileItem item, List<String> objectPaths})>[];
-    for (final item in sorted) {
-      final dir = item.isDirectory ? _normalizeDir(item.path) : null;
-      final owned = <String>[
-        for (final path in sources)
-          if (!claimed.contains(path) &&
-              (dir != null
-                  ? path == item.path || path.startsWith(dir)
-                  : path == item.path))
-            path,
-      ];
-      if (owned.isEmpty) continue;
-      claimed.addAll(owned);
-      planned.add((item: item, objectPaths: owned));
-    }
-    return planned;
-  }
-
-  Future<BatchDeleteSummary> _moveToRecycleBin(
-    List<({FileItem item, List<String> objectPaths})> planned, {
-    required UserSession session,
-  }) async {
-    final total = planned.fold<int>(0, (sum, plan) => sum + plan.objectPaths.length);
-    deleteStateListenable.value = DeleteProgress(processed: 0, total: total);
-    final copiedAll = <String, String>{};
-    final failed = <String>[];
-    try {
-      final takenNames = await _recycleBinEntryNames(session);
-      for (final plan in planned) {
-        final id =
-            '${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
-        final entryRoot = '$_trashRoot$id/';
-        final copied = <String, String>{};
-        // 与移动操作一致：小批次并发 copy，避免逐对象串行耗时过长。
-        var done = deleteStateListenable.value?.processed ?? 0;
-        const concurrency = 6;
-        final sources = plan.objectPaths;
-        for (var start = 0; start < sources.length; start += concurrency) {
-          final end = min(start + concurrency, sources.length);
-          await Future.wait(sources.sublist(start, end).map((source) async {
-            final target =
-                '$entryRoot' 'payload/${source.substring(rootPrefix.length)}';
-            try {
-              await _ossClient.copy(source, target, session);
-              copied[source] = target;
-            } catch (_) {
-              failed.add(source);
-            }
-            done++;
-            deleteStateListenable.value =
-                DeleteProgress(processed: done, total: total);
-          }));
-        }
-        if (copied.isNotEmpty) {
-          final name = _uniqueRecycleBinName(
-            plan.item.name,
-            plan.item.isDirectory,
-            takenNames,
-          );
-          takenNames.add(name);
-          final entry = RecycleBinEntry(
-            id: id,
-            name: name,
-            originalPath: plan.item.path,
-            isDirectory: plan.item.isDirectory,
-            deletedAt: DateTime.now(),
-            objects: copied,
-          );
-          await _ossClient.uploadText(
-              '$entryRoot' 'manifest.json', entry.encode(), session);
-        }
-        copiedAll.addAll(copied);
-      }
-      final deleted = <String>[];
-      for (final keys in _batches(copiedAll.keys)) {
-        try {
-          final result = await _ossClient.deleteMany(keys, session);
-          deleted.addAll(result.deletedPaths);
-          failed.addAll(result.failedPaths);
-        } catch (_) {
-          failed.addAll(keys);
-        }
-      }
-      return BatchDeleteSummary(deletedPaths: deleted, failedPaths: failed);
-    } finally {
-      deleteStateListenable.value = null;
-    }
-  }
-
-  /// 已占用的回收条目展示名，用于重名去重。
-  Future<Set<String>> _recycleBinEntryNames(UserSession session) async {
-    try {
-      return {
-        for (final entry in await listRecycleBin()) entry.name,
-      };
-    } catch (_) {
-      // 列举失败时退化为不去重，避免阻塞删除主流程。
-      return <String>{};
-    }
-  }
-
-  /// 为回收条目生成展示名：与现有条目重名时追加 `_yyyyMMdd_HHmmss`
-  /// 时间戳（文件插在扩展名前，目录在末尾），仍冲突时再加序号。
-  String _uniqueRecycleBinName(
-    String rawName,
-    bool isDirectory,
-    Set<String> taken,
-  ) {
-    if (!taken.contains(rawName)) return rawName;
-    final timestamp = _recycleBinTimestamp(DateTime.now());
-    String stem;
-    String extension;
-    if (isDirectory) {
-      stem = rawName;
-      extension = '';
-    } else {
-      final dot = rawName.lastIndexOf('.');
-      stem = dot > 0 ? rawName.substring(0, dot) : rawName;
-      extension = dot > 0 ? rawName.substring(dot) : '';
-    }
-    var candidate = '$stem$extension';
-    if (!taken.contains(candidate)) return candidate;
-    var sequence = 1;
-    do {
-      sequence++;
-      candidate = '${stem}_$timestamp${sequence > 2 ? '_$sequence' : ''}$extension';
-    } while (taken.contains(candidate));
-    return candidate;
-  }
-
-  String _recycleBinTimestamp(DateTime time) {
-    final mm = time.month.toString().padLeft(2, '0');
-    final dd = time.day.toString().padLeft(2, '0');
-    final hh = time.hour.toString().padLeft(2, '0');
-    final mi = time.minute.toString().padLeft(2, '0');
-    final ss = time.second.toString().padLeft(2, '0');
-    return '${time.year}$mm$dd' '_$hh$mi$ss';
-  }
-
-  Iterable<List<String>> _batches(Iterable<String> keys) sync* {
-    final values = keys.toList(growable: false);
-    for (var offset = 0; offset < values.length; offset += 1000) {
-      yield values.sublist(offset, min(offset + 1000, values.length));
-    }
-  }
-
-  Future<List<RecycleBinEntry>> listRecycleBin() async {
-    await ensureSessionReady();
-    final session = _requireSession();
-    final prefixes = await _ossClient.listPrefixes(_trashRoot, session);
-    final entries = <RecycleBinEntry>[];
-    for (final prefix in prefixes) {
-      try {
-        entries.add(RecycleBinEntry.decode(
-          utf8.decode(
-              await _ossClient.download('$prefix' 'manifest.json', session)),
-        ));
-      } catch (_) {
-        // 未完成的回收批次没有 manifest，等待生命周期规则自动清理。
-      }
-    }
-    entries.sort((a, b) => b.deletedAt.compareTo(a.deletedAt));
-    return entries;
-  }
-
-  Future<void> restoreRecycleBinEntry(RecycleBinEntry entry) async {
-    await ensureSessionReady();
-    final session = _requireSession();
-    final restored = <String, String>{};
-    for (final item in entry.objects.entries) {
-      final destination = await _availableRestorePath(item.key, session);
-      await _ossClient.copy(item.value, destination, session);
-      restored[item.value] = destination;
-    }
-    for (final keys in _batches(<String>[
-      ...restored.keys,
-      '$_trashRoot${entry.id}/manifest.json'
-    ])) {
-      await _ossClient.deleteMany(keys, session);
-    }
-    _workspaceController.bumpTreeRevision();
-    _workspaceController.clearDirectorySizeCache();
-    // 还原目标位置可能带改名后缀，逐个失效还原目录，由校准重建。
-    final restoredDirs = <String>{
-      for (final destination in restored.values)
-        _normalizeDir(parentPath(destination)),
-    };
-    for (final dir in restoredDirs) {
-      _workspaceController.invalidateDirectorySummary(dir);
-      _workspaceController.calibrateDirectorySummary(dir);
-    }
-    unawaited(_galleryHooks?.onObjectsRestored(restored.values.toSet()));
-    notifyListeners();
-  }
-
-  /// 立即删除一个回收条目；对象清单已覆盖条目的全部 payload 对象。
-  Future<void> purgeRecycleBinEntry(RecycleBinEntry entry) async {
-    await ensureSessionReady();
-    final session = _requireSession();
-    final failed = <String>[];
-    for (final keys in _batches(<String>[
-      ...entry.objects.values,
-      '$_trashRoot${entry.id}/manifest.json'
-    ])) {
-      final result = await _ossClient.deleteMany(keys, session);
-      failed.addAll(result.failedPaths);
-    }
-    if (failed.isNotEmpty) {
-      throw AppError('有 ${failed.length} 个对象删除失败，请稍后重试',
-          code: 'OSS_DELETE_FAILED');
-    }
-    // 清空回收批次不影响可浏览目录的计数，仅失效原目录由校准重建。
-    final originalDir = _normalizeDir(parentPath(entry.originalPath));
-    _workspaceController.invalidateDirectorySummary(originalDir);
-    _workspaceController.calibrateDirectorySummary(originalDir);
-    notifyListeners();
-  }
-
-  Future<String> _availableRestorePath(
-      String desired, UserSession session) async {
-    if (!await _ossClient.objectExists(desired, session)) return desired;
-    final directory = parentPath(desired);
-    final rawName = desired.substring(directory.length);
-    final isDirectory = rawName.endsWith('/');
-    final name =
-        isDirectory ? rawName.substring(0, rawName.length - 1) : rawName;
-    final dot = name.lastIndexOf('.');
-    final stem = dot > 0 ? name.substring(0, dot) : name;
-    final extension = dot > 0 ? name.substring(dot) : '';
-    for (var number = 0;; number++) {
-      final suffix = number == 0 ? '（已还原）' : '（已还原 $number）';
-      final candidate =
-          '$directory$stem$suffix$extension${isDirectory ? '/' : ''}';
-      if (!await _ossClient.objectExists(candidate, session)) return candidate;
-    }
-  }
+  Future<BatchDeleteSummary> deleteBatch(BatchDeletePreview preview) =>
+      _recycleBinController.deleteBatch(preview);
 
   /// 重试部分失败的对象：按失败路径重建顶层条目（仅对象级信息，
   /// 展示名取路径末段），保持逐项独立回收条目的口径。
-  Future<BatchDeleteSummary> retryBatchDelete(Iterable<String> failedPaths) {
-    final paths = failedPaths.toSet();
-    final items = <FileItem>[
-      for (final path in paths)
-        FileItem(
-          path: path,
-          name: path.endsWith('/')
-              ? path.substring(0, path.length - 1).split('/').last
-              : path.split('/').last,
-          isDirectory: path.endsWith('/'),
-        ),
-    ];
-    return deleteBatch(BatchDeletePreview(
-      selectedCount: items.length,
-      directoryCount: items.where((item) => item.isDirectory).length,
-      objectPaths: paths,
-      items: items,
-    ));
-  }
+  Future<BatchDeleteSummary> retryBatchDelete(Iterable<String> failedPaths) =>
+      _recycleBinController.retryBatchDelete(failedPaths);
+
+  Future<List<RecycleBinEntry>> listRecycleBin() =>
+      _recycleBinController.listRecycleBin();
+
+  Future<void> restoreRecycleBinEntry(RecycleBinEntry entry) =>
+      _recycleBinController.restoreRecycleBinEntry(entry);
+
+  /// 立即删除一个回收条目；对象清单已覆盖条目的全部 payload 对象。
+  Future<void> purgeRecycleBinEntry(RecycleBinEntry entry) =>
+      _recycleBinController.purgeRecycleBinEntry(entry);
 
   /// 发起移动：源去重 → 目标合法性校验 → 冲突检测与处置 → 写 manifest → 执行。
   /// 返回 null 表示用户在冲突处置或互斥检查后取消，未产生任何搬运。
@@ -1272,7 +885,7 @@ class AppController extends ChangeNotifier {
       unawaited(_ossClient.cancelTransfer(taskId));
     }
     _workspaceController.dispose();
-    deleteStateListenable.dispose();
+    _recycleBinController.dispose();
     _moveController.dispose();
     _shareImportController.dispose();
     _transferController.dispose();
