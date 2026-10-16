@@ -6,34 +6,52 @@ mixin _OssClientListing on _OssClientCore {
   Future<List<FileItem>> list(String path, UserSession session) async {
     await _ensureConfigured(session);
     final prefix = _dir(path);
-    final page = await _platform(
-      () => _native.listObjects(prefix: prefix, delimiter: '/'),
-    );
-    return <FileItem>[
-      for (final key in page.commonPrefixes)
-        if (key != prefix && !_isHiddenEntry(key, prefix))
-          FileItem(
-            path: key,
-            name: key.substring(prefix.length).replaceFirst(RegExp(r'/$'), ''),
-            isDirectory: true,
-          ),
-      for (final object in page.objects)
-        if (object.key != prefix &&
-            !object.key.substring(prefix.length).contains('/') &&
-            !_isHiddenEntry(object.key, prefix))
-          FileItem(
-            path: object.key,
-            name: object.key.substring(prefix.length),
-            isDirectory: false,
-            size: object.size,
-            updatedAt: object.lastModifiedMilliseconds == null
-                ? null
-                : DateTime.fromMillisecondsSinceEpoch(
-                    object.lastModifiedMilliseconds!,
-                    isUtc: true,
-                  ).toLocal(),
-          ),
-    ];
+    final directories = <FileItem>[];
+    final files = <FileItem>[];
+    String? marker;
+    do {
+      final page = await _platform(
+        () => _native.listObjects(
+          prefix: prefix,
+          delimiter: '/',
+          marker: marker,
+          maxKeys: 1000,
+        ),
+      );
+      directories.addAll(<FileItem>[
+        for (final key in page.commonPrefixes)
+          if (key != prefix && !_isHiddenEntry(key, prefix))
+            FileItem(
+              path: key,
+              name:
+                  key.substring(prefix.length).replaceFirst(RegExp(r'/$'), ''),
+              isDirectory: true,
+            ),
+      ]);
+      files.addAll(<FileItem>[
+        for (final object in page.objects)
+          if (object.key != prefix &&
+              !object.key.substring(prefix.length).contains('/') &&
+              !_isHiddenEntry(object.key, prefix))
+            FileItem(
+              path: object.key,
+              name: object.key.substring(prefix.length),
+              isDirectory: false,
+              size: object.size,
+              updatedAt: object.lastModifiedMilliseconds == null
+                  ? null
+                  : DateTime.fromMillisecondsSinceEpoch(
+                      object.lastModifiedMilliseconds!,
+                      isUtc: true,
+                    ).toLocal(),
+            ),
+      ]);
+      marker = page.isTruncated ? page.nextMarker : null;
+      if (page.isTruncated && (marker == null || marker.isEmpty)) {
+        throw AppError('OSS 分页响应缺少下一页标识', code: 'OSS_INVALID_RESPONSE');
+      }
+    } while (marker != null && marker.isNotEmpty);
+    return [...directories, ...files];
   }
 
   /// 统计指定文件夹的直属条目数与最新更新时间，不递归遍历子目录。
