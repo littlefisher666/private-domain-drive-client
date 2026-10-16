@@ -19,18 +19,20 @@ import '../../features/transfer/infrastructure/upload_staging.dart';
 import '../../features/preview/infrastructure/text_preview_loader.dart';
 import '../../features/settings/application/update_service.dart';
 import '../../features/settings/infrastructure/github_release_client.dart';
+import '../../features/workspace/application/workspace_controller.dart';
 import '../../features/workspace/domain/file_item.dart';
 import '../../features/workspace/domain/directory_alias.dart';
 import '../../features/workspace/domain/move_task_entry.dart';
 import '../../features/workspace/domain/recycle_bin_entry.dart';
-import '../../features/workspace/infrastructure/directory_summary_service.dart';
-import '../../features/workspace/infrastructure/alias_repository.dart';
 import '../../features/workspace/infrastructure/oss_client.dart';
-import '../cache/disk_document_cache.dart';
-import '../cache/disk_image_cache.dart';
 import '../gallery_index_hooks.dart';
 import '../path_utils.dart' as path_utils;
 import '../transfer_keepalive.dart';
+
+// 迁移期兼容：DirectorySizeState 改由 WorkspaceController 定义，
+// 经本文件继续对外可见，避免调用方在拆除门面前感知类型移动。
+export '../../features/workspace/application/workspace_controller.dart'
+    show DirectorySizeState;
 
 class ShareImportItem {
   const ShareImportItem({
@@ -184,20 +186,6 @@ class _MovePlanPair {
   final String renameRoot;
 }
 
-class DirectorySizeState {
-  const DirectorySizeState._({this.size, required this.isLoading});
-
-  const DirectorySizeState.loading() : this._(isLoading: true);
-
-  const DirectorySizeState.ready(int size)
-      : this._(size: size, isLoading: false);
-
-  const DirectorySizeState.failed() : this._(isLoading: false);
-
-  final int? size;
-  final bool isLoading;
-}
-
 /// 上传目标已存在时的用户处置决策。
 enum UploadConflictResolution { skip, overwrite, keepBoth }
 
@@ -247,17 +235,17 @@ class AppController extends ChangeNotifier {
       ..onSessionChanged = _handleSessionChanged
       ..addListener(notifyListeners);
     _ossClient.onCredentialExpired = _sessionController.handleCredentialExpired;
-    _aliasRepository = AliasRepository(ossClient: _ossClient);
+    _workspaceController = WorkspaceController(
+      sessionController: _sessionController,
+      ossClient: _ossClient,
+    )..addListener(notifyListeners);
   }
 
   late final SessionController _sessionController;
+
+  /// 工作区域状态由 [WorkspaceController] 持有；迁移期经门面继续暴露原 API。
+  late final WorkspaceController _workspaceController;
   final OssClient _ossClient;
-  late final DirectorySummaryService _directorySummaryService =
-      DirectorySummaryService(
-    ossClient: _ossClient,
-    sessionProvider: () => _session,
-  );
-  late final AliasRepository _aliasRepository;
 
   /// 相册等模块与主控制器共用同一个 OSS 客户端（凭证配置状态共享）。
   OssClient get ossClient => _ossClient;
@@ -298,13 +286,8 @@ class AppController extends ChangeNotifier {
   static const _transferConcurrencyKey = 'transfer_concurrency';
   static const _transferHistoryKey = 'transfer_history:v1';
   static const _uploadPendingKey = 'upload_pending:v1';
-  static const _fileSortOptionKey = 'file_sort_option';
-  static const _fileSortOptionsByDirectoryKey =
-      'file_sort_options_by_directory';
   static const _themeModeKey = 'theme_mode';
   static const _autoCheckUpdatesKey = 'auto_check_updates';
-  static const _thumbnailSizeKey = 'thumbnail_size';
-  static const _takenAtCachePrefix = 'image_taken_at:v5:';
   static const _videoFileExtensions = <String>{
     'mp4', 'mov', 'm4v', 'mkv', 'avi', 'webm', '3gp',
   };
@@ -314,20 +297,17 @@ class AppController extends ChangeNotifier {
   static const _minTransferConcurrency = 1;
   static const _maxTransferConcurrency = 5;
 
-  /// Selection updates only; does not rebuild the whole app shell.
-  final ValueNotifier<FileItem?> selectedItemListenable =
-      ValueNotifier<FileItem?>(null);
+  /// 选择与目录大小的细粒度监听器由 [WorkspaceController] 持有，
+  /// 门面返回同一实例，界面监听行为不变。
+  ValueNotifier<FileItem?> get selectedItemListenable =>
+      _workspaceController.selectedItemListenable;
 
-  final ValueNotifier<Set<String>> multiSelectedPathsListenable =
-      ValueNotifier<Set<String>>(<String>{});
+  ValueNotifier<Set<String>> get multiSelectedPathsListenable =>
+      _workspaceController.multiSelectedPathsListenable;
 
-  /// 仅用于详情页的目录大小异步计算状态，避免重建整个工作区。
-  final ValueNotifier<Map<String, DirectorySizeState>>
-      directorySizeStatesListenable =
-      ValueNotifier<Map<String, DirectorySizeState>>(
-          const <String, DirectorySizeState>{});
-  final Map<String, int> _directorySizeCache = <String, int>{};
-  final Map<String, Object> _directorySizeRequests = <String, Object>{};
+  ValueNotifier<Map<String, DirectorySizeState>>
+      get directorySizeStatesListenable =>
+          _workspaceController.directorySizeStatesListenable;
 
   /// Transfer task list/progress updates only; does not rebuild workspace.
   final ValueNotifier<List<TransferTask>> tasksListenable =
@@ -356,23 +336,6 @@ class AppController extends ChangeNotifier {
   /// 会话状态由 [SessionController] 持有，此处保留只读引用供内部消费。
   UserSession? get _session => _sessionController.session;
 
-  String _currentPath = rootPrefix;
-
-  /// 最近一次加载的别名表；根目录浏览与别名写入时刷新。
-  DirectoryAliasTable _aliasTable = const DirectoryAliasTable();
-
-  /// 经「进入别名」到达当前目录时记录的别名名称；任意路径切换即清除。
-  /// 用于标题展示与「别名根层级后退返回根目录」语义。
-  String? _activeAliasName;
-
-  /// 进入别名前的所在层级，别名根层级后退返回该位置（挂载层级）。
-  String? _aliasReturnPath;
-  BrowseMode _browseMode = BrowseMode.list;
-  ThumbnailSize _thumbnailSize = ThumbnailSize.medium;
-  FileSortOption _defaultFileSortOption = FileSortOption.updatedNewest;
-  final Map<String, FileSortOption> _fileSortOptionsByDirectory =
-      <String, FileSortOption>{};
-  final Set<String> _remoteDirectories = <String>{};
   List<ShareImportItem> _pendingShareItems = const <ShareImportItem>[];
   String _shareTargetPath = rootPrefix;
 
@@ -390,9 +353,6 @@ class AppController extends ChangeNotifier {
   /// 强制升级门禁检查结果；非空表示当前版本低于最低支持版本、拦截生效。
   UpdateCheckResult? _forcedUpgradeResult;
   bool _forcedUpgradeChecking = false;
-  int _treeRevision = 0;
-  bool _isMultiSelectionMode = false;
-  String? _selectionAnchorPath;
 
   final List<String> _pendingTransferIds = <String>[];
   final Set<String> _runningTransferIds = <String>{};
@@ -418,13 +378,10 @@ class AppController extends ChangeNotifier {
 
   UserSession? get session => _sessionController.session;
   bool get isLoggedIn => _sessionController.isLoggedIn;
-  String get currentPath => _currentPath;
+  String get currentPath => _workspaceController.currentPath;
 
   /// 当前会话的工作区根目录，供目录选择器等需要全树导航的场景使用。
-  String get workspaceRoot =>
-      _session?.rootPrefix.isNotEmpty == true
-          ? _normalizeDir(_session!.rootPrefix)
-          : rootPrefix;
+  String get workspaceRoot => _workspaceController.workspaceRoot;
 
   String _recycleBinPath = rootPrefix;
 
@@ -449,49 +406,21 @@ class AppController extends ChangeNotifier {
   }
 
   /// 将 OSS 内部对象键转换为用户可见的相对路径。
-  String displayPath(String path) {
-    final normalized = path.trim();
-    final root = _session?.rootPrefix.isNotEmpty == true
-        ? _normalizeDir(_session!.rootPrefix)
-        : rootPrefix;
-    if (normalized.isEmpty || normalized == root) {
-      return '全部文件';
-    }
-    final relative = normalized.startsWith(root)
-        ? normalized.substring(root.length)
-        : normalized;
-    return relative.replaceFirst(RegExp(r'/$'), '').isEmpty
-        ? '全部文件'
-        : relative.replaceFirst(RegExp(r'/$'), '');
-  }
+  String displayPath(String path) => _workspaceController.displayPath(path);
 
   /// 工作区标题：经别名进入且仍在别名根层级时显示别名名称。
-  String get currentTitle =>
-      _activeAliasName ?? displayPath(_currentPath);
+  String get currentTitle => _workspaceController.currentTitle;
 
   /// 后退目标目录；处于别名根层级时返回进入前的挂载层级，已在根目录返回 null。
-  String? backNavigationPath() {
-    final current = _normalizeDir(_currentPath);
-    final root = _normalizeDir(workspaceRoot);
-    if (current == root) return null;
-    if (_activeAliasName != null) {
-      final returnPath = _aliasReturnPath;
-      if (returnPath != null &&
-          _normalizeDir(returnPath) != current &&
-          _normalizeDir(returnPath).startsWith(root)) {
-        return _normalizeDir(returnPath);
-      }
-      return root;
-    }
-    return parentPath(current);
-  }
+  String? backNavigationPath() => _workspaceController.backNavigationPath();
 
   /// 当前已加载的别名条目，供名称冲突校验与目录选择器复用。
-  List<DirectoryAlias> get directoryAliases => _aliasTable.aliases;
+  List<DirectoryAlias> get directoryAliases =>
+      _workspaceController.directoryAliases;
 
-  BrowseMode get browseMode => _browseMode;
-  ThumbnailSize get thumbnailSize => _thumbnailSize;
-  FileSortOption get fileSortOption => _fileSortOptionForPath(_currentPath);
+  BrowseMode get browseMode => _workspaceController.browseMode;
+  ThumbnailSize get thumbnailSize => _workspaceController.thumbnailSize;
+  FileSortOption get fileSortOption => _workspaceController.fileSortOption;
   List<TransferTask> get tasks => tasksListenable.value;
   int get transferConcurrency => transferConcurrencyListenable.value;
   int get runningTransferCount => _runningTransferIds.length;
@@ -509,10 +438,10 @@ class AppController extends ChangeNotifier {
   /// 待弹目录选择弹窗的批次 id；防重入签名以批次 id 为准。
   List<String> get pendingShareBatchIds =>
       List<String>.unmodifiable(_shareBatchIds);
-  FileItem? get selectedItem => selectedItemListenable.value;
-  bool get isMultiSelectionMode => _isMultiSelectionMode;
-  int get multiSelectedCount => multiSelectedPathsListenable.value.length;
-  Set<String> get multiSelectedPaths => multiSelectedPathsListenable.value;
+  FileItem? get selectedItem => _workspaceController.selectedItem;
+  bool get isMultiSelectionMode => _workspaceController.isMultiSelectionMode;
+  int get multiSelectedCount => _workspaceController.multiSelectedCount;
+  Set<String> get multiSelectedPaths => _workspaceController.multiSelectedPaths;
   bool get bootstrapped => _sessionController.bootstrapped;
   ThemeMode get themeMode => _themeMode;
 
@@ -567,7 +496,7 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  int get treeRevision => _treeRevision;
+  int get treeRevision => _workspaceController.treeRevision;
   Capabilities get capabilities =>
       _session?.capabilities ?? const Capabilities.member();
 
@@ -581,11 +510,10 @@ class AppController extends ChangeNotifier {
           savedConcurrency <= _maxTransferConcurrency) {
         transferConcurrencyListenable.value = savedConcurrency;
       }
-      _restoreSortPreferences(preferences);
+      _workspaceController.restorePreferences(preferences);
       _restoreTransferHistory(preferences);
       await _restoreUploadPending(preferences);
       _restoreThemeMode(preferences);
-      _restoreThumbnailSize(preferences);
       _restoreAutoCheckUpdates(preferences);
       _transferHistoryReady = true;
       _saveUploadPending();
@@ -650,339 +578,74 @@ class AppController extends ChangeNotifier {
     _batchConflictResolutions.clear();
   }
 
-  /// 会话变更后的跨域复位：工作区路径/选择/统计与分享状态。
+  /// 会话变更后的跨域复位：工作区域状态委托 [WorkspaceController]，
+  /// 分享导入状态由本控制器管理。
   void _handleSessionChanged() {
-    final session = _sessionController.session;
-    if (session != null) {
-      _currentPath =
-          session.rootPrefix.isEmpty ? rootPrefix : session.rootPrefix;
-    }
-    _directorySummaryService.bumpGeneration();
-    _remoteDirectories.clear();
-    selectedItemListenable.value = null;
-    _clearDirectorySizeCache();
-    clearMultiSelection();
+    _workspaceController.handleSessionChanged();
     _pendingShareItems = const <ShareImportItem>[];
     _clearShareBatchState();
   }
 
-  Future<List<FileItem>> listDirectory([String? path]) async {
-    final session = _session;
-    if (session == null || !session.isRemote || session.credentials == null) {
-      throw AppError('请先登录', code: 'REMOTE_SESSION_REQUIRED');
-    }
-    await ensureSessionReady();
-    final target = path ?? _currentPath;
-    final results = await Future.wait<dynamic>([
-      _ossClient.list(target, _session!),
-      _loadAliasTable(session),
-    ]);
-    final items = results[0] as List<FileItem>;
-    final merged = await _mergeAliasItems(items, session, target);
-    if (target == _currentPath) {
-      final beforeCount = _remoteDirectories.length;
-      _remoteDirectories
-        ..add(_currentPath)
-        ..addAll(
-            merged.where((item) => item.isDirectory).map((item) => item.path));
-      if (_remoteDirectories.length != beforeCount) {
-        notifyListeners();
-      }
-    }
-    return _sortDirectoryItems(
-      merged,
-      _session!,
-      _fileSortOptionForPath(target),
-    );
-  }
-
-  /// 刷新别名表；读取失败保留旧表，不阻塞目录浏览。
-  Future<void> _loadAliasTable(UserSession session) async {
-    try {
-      _aliasTable = await _aliasRepository.load(session);
-    } catch (error) {
-      if (kDebugMode) {
-        debugPrint('[alias] 别名表加载失败，沿用旧表: $error');
-      }
-    }
-  }
-
-  /// 将挂载于 [path] 层级的别名条目合并进目录列表：渲染为带链接标识的
-  /// 文件夹，统计信息取目标前缀的直属内容，计入所在层级条目统计。
-  Future<List<FileItem>> _mergeAliasItems(
-    List<FileItem> items,
-    UserSession session,
-    String path,
-  ) async {
-    if (_aliasTable.isEmpty) return items;
-    final level = _normalizeDir(path);
-    final mounted = _aliasTable.aliases
-        .where((alias) => _normalizeDir(alias.parentPrefix) == level)
-        .toList(growable: false);
-    if (mounted.isEmpty) return items;
-    // 同层级别名允许指向同层真实目录（如目录改名快捷入口），此时真实
-    // 条目与别名条目并列展示；批量操作按 isAlias 区分二者。
-    final summaries = await Future.wait<DirectorySummary?>(
-      mounted.map((alias) async {
-        try {
-          return await _ossClient.directorySummary(alias.targetPrefix, session);
-        } catch (_) {
-          return null;
-        }
-      }),
-    );
-    return <FileItem>[
-      ...items,
-      for (var index = 0; index < mounted.length; index++)
-        FileItem(
-          path: mounted[index].targetPrefix,
-          name: mounted[index].name,
-          isDirectory: true,
-          itemCount: summaries[index]?.itemCount,
-          updatedAt: summaries[index]?.updatedAt,
-          isAlias: true,
-          aliasId: mounted[index].id,
-          createdBy: mounted[index].createdBy,
-        ),
-    ];
-  }
+  Future<List<FileItem>> listDirectory([String? path]) =>
+      _workspaceController.listDirectory(path);
 
   /// 目录选择器专用：仅前缀列举子目录（单次请求），不做子内容统计。
-  Future<List<FileItem>> listSubdirectories(String path) async {
-    final session = _session;
-    if (session == null || !session.isRemote || session.credentials == null) {
-      throw AppError('请先登录', code: 'REMOTE_SESSION_REQUIRED');
-    }
-    await ensureSessionReady();
-    final prefix = _normalizeDir(path);
-    final prefixes = await _ossClient.listPrefixes(prefix, session);
-    return <FileItem>[
-      for (final dirPrefix in prefixes)
-        if (!dirPrefix.substring(prefix.length).startsWith('.'))
-          FileItem(
-            path: dirPrefix,
-            name: dirPrefix.substring(prefix.length, dirPrefix.length - 1),
-            isDirectory: true,
-          ),
-    ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-  }
+  Future<List<FileItem>> listSubdirectories(String path) =>
+      _workspaceController.listSubdirectories(path);
 
   /// 读取单个目录统计的缓存命中值；未命中返回 null。
   Future<DirectorySummary?> cachedDirectorySummary(String path) =>
-      _directorySummaryService.cached(path);
+      _workspaceController.cachedDirectorySummary(path);
 
   /// 批量读取目录统计缓存命中值，key 为目录路径。
   Future<Map<String, DirectorySummary>> cachedDirectorySummaries(
           Iterable<String> paths) =>
-      _directorySummaryService.cachedAll(paths);
+      _workspaceController.cachedDirectorySummaries(paths);
 
   /// 后台受限并发统计子文件夹并逐个回调，不阻塞调用方。
   Future<void> refreshDirectorySummaries(
     Iterable<String> paths, {
     required void Function(String path, DirectorySummary summary) onResult,
   }) =>
-      _directorySummaryService.refresh(paths, onResult);
+      _workspaceController.refreshDirectorySummaries(paths, onResult: onResult);
 
   void noteDirectoryFilesAdded(String dir, int count, DateTime at) =>
-      _directorySummaryService.noteFilesAdded(dir, count, at);
+      _workspaceController.noteDirectoryFilesAdded(dir, count, at);
 
   void noteDirectoryFilesRemoved(String dir, int count) =>
-      _directorySummaryService.noteFilesRemoved(dir, count);
+      _workspaceController.noteDirectoryFilesRemoved(dir, count);
 
   void invalidateDirectorySummary(String dir) =>
-      _directorySummaryService.invalidate(dir);
-
-  /// 回收站清理等不可靠路径调用 invalidate。写修正后同时触发该目录的
-  /// 后台校准，让计数最终与 OSS 一致；校准不阻塞操作反馈。
-  void _calibrateDirectorySummary(String dir) {
-    unawaited(_directorySummaryService.refresh(<String>[dir], (_, __) {}));
-  }
-
-  /// 对一组成功删除/新增的顶层条目按所属目录修正统计缓存。
-  void _noteTopLevelChanges(
-    Iterable<String> topLevelPaths,
-    Set<String> failedPaths, {
-    required int delta,
-  }) {
-    final affected = <String>{};
-    final counts = <String, int>{};
-    for (final path in topLevelPaths) {
-      final parent = _normalizeDir(parentPath(path));
-      affected.add(parent);
-      if (failedPaths.contains(path)) {
-        // 该条目未能删除/搬运，无法可靠增量，直接失效由校准重建。
-        _directorySummaryService.invalidate(parent);
-        continue;
-      }
-      counts[parent] = (counts[parent] ?? 0) + delta.abs();
-    }
-    counts.forEach((dir, count) {
-      if (delta >= 0) {
-        _directorySummaryService.noteFilesAdded(dir, count, DateTime.now());
-      } else {
-        _directorySummaryService.noteFilesRemoved(dir, count);
-      }
-    });
-    for (final dir in affected) {
-      _calibrateDirectorySummary(dir);
-    }
-  }
+      _workspaceController.invalidateDirectorySummary(dir);
 
   /// 目录选择器使用：与 [listSubdirectories] 一致，但按层级合并挂载于
   /// [path] 的别名条目（path 指向目标目录），使别名可作为移动/挂载目标。
-  Future<List<FileItem>> listPickerDirectories(String path) async {
-    final directories = await listSubdirectories(path);
-    if (_aliasTable.aliases.isEmpty) {
-      return directories;
-    }
-    final level = _normalizeDir(path);
-    final realPaths = directories.map((item) => item.path).toSet();
-    final aliasItems = <FileItem>[
-      for (final alias in _aliasTable.aliases)
-        if (_normalizeDir(alias.parentPrefix) == level &&
-            realPaths.add(alias.targetPrefix))
-          FileItem(
-            path: alias.targetPrefix,
-            name: alias.name,
-            isDirectory: true,
-            isAlias: true,
-            createdBy: alias.createdBy,
-          ),
-    ];
-    if (aliasItems.isEmpty) return directories;
-    return [...directories, ...aliasItems]
-      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-  }
+  Future<List<FileItem>> listPickerDirectories(String path) =>
+      _workspaceController.listPickerDirectories(path);
 
-  Future<List<int>> loadThumbnail(FileItem item) async {
-    if (item.isDirectory || item.kind != FileKind.image) {
-      throw StateError('只有图片文件支持缩略图');
-    }
-    final session = _requireSession();
-    await ensureSessionReady();
-    final cacheKey = DiskImageCache.cacheKey(
-      namespace: thumbnailCacheNamespace,
-      path: item.path,
-      versionToken: item.objectVersionToken,
-      process: ImageThumbnailSpec.process(),
-    );
-    final cached = await DiskImageCache.instance.read(
-      DiskImageCacheKind.thumbnails,
-      cacheKey,
-    );
-    if (cached != null) {
-      return cached;
-    }
-    final bytes =
-        await _ossClient.downloadThumbnail(item.path, _session ?? session);
-    unawaited(DiskImageCache.instance.write(
-      DiskImageCacheKind.thumbnails,
-      cacheKey,
-      bytes,
-    ));
-    return bytes;
-  }
+  Future<List<int>> loadThumbnail(FileItem item) =>
+      _workspaceController.loadThumbnail(item);
 
-  Future<List<int>> loadImagePreview(FileItem item) async {
-    if (item.isDirectory || item.kind != FileKind.image) {
-      throw StateError('只有图片文件支持在线预览');
-    }
-    final session = _requireSession();
-    await ensureSessionReady();
-    final cacheKey = DiskImageCache.cacheKey(
-      namespace: thumbnailCacheNamespace,
-      path: item.path,
-      versionToken: item.objectVersionToken,
-      process: ImageThumbnailSpec.process(
-        width: ImageThumbnailSpec.previewSize,
-        height: ImageThumbnailSpec.previewSize,
-      ),
-    );
-    final cached = await DiskImageCache.instance.read(
-      DiskImageCacheKind.previews,
-      cacheKey,
-    );
-    if (cached != null) return cached;
-    final bytes =
-        await _ossClient.downloadImagePreview(item.path, _session ?? session);
-    unawaited(DiskImageCache.instance.write(
-      DiskImageCacheKind.previews,
-      cacheKey,
-      bytes,
-    ));
-    return bytes;
-  }
+  Future<List<int>> loadImagePreview(FileItem item) =>
+      _workspaceController.loadImagePreview(item);
 
-  String get thumbnailCacheNamespace {
-    final session = _session;
-    final bucket = session?.ossConfig?.bucket ?? '';
-    return '$bucket|${session?.userId ?? ''}';
-  }
+  String get thumbnailCacheNamespace =>
+      _workspaceController.thumbnailCacheNamespace;
 
   /// 加载 PDF 文档本地文件：缓存命中直接返回；未命中走预签名 URL
   /// 流式下载落盘后写入文档缓存。失败时抛出异常由界面展示重试。
-  Future<File> loadPdfDocument(FileItem item) async {
-    if (item.isDirectory || item.kind != FileKind.pdf) {
-      throw StateError('只有 PDF 文件支持文档预览');
-    }
-    final session = _requireSession();
-    await ensureSessionReady();
-    final cacheKey = DiskDocumentCache.cacheKey(
-      namespace: thumbnailCacheNamespace,
-      path: item.path,
-      versionToken: item.objectVersionToken,
-    );
-    final cached = await DiskDocumentCache.instance.get(cacheKey);
-    if (cached != null) return cached;
-    final temporary = await DiskDocumentCache.instance.createTemporaryFile();
-    if (temporary == null) {
-      throw AppError('本地缓存不可用，无法预览 PDF', code: 'DOC_CACHE_UNAVAILABLE');
-    }
-    try {
-      await _ossClient.streamDownloadToFile(
-        item.path,
-        session,
-        temporary,
-      );
-    } catch (_) {
-      await DiskDocumentCache.instance.discard(temporary);
-      rethrow;
-    }
-    final committed =
-        await DiskDocumentCache.instance.commit(cacheKey, temporary);
-    if (committed == null) {
-      throw AppError('PDF 缓存写入失败', code: 'DOC_CACHE_WRITE_FAILED');
-    }
-    return committed;
-  }
+  Future<File> loadPdfDocument(FileItem item) =>
+      _workspaceController.loadPdfDocument(item);
 
   /// 创建文本预览分段加载器（编码与 20MB 上限策略内聚在加载器中）。
-  TextPreviewLoader createTextPreviewLoader(FileItem item) {
-    final session = _requireSession();
-    return TextPreviewLoader(
-      ossClient: _ossClient,
-      session: session,
-      path: item.path,
-      fileSize: item.size,
-    );
-  }
+  TextPreviewLoader createTextPreviewLoader(FileItem item) =>
+      _workspaceController.createTextPreviewLoader(item);
 
   /// 生成音频等对象的预签名 URL，用于 media_kit 流式播放。
-  Future<String> presignMediaUrl(FileItem item) async {
-    final session = _requireSession();
-    await ensureSessionReady();
-    return _ossClient.presignObjectUrl(item.path, _session ?? session);
-  }
+  Future<String> presignMediaUrl(FileItem item) =>
+      _workspaceController.presignMediaUrl(item);
 
-  void setCurrentPath(String path) {
-    _currentPath = _normalizeDir(path);
-    // 任意路径切换都脱离别名上下文；进入别名走 openAlias。
-    _activeAliasName = null;
-    _aliasReturnPath = null;
-    selectedItemListenable.value = null;
-    clearMultiSelection();
-    notifyListeners();
-  }
+  void setCurrentPath(String path) => _workspaceController.setCurrentPath(path);
 
   /// 进入虚拟目录别名：此后浏览、上传、下载、删除、移动等操作均作用于
   /// 别名的真实目标前缀。目标已失效（前缀下无任何对象）时抛出明确错误，
@@ -1000,16 +663,14 @@ class AppController extends ChangeNotifier {
         code: 'ALIAS_TARGET_MISSING',
       );
     }
-    final origin = _normalizeDir(_currentPath);
+    final origin = _normalizeDir(currentPath);
     final root = _normalizeDir(workspaceRoot);
-    _currentPath = target;
-    _activeAliasName = alias.name;
     // 后退返回进入别名前所在的层级，即其挂载层级。
-    _aliasReturnPath =
-        origin.startsWith(root) && origin != target ? origin : null;
-    selectedItemListenable.value = null;
-    clearMultiSelection();
-    notifyListeners();
+    _workspaceController.enterAliasTarget(
+      targetPrefix: target,
+      aliasName: alias.name,
+      returnPath: origin.startsWith(root) && origin != target ? origin : null,
+    );
   }
 
   /// 为真实文件夹条目创建指向它的目录别名，挂载到 [parentPrefix] 层级。
@@ -1047,12 +708,12 @@ class AppController extends ChangeNotifier {
           ? session.displayName
           : session.account,
     );
-    _aliasTable = await _aliasRepository.update(
+    await _workspaceController.persistAliasTable(
       session,
       (table) => table.copyWith(aliases: [...table.aliases, alias]),
     );
-    _treeRevision++;
-    _clearDirectorySizeCache();
+    _workspaceController.bumpTreeRevision();
+    _workspaceController.clearDirectorySizeCache();
     notifyListeners();
   }
 
@@ -1065,14 +726,14 @@ class AppController extends ChangeNotifier {
     }
     final session = _requireSession();
     await ensureSessionReady();
-    _aliasTable = await _aliasRepository.update(
+    await _workspaceController.persistAliasTable(
       session,
       (table) => table.copyWith(
         aliases:
             table.aliases.where((alias) => alias.id != id).toList(),
       ),
     );
-    _treeRevision++;
+    _workspaceController.bumpTreeRevision();
     notifyListeners();
   }
 
@@ -1085,7 +746,7 @@ class AppController extends ChangeNotifier {
     }
     final session = _requireSession();
     await ensureSessionReady();
-    final existing = _aliasTable.byId(id);
+    final existing = _workspaceController.aliasTable.byId(id);
     if (existing == null) {
       throw StateError('别名条目不存在');
     }
@@ -1096,7 +757,7 @@ class AppController extends ChangeNotifier {
       parentPrefix: existing.parentPrefix,
       excludeAliasId: id,
     );
-    _aliasTable = await _aliasRepository.update(
+    await _workspaceController.persistAliasTable(
       session,
       (table) => table.copyWith(
         aliases: <DirectoryAlias>[
@@ -1105,10 +766,8 @@ class AppController extends ChangeNotifier {
         ],
       ),
     );
-    if (_activeAliasName == aliasItem.name) {
-      _activeAliasName = aliasName;
-    }
-    _treeRevision++;
+    _workspaceController.renameActiveAlias(aliasItem.name, aliasName);
+    _workspaceController.bumpTreeRevision();
     notifyListeners();
   }
 
@@ -1135,7 +794,7 @@ class AppController extends ChangeNotifier {
     if (levelNames.any((entry) => entry.toLowerCase() == lowerName)) {
       throw StateError('该目录层级已存在同名条目');
     }
-    for (final alias in _aliasTable.aliases) {
+    for (final alias in _workspaceController.aliasTable.aliases) {
       if (alias.id == excludeAliasId) continue;
       if (_normalizeDir(alias.parentPrefix) == level &&
           alias.name.toLowerCase() == lowerName) {
@@ -1144,105 +803,14 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  void setBrowseMode(BrowseMode mode) {
-    if (_browseMode == mode) {
-      return;
-    }
-    _browseMode = mode;
-    notifyListeners();
-  }
+  void setBrowseMode(BrowseMode mode) =>
+      _workspaceController.setBrowseMode(mode);
 
-  Future<void> setThumbnailSize(ThumbnailSize size) async {
-    if (_thumbnailSize == size) {
-      return;
-    }
-    _thumbnailSize = size;
-    notifyListeners();
-    try {
-      final preferences = _preferences ?? await SharedPreferences.getInstance();
-      _preferences = preferences;
-      await preferences.setString(_thumbnailSizeKey, size.name);
-    } catch (_) {
-      // 偏好写入失败时仍保留本次会话的选择。
-    }
-  }
+  Future<void> setThumbnailSize(ThumbnailSize size) =>
+      _workspaceController.setThumbnailSize(size);
 
-  Future<void> setFileSortOption(FileSortOption option) async {
-    final key = _directorySortKey(_currentPath);
-    if (_fileSortOptionsByDirectory[key] == option) return;
-    _fileSortOptionsByDirectory[key] = option;
-    notifyListeners();
-    try {
-      final preferences = await SharedPreferences.getInstance();
-      await preferences.setString(
-        _fileSortOptionsByDirectoryKey,
-        jsonEncode(
-          _fileSortOptionsByDirectory.map(
-            (key, value) => MapEntry<String, int>(key, value.index),
-          ),
-        ),
-      );
-    } catch (_) {
-      // 排序偏好写入失败不影响当前会话内的排序。
-    }
-  }
-
-  Future<List<FileItem>> _sortDirectoryItems(
-    List<FileItem> items,
-    UserSession session,
-    FileSortOption sortOption,
-  ) async {
-    if (!sortOption.needsTakenAt) {
-      return sortFileItems(items, sortOption);
-    }
-
-    SharedPreferences? preferences;
-    try {
-      preferences = await SharedPreferences.getInstance();
-    } catch (_) {
-      // 读取 EXIF 仍可用，只是不跨重启缓存。
-    }
-    // 避免大目录首次按拍摄时间排序时同时发起过多 OSS 请求。
-    const concurrency = 6;
-    final resolved = <FileItem>[];
-    for (var start = 0; start < items.length; start += concurrency) {
-      final end = start + concurrency > items.length
-          ? items.length
-          : start + concurrency;
-      resolved.addAll(await Future.wait(items.sublist(start, end).map(
-            (item) => _loadItemTakenAt(item, session, preferences),
-          )));
-    }
-    return sortFileItems(resolved, sortOption);
-  }
-
-  void _restoreSortPreferences(SharedPreferences preferences) {
-    // 保留旧版本的全局排序作为未单独设置目录时的默认值。
-    final savedSort = preferences.getInt(_fileSortOptionKey);
-    if (savedSort != null &&
-        savedSort >= 0 &&
-        savedSort < FileSortOption.values.length) {
-      _defaultFileSortOption = FileSortOption.values[savedSort];
-    }
-    final raw = preferences.getString(_fileSortOptionsByDirectoryKey);
-    if (raw == null || raw.isEmpty) return;
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return;
-      for (final entry in decoded.entries) {
-        final index = entry.value is num ? (entry.value as num).toInt() : null;
-        if (entry.key is String &&
-            index != null &&
-            index >= 0 &&
-            index < FileSortOption.values.length) {
-          _fileSortOptionsByDirectory[entry.key as String] =
-              FileSortOption.values[index];
-        }
-      }
-    } catch (_) {
-      // 本地偏好损坏时使用默认排序，不阻断会话恢复。
-    }
-  }
+  Future<void> setFileSortOption(FileSortOption option) =>
+      _workspaceController.setFileSortOption(option);
 
   void _restoreThemeMode(SharedPreferences preferences) {
     _themeMode = switch (preferences.getString(_themeModeKey)) {
@@ -1251,313 +819,43 @@ class AppController extends ChangeNotifier {
     };
   }
 
-  void _restoreThumbnailSize(SharedPreferences preferences) {
-    _thumbnailSize = switch (preferences.getString(_thumbnailSizeKey)) {
-      'small' => ThumbnailSize.small,
-      'large' => ThumbnailSize.large,
-      _ => ThumbnailSize.medium,
-    };
-  }
-
   void _restoreAutoCheckUpdates(SharedPreferences preferences) {
     _autoCheckUpdates = preferences.getBool(_autoCheckUpdatesKey) ?? true;
   }
 
-  FileSortOption _fileSortOptionForPath(String path) =>
-      _fileSortOptionsByDirectory[_directorySortKey(path)] ??
-      _defaultFileSortOption;
+  void selectItem(FileItem? item) => _workspaceController.selectItem(item);
 
-  String _directorySortKey(String path) {
-    final session = _session;
-    final bucket = session?.ossConfig?.bucket ?? '';
-    final userId = session?.userId ?? '';
-    return '$bucket:$userId:${_normalizeDir(path)}';
-  }
-
-  String _takenAtCacheKey(UserSession session, String path) {
-    final bucket = session.ossConfig?.bucket ?? '';
-    return '$_takenAtCachePrefix$bucket:${session.userId}:$path';
-  }
-
-  Future<FileItem> _loadItemTakenAt(
-    FileItem item,
-    UserSession session, [
-    SharedPreferences? preferences,
-  ]) async {
-    if (item.isDirectory ||
-        item.kind != FileKind.image ||
-        item.takenAt != null) {
-      return item;
-    }
-    SharedPreferences? cache = preferences;
-    if (cache == null) {
-      try {
-        cache = await SharedPreferences.getInstance();
-      } catch (_) {
-        // 无本地缓存时仍尝试读取 EXIF。
-      }
-    }
-    final version = item.objectVersionToken;
-    final cacheKey = _takenAtCacheKey(session, item.path);
-    final cached = cache?.getString(cacheKey);
-    if (cached != null) {
-      final parts = cached.split('\t');
-      if (parts.length == 2 && parts.first == version) {
-        final milliseconds = int.tryParse(parts.last);
-        return milliseconds == null
-            ? item
-            : item.copyWith(
-                takenAt: DateTime.fromMillisecondsSinceEpoch(milliseconds));
-      }
-    }
-
-    DateTime? takenAt;
-    try {
-      takenAt = await _ossClient
-          .readImageExif(item.path, session)
-          .then((info) => info.takenAt);
-    } catch (_) {
-      // OSS 图片处理异常时不缓存，后续进入详情或排序时允许重新尝试。
-      return item;
-    }
-    if (cache != null) {
-      try {
-        await cache.setString(
-          cacheKey,
-          '$version\t${takenAt?.millisecondsSinceEpoch ?? ''}',
-        );
-      } catch (_) {
-        // 缓存写入失败不影响本次展示。
-      }
-    }
-    return item.copyWith(takenAt: takenAt);
-  }
-
-  void selectItem(FileItem? item) {
-    final current = selectedItemListenable.value;
-    if (current?.path == item?.path &&
-        current?.name == item?.name &&
-        current?.isDirectory == item?.isDirectory) {
-      // Keep object fresh for rename/metadata without extra noise when identical.
-      if (!identical(current, item)) {
-        selectedItemListenable.value = item;
-      }
-      if (item?.isDirectory ?? false) {
-        unawaited(_loadDirectorySize(item!));
-      }
-      return;
-    }
-    selectedItemListenable.value = item;
-    if (item != null && item.kind == FileKind.image && item.takenAt == null) {
-      unawaited(_loadSelectedImageTakenAt(item));
-    }
-    if (item?.isDirectory ?? false) {
-      unawaited(_loadDirectorySize(item!));
-    }
-  }
-
-  Future<void> _loadDirectorySize(FileItem item) async {
-    final path = _normalizeDir(item.path);
-    final cached = _directorySizeCache[path];
-    if (cached != null) {
-      _setDirectorySizeState(path, DirectorySizeState.ready(cached));
-      return;
-    }
-    if (_directorySizeRequests.containsKey(path)) return;
-
-    final request = Object();
-    _directorySizeRequests[path] = request;
-    _setDirectorySizeState(path, const DirectorySizeState.loading());
-    try {
-      await ensureSessionReady();
-      final size = await _ossClient.calculateDirectorySize(
-        path,
-        _requireSession(),
-      );
-      if (_directorySizeRequests[path] == request) {
-        _directorySizeCache[path] = size;
-        _setDirectorySizeState(path, DirectorySizeState.ready(size));
-      }
-    } catch (_) {
-      if (_directorySizeRequests[path] == request) {
-        _setDirectorySizeState(path, const DirectorySizeState.failed());
-      }
-    } finally {
-      if (_directorySizeRequests[path] == request) {
-        _directorySizeRequests.remove(path);
-      }
-    }
-  }
-
-  void _setDirectorySizeState(String path, DirectorySizeState state) {
-    directorySizeStatesListenable.value = Map<String,
-        DirectorySizeState>.unmodifiable(<String, DirectorySizeState>{
-      ...directorySizeStatesListenable.value,
-      path: state,
-    });
-  }
-
-  void _clearDirectorySizeCache() {
-    _directorySizeCache.clear();
-    _directorySizeRequests.clear();
-    directorySizeStatesListenable.value = const <String, DirectorySizeState>{};
-  }
-
-  Future<void> _loadSelectedImageTakenAt(FileItem item) async {
-    final session = _session;
-    if (session == null || !session.isRemote || session.credentials == null) {
-      return;
-    }
-    final resolved = await _loadItemTakenAt(item, session);
-    final selected = selectedItemListenable.value;
-    if (selected?.path == item.path &&
-        selected?.objectVersionToken == item.objectVersionToken) {
-      selectedItemListenable.value = resolved;
-    }
-  }
-
-  void enterMultiSelection([FileItem? initial]) {
-    _isMultiSelectionMode = true;
-    if (initial != null) {
-      _selectionAnchorPath = initial.path;
-      multiSelectedPathsListenable.value = <String>{initial.path};
-    }
-    notifyListeners();
-  }
+  void enterMultiSelection([FileItem? initial]) =>
+      _workspaceController.enterMultiSelection(initial);
 
   void toggleMultiSelection(FileItem item,
-      {List<FileItem>? visibleItems, bool range = false}) {
-    // 链接条目与真实条目可能共用同一路径（同层指向），批量操作按 isAlias
-    // 区分二者；多选基于路径无法区分，故链接条目不参与多选。
-    if (item.isAlias) {
-      return;
-    }
-    if (!_isMultiSelectionMode) {
-      enterMultiSelection(item);
-      return;
-    }
-    final next = <String>{...multiSelectedPathsListenable.value};
-    if (range && visibleItems != null && _selectionAnchorPath != null) {
-      final anchor = visibleItems
-          .indexWhere((value) => value.path == _selectionAnchorPath);
-      final target =
-          visibleItems.indexWhere((value) => value.path == item.path);
-      if (anchor >= 0 && target >= 0) {
-        final start = anchor < target ? anchor : target;
-        final end = anchor > target ? anchor : target;
-        next.addAll(
-            visibleItems.sublist(start, end + 1).map((value) => value.path));
-      }
-    } else if (!next.add(item.path)) {
-      next.remove(item.path);
-    } else {
-      _selectionAnchorPath = item.path;
-    }
-    if (next.isEmpty) {
-      _isMultiSelectionMode = false;
-      _selectionAnchorPath = null;
-    }
-    multiSelectedPathsListenable.value = Set<String>.unmodifiable(next);
-    notifyListeners();
-  }
+          {List<FileItem>? visibleItems, bool range = false}) =>
+      _workspaceController.toggleMultiSelection(item,
+          visibleItems: visibleItems, range: range);
 
-  void selectAllItems(Iterable<FileItem> items) {
-    _isMultiSelectionMode = true;
-    multiSelectedPathsListenable.value =
-        Set<String>.unmodifiable(items.map((item) => item.path).toSet());
-    notifyListeners();
-  }
+  void selectAllItems(Iterable<FileItem> items) =>
+      _workspaceController.selectAllItems(items);
 
   /// 用于桌面端拖拽框选，以一次状态更新替换当前可见项的选择结果。
-  void replaceMultiSelection(Iterable<String> paths) {
-    final next = Set<String>.unmodifiable(paths.toSet());
-    _isMultiSelectionMode = next.isNotEmpty;
-    _selectionAnchorPath = next.isEmpty ? null : next.last;
-    multiSelectedPathsListenable.value = next;
-    notifyListeners();
-  }
+  void replaceMultiSelection(Iterable<String> paths) =>
+      _workspaceController.replaceMultiSelection(paths);
 
-  void clearMultiSelection() {
-    _isMultiSelectionMode = false;
-    _selectionAnchorPath = null;
-    // 即使当前尚未选中条目，也必须发布一次空集合，令依赖该监听器的
-    // 文件视图从选择模式重建回普通浏览模式。
-    multiSelectedPathsListenable.value = Set<String>.unmodifiable(<String>{});
-    notifyListeners();
-  }
+  void clearMultiSelection() => _workspaceController.clearMultiSelection();
 
   /// 在当前目录的可见排序中移动当前项，不改变批量勾选状态。
   bool moveSelection(
     List<FileItem> visibleItems, {
     required int offset,
-  }) {
-    if (visibleItems.isEmpty || offset == 0) {
-      return false;
-    }
-
-    final selectedPath = selectedItemListenable.value?.path;
-    var currentIndex = visibleItems.indexWhere(
-      (item) => item.path == selectedPath,
-    );
-    if (currentIndex < 0) {
-      currentIndex = offset > 0 ? 0 : visibleItems.length - 1;
-    }
-    final targetIndex =
-        (currentIndex + offset).clamp(0, visibleItems.length - 1);
-    final target = visibleItems[targetIndex];
-
-    clearMultiSelection();
-    selectItem(target);
-    return true;
-  }
+  }) =>
+      _workspaceController.moveSelection(visibleItems, offset: offset);
 
   String parentPath(String path) => path_utils.parentPathOf(path);
 
-  Future<void> createFolder(String name, {String? targetPath}) async {
-    _ensureUploadCapability();
-    final folderName = name.trim();
-    if (folderName.isEmpty) {
-      throw StateError('文件夹名称不能为空');
-    }
-    final dir = _normalizeDir(targetPath ?? _currentPath);
-    final path = '$dir$folderName/';
-    await ensureSessionReady();
-    await _ossClient.createFolder(path, _requireSession());
-    _directorySummaryService.noteFilesAdded(dir, 1, DateTime.now());
-    _calibrateDirectorySummary(dir);
-    _clearDirectorySizeCache();
-    _treeRevision++;
-    notifyListeners();
-  }
+  Future<void> createFolder(String name, {String? targetPath}) =>
+      _workspaceController.createFolder(name, targetPath: targetPath);
 
-  Future<void> renameItem(FileItem item, String newName) async {
-    _ensureDeleteCapability(); // rename treated as write capability with delete/upload
-    if (!capabilities.upload && !capabilities.delete) {
-      throw StateError('当前身份没有重命名权限');
-    }
-    final trimmed = newName.trim();
-    if (trimmed.isEmpty) {
-      throw StateError('名称不能为空');
-    }
-
-    final parent =
-        item.isDirectory ? parentPath(item.path) : parentPath(item.path);
-    final dir = _normalizeDir(parent == item.path ? rootPrefix : parent);
-    final newPath = item.isDirectory ? '$dir$trimmed/' : '$dir$trimmed';
-    await ensureSessionReady();
-    final session = _requireSession();
-    await _ossClient.copy(item.path, newPath, session);
-    await _ossClient.delete(item.path, session);
-    if (item.isDirectory) {
-      // 目录改名等价于移动，旧路径统计失效、新路径由校准重建。
-      _directorySummaryService.invalidate(item.path);
-      _directorySummaryService.invalidate(newPath);
-      _calibrateDirectorySummary(newPath);
-    }
-    _treeRevision++;
-    _clearDirectorySizeCache();
-    notifyListeners();
-  }
+  Future<void> renameItem(FileItem item, String newName) =>
+      _workspaceController.renameItem(item, newName);
 
   Future<void> deleteItem(FileItem item) async {
     _ensureDeleteCapability();
@@ -1578,23 +876,23 @@ class AppController extends ChangeNotifier {
     }
     if (item.isDirectory) {
       final deletedPath = _normalizeDir(item.path);
-      _remoteDirectories.removeWhere(
+      _workspaceController.removeBrowsedDirectoriesWhere(
         (path) => path == deletedPath || path.startsWith(deletedPath),
       );
-      if (_currentPath.startsWith(deletedPath)) {
-        _currentPath = parentPath(deletedPath);
+      if (currentPath.startsWith(deletedPath)) {
+        _workspaceController.replaceCurrentPath(parentPath(deletedPath));
       }
     }
-    _treeRevision++;
-    _clearDirectorySizeCache();
-    _noteTopLevelChanges(
+    _workspaceController.bumpTreeRevision();
+    _workspaceController.clearDirectorySizeCache();
+    _workspaceController.noteTopLevelChanges(
       <String>[item.path],
       const <String>{},
       delta: -1,
     );
 
-    if (selectedItemListenable.value?.path == item.path) {
-      selectedItemListenable.value = null;
+    if (selectedItem?.path == item.path) {
+      _workspaceController.clearSelectedItem();
     }
     unawaited(_galleryHooks?.onObjectsDeleted(paths));
     notifyListeners();
@@ -1609,7 +907,7 @@ class AppController extends ChangeNotifier {
     await ensureSessionReady();
     final session = _requireSession();
     for (final item in selected) {
-      _ensureWithinRoot(item.path);
+      _workspaceController.ensureWithinRoot(item.path);
       paths.add(item.path);
       if (item.isDirectory) {
         paths.addAll(await _ossClient.listAllObjectKeys(item.path, session));
@@ -1636,14 +934,19 @@ class AppController extends ChangeNotifier {
     final deleted = result.deletedPaths;
     final failed = result.failedPaths;
     if (deleted.isNotEmpty) {
-      _clearDirectorySizeCache();
-      _remoteDirectories.removeWhere((path) => deleted.contains(path));
-      if (deleted.any((path) => _currentPath.startsWith(_normalizeDir(path)))) {
-        _currentPath = parentPath(_currentPath);
+      _workspaceController.clearDirectorySizeCache();
+      _workspaceController.removeBrowsedDirectoriesWhere(
+          (path) => deleted.contains(path));
+      if (deleted.any((path) => currentPath.startsWith(_normalizeDir(path)))) {
+        _workspaceController.replaceCurrentPath(parentPath(currentPath));
       }
-      _treeRevision++;
-      selectedItemListenable.value = null;
-      _noteTopLevelChanges(preview.topLevelPaths, failed.toSet(), delta: -1);
+      _workspaceController.bumpTreeRevision();
+      _workspaceController.clearSelectedItem();
+      _workspaceController.noteTopLevelChanges(
+        preview.topLevelPaths,
+        failed.toSet(),
+        delta: -1,
+      );
       unawaited(_galleryHooks?.onObjectsDeleted(deleted.toSet()));
       notifyListeners();
     }
@@ -1848,16 +1151,16 @@ class AppController extends ChangeNotifier {
     ])) {
       await _ossClient.deleteMany(keys, session);
     }
-    _treeRevision++;
-    _clearDirectorySizeCache();
+    _workspaceController.bumpTreeRevision();
+    _workspaceController.clearDirectorySizeCache();
     // 还原目标位置可能带改名后缀，逐个失效还原目录，由校准重建。
     final restoredDirs = <String>{
       for (final destination in restored.values)
         _normalizeDir(parentPath(destination)),
     };
     for (final dir in restoredDirs) {
-      _directorySummaryService.invalidate(dir);
-      _calibrateDirectorySummary(dir);
+      _workspaceController.invalidateDirectorySummary(dir);
+      _workspaceController.calibrateDirectorySummary(dir);
     }
     unawaited(_galleryHooks?.onObjectsRestored(restored.values.toSet()));
     notifyListeners();
@@ -1881,8 +1184,8 @@ class AppController extends ChangeNotifier {
     }
     // 清空回收批次不影响可浏览目录的计数，仅失效原目录由校准重建。
     final originalDir = _normalizeDir(parentPath(entry.originalPath));
-    _directorySummaryService.invalidate(originalDir);
-    _calibrateDirectorySummary(originalDir);
+    _workspaceController.invalidateDirectorySummary(originalDir);
+    _workspaceController.calibrateDirectorySummary(originalDir);
     notifyListeners();
   }
 
@@ -1973,7 +1276,7 @@ class AppController extends ChangeNotifier {
       ..sort((a, b) => a.path.length.compareTo(b.path.length));
     final sources = <FileItem>[];
     for (final item in sorted) {
-      _ensureWithinRoot(item.path);
+      _workspaceController.ensureWithinRoot(item.path);
       if (sources.any((source) =>
           item.path.startsWith(_normalizeDir(source.path)) ||
           item.path == source.path)) {
@@ -2539,33 +1842,34 @@ class AppController extends ChangeNotifier {
     }
     for (final prefix in removedPrefixes) {
       final dir = _normalizeDir(prefix);
-      _remoteDirectories.removeWhere(
+      _workspaceController.removeBrowsedDirectoriesWhere(
           (path) => path == dir || path.startsWith(dir));
-      if (_currentPath.startsWith(dir)) {
-        _currentPath = parentPath(dir);
+      if (currentPath.startsWith(dir)) {
+        _workspaceController.replaceCurrentPath(parentPath(dir));
       }
     }
-    _remoteDirectories.addAll(addedPrefixes.map(_normalizeDir));
-    _treeRevision++;
-    _clearDirectorySizeCache();
+    _workspaceController.addBrowsedDirectories(addedPrefixes);
+    _workspaceController.bumpTreeRevision();
+    _workspaceController.clearDirectorySizeCache();
     // 移动同时修正源目录与目标目录：正向移动 removedPrefixes 为源条目、
     // addedPrefixes 为目标落点；撤销移动时两者互换，同一套修正逻辑成立。
-    _noteTopLevelChanges(
+    _workspaceController.noteTopLevelChanges(
       removedPrefixes,
       summary.hasFailures ? removedPrefixes.toSet() : const <String>{},
       delta: -1,
     );
-    _noteTopLevelChanges(
+    _workspaceController.noteTopLevelChanges(
       addedPrefixes,
       summary.hasFailures ? addedPrefixes.toSet() : const <String>{},
       delta: 1,
     );
-    if (selectedItemListenable.value != null &&
-        removedPrefixes.any((prefix) =>
-            selectedItemListenable.value!.path.startsWith(_normalizeDir(prefix)))) {
-      selectedItemListenable.value = null;
+    final selected = selectedItem;
+    if (selected != null &&
+        removedPrefixes.any(
+            (prefix) => selected.path.startsWith(_normalizeDir(prefix)))) {
+      _workspaceController.clearSelectedItem();
     }
-    clearMultiSelection();
+    _workspaceController.clearMultiSelection();
     notifyListeners();
   }
 
@@ -2576,7 +1880,7 @@ class AppController extends ChangeNotifier {
       String? targetPath,
       String? batchId}) async {
     _ensureUploadCapability();
-    final dir = _normalizeDir(targetPath ?? _currentPath);
+    final dir = _normalizeDir(targetPath ?? currentPath);
     final taskId = _newTransferId('upload');
     // 缓存目录中的源文件（系统分享、部分选择器结果）先迁移到持久 staging
     // 目录，应用被杀后源文件不随 cacheDir 清理而丢失。
@@ -2666,10 +1970,10 @@ class AppController extends ChangeNotifier {
         onProgress: report,
       );
       if (isCanceled()) throw const TransferCanceledException();
-      _directorySummaryService.noteFilesAdded(dir, 1, DateTime.now());
-      _calibrateDirectorySummary(dir);
-      _treeRevision++;
-      _clearDirectorySizeCache();
+      _workspaceController.noteDirectoryFilesAdded(dir, 1, DateTime.now());
+      _workspaceController.calibrateDirectorySummary(dir);
+      _workspaceController.bumpTreeRevision();
+      _workspaceController.clearDirectorySizeCache();
       notifyListeners();
       // 上传成功后触发索引增量更新；挂钩在后台执行，不阻塞任务
       // 完成状态、不占用传输并发槽，挂钩异常不影响任务成功状态。
@@ -2873,7 +2177,7 @@ class AppController extends ChangeNotifier {
     if (item.isDirectory) {
       throw StateError('文件夹不支持直接下载');
     }
-    _ensureWithinRoot(item.path);
+    _workspaceController.ensureWithinRoot(item.path);
     final taskId = _newTransferId('download');
     _enqueueTransfer(
       TransferTask(
@@ -2954,7 +2258,7 @@ class AppController extends ChangeNotifier {
     if (!capabilities.download) {
       throw StateError('当前身份没有下载权限');
     }
-    _ensureWithinRoot(path);
+    _workspaceController.ensureWithinRoot(path);
     final taskId = _newTransferId('download');
     _enqueueTransfer(
       TransferTask(
@@ -3017,10 +2321,10 @@ class AppController extends ChangeNotifier {
     final session = _requireSession();
 
     for (final item in selected.where((item) => item.isDirectory)) {
-      _ensureWithinRoot(item.path);
+      _workspaceController.ensureWithinRoot(item.path);
       final keys = await _ossClient.listAllObjectKeys(item.path, session);
       for (final key in keys.where((key) => !key.endsWith('/'))) {
-        _ensureWithinRoot(key);
+        _workspaceController.ensureWithinRoot(key);
         targets.putIfAbsent(
           key,
           () => _DownloadTarget(
@@ -3035,7 +2339,7 @@ class AppController extends ChangeNotifier {
       }
     }
     for (final item in selected.where((item) => !item.isDirectory)) {
-      _ensureWithinRoot(item.path);
+      _workspaceController.ensureWithinRoot(item.path);
       targets.putIfAbsent(
         item.path,
         () => _DownloadTarget(item: item, targetDirectory: targetDirectory),
@@ -3467,8 +2771,8 @@ class AppController extends ChangeNotifier {
     _pendingShareItems = const <ShareImportItem>[];
     _clearShareBatchState();
     // 分享导入经传输队列异步完成，计数路径不可靠，失效目标目录由校准重建。
-    _directorySummaryService.invalidate(_shareTargetPath);
-    _calibrateDirectorySummary(_shareTargetPath);
+    _workspaceController.invalidateDirectorySummary(_shareTargetPath);
+    _workspaceController.calibrateDirectorySummary(_shareTargetPath);
     notifyListeners();
     // 多文件分享导入归属同一批次，传输中心可展示整批上传汇总。
     final batchId = items.length > 1
@@ -3485,19 +2789,7 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  List<String> get sidebarDirectories {
-    if (_session?.isRemote == true) {
-      final root = _normalizeDir(_session?.rootPrefix ?? rootPrefix);
-      final dirs = _remoteDirectories.where((path) {
-        if (!path.startsWith(root)) return false;
-        final rest = path.substring(root.length);
-        return rest.isNotEmpty && rest.indexOf('/') == rest.length - 1;
-      }).toList()
-        ..sort();
-      return List<String>.unmodifiable(dirs);
-    }
-    return const <String>[];
-  }
+  List<String> get sidebarDirectories => _workspaceController.sidebarDirectories;
 
   void _enqueueTransfer(TransferTask task, _QueuedTransfer transfer) {
     _requestTransferNotificationPermission();
@@ -3646,8 +2938,8 @@ class AppController extends ChangeNotifier {
   }
 
   String _downloadDirectoryFor(String objectPath, String targetDirectory) {
-    final relative = objectPath.startsWith(_currentPath)
-        ? objectPath.substring(_currentPath.length)
+    final relative = objectPath.startsWith(currentPath)
+        ? objectPath.substring(currentPath.length)
         : objectPath;
     final segments =
         relative.split('/').where((segment) => segment.isNotEmpty).toList();
@@ -3677,13 +2969,6 @@ class AppController extends ChangeNotifier {
         path.endsWith('/') ? path.substring(0, path.length - 1) : path;
     final index = normalized.lastIndexOf('/');
     return index < 0 ? normalized : normalized.substring(index + 1);
-  }
-
-  void _ensureWithinRoot(String path) {
-    final root = _normalizeDir(_session?.rootPrefix ?? rootPrefix);
-    if (!path.startsWith(root)) {
-      throw StateError('文件路径不在当前共享空间内');
-    }
   }
 
   void _setTasks(List<TransferTask> next) {
@@ -3941,9 +3226,7 @@ class AppController extends ChangeNotifier {
     for (final taskId in _runningTransferIds) {
       unawaited(_ossClient.cancelTransfer(taskId));
     }
-    selectedItemListenable.dispose();
-    multiSelectedPathsListenable.dispose();
-    directorySizeStatesListenable.dispose();
+    _workspaceController.dispose();
     moveStateListenable.dispose();
     deleteStateListenable.dispose();
     tasksListenable.dispose();

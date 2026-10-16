@@ -36,6 +36,22 @@ class SessionController extends ChangeNotifier {
   bool get isLoggedIn => _session != null;
   bool get bootstrapped => _bootstrapped;
 
+  /// 当前会话能力；未登录时按最低权限身份处理。
+  Capabilities get capabilities =>
+      _session?.capabilities ?? const Capabilities.member();
+
+  void ensureUploadCapability() {
+    if (!capabilities.upload) {
+      throw StateError('当前身份没有上传权限');
+    }
+  }
+
+  void ensureDeleteCapability() {
+    if (!capabilities.delete) {
+      throw StateError('当前身份没有删除权限');
+    }
+  }
+
   /// 启动恢复会话：读取持久化会话并配置 OSS 客户端；失败时保持未登录。
   Future<void> bootstrap() async {
     try {
