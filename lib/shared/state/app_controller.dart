@@ -26,6 +26,8 @@ import '../../features/workspace/infrastructure/alias_repository.dart';
 import '../../features/workspace/infrastructure/oss_client.dart';
 import '../cache/disk_document_cache.dart';
 import '../cache/disk_image_cache.dart';
+import '../gallery_index_hooks.dart';
+import '../path_utils.dart' as path_utils;
 import '../transfer_keepalive.dart';
 
 class ShareImportItem {
@@ -219,31 +221,6 @@ class _UploadSkippedException implements Exception {
   const _UploadSkippedException();
 }
 
-/// 相册功能在传输与删除生命周期中的挂钩点。
-/// 由 gallery 模块实现并在启动时注入；未注入时全部为空操作。
-abstract interface class GalleryIndexHooks {
-  /// 视频上传前启动本地截帧（与上传并行）；返回截帧 JPEG 的本地路径，
-  /// 截帧失败返回 null，不阻塞上传。
-  Future<String?> prepareVideoThumbnail(String objectPath, String localPath);
-
-  /// 超大图片上传前本地生成缩略图（与上传并行）；非超大图或生成失败
-  /// 返回 null，不阻塞上传。
-  Future<String?> prepareImageThumbnail(String objectPath, String localPath);
-
-  /// 媒体上传成功后触发索引增量更新（非媒体文件由实现方过滤）。
-  Future<void> onMediaUploaded({
-    required String objectPath,
-    required String localPath,
-    String? thumbLocalPath,
-  });
-
-  /// 对象删除成功后触发索引增量清理（对象 key，含目录展开结果）。
-  Future<void> onObjectsDeleted(Set<String> objectKeys);
-
-  /// 对象从回收站还原后重新纳入索引。
-  Future<void> onObjectsRestored(Set<String> objectKeys);
-}
-
 /// 应用状态控制器。会话与权限来自已部署的 FC，不在生产路径伪造身份。
 class AppController extends ChangeNotifier {
   AppController(
@@ -323,7 +300,7 @@ class AppController extends ChangeNotifier {
   final Map<String, Completer<_UploadConflictDecision?>>
       _batchConflictWaiters = <String, Completer<_UploadConflictDecision?>>{};
 
-  static const rootPrefix = 'shared/';
+  static const rootPrefix = path_utils.rootPrefix;
   static const _movesRoot = '$rootPrefix.moves/';
   static const _trashRoot = '$rootPrefix.trash/';
   static const _transferConcurrencyKey = 'transfer_concurrency';
@@ -1627,16 +1604,7 @@ class AppController extends ChangeNotifier {
     return true;
   }
 
-  String parentPath(String path) {
-    final normalized = path.endsWith('/') && path.length > 1
-        ? path.substring(0, path.length - 1)
-        : path;
-    final idx = normalized.lastIndexOf('/');
-    if (idx <= 0) {
-      return rootPrefix;
-    }
-    return normalized.substring(0, idx + 1);
-  }
+  String parentPath(String path) => path_utils.parentPathOf(path);
 
   Future<void> createFolder(String name, {String? targetPath}) async {
     _ensureUploadCapability();
@@ -4058,12 +4026,7 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  String _normalizeDir(String path) {
-    if (path.isEmpty) {
-      return rootPrefix;
-    }
-    return path.endsWith('/') ? path : '$path/';
-  }
+  String _normalizeDir(String path) => path_utils.normalizeDirPath(path);
 
   @override
   void dispose() {

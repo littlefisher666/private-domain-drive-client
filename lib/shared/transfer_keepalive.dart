@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 /// 传输保活平台适配层：存在活跃传输任务时在 Android 上以前台服务保活
-/// 进程并挂常驻进度通知。`AppController` 只感知该抽象接口，
+/// 进程并挂常驻进度通知。传输调度层只感知该抽象接口，
 /// `Platform.isAndroid` 判断收敛在本文件内，其余平台为 no-op。
 abstract class TransferKeepaliveService {
   const TransferKeepaliveService();

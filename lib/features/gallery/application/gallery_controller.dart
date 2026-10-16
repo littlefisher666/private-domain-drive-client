@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../shared/cache/disk_image_cache.dart';
+import '../../../shared/gallery_index_hooks.dart';
 import '../../../shared/state/app_controller.dart';
 import '../../auth/domain/user_session.dart';
 import '../../transfer/domain/transfer_task.dart';

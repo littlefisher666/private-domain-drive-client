@@ -6,6 +6,7 @@ import 'package:private_domain_drive_client/features/auth/domain/user_session.da
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
 import 'package:private_domain_drive_client/features/transfer/domain/transfer_task.dart';
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
+import 'package:private_domain_drive_client/shared/gallery_index_hooks.dart';
 import 'package:private_domain_drive_client/shared/state/app_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
