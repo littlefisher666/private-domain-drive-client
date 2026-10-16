@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'bootstrap/app_bootstrap.dart';
 import '../features/gallery/presentation/gallery_scope.dart';
+import '../features/settings/presentation/forced_upgrade_page.dart';
 import '../features/share_import/infrastructure/android_share_import_bridge.dart';
 import '../features/share_import/presentation/share_target_dialog.dart';
 import '../shared/state/app_controller.dart';
@@ -180,6 +181,21 @@ class _PrivateDomainDriveAppState extends State<PrivateDomainDriveApp> {
             themeMode: widget.controller.themeMode,
             initialRoute: AppRouter.initialRoute,
             onGenerateRoute: AppRouter.onGenerateRoute,
+            builder: (context, child) {
+              // 强制升级拦截：以拦截页整体替换导航树（含所有路由与弹窗），
+              // 门禁解除后恢复原界面；Nested Navigator 为拦截页提供
+              // ModalRoute 祖先，使 PopScope 生效并向系统声明由框架处理
+              // 返回。
+              if (widget.controller.forcedUpgradeActive) {
+                return Navigator(
+                  onGenerateRoute: (settings) => MaterialPageRoute<void>(
+                    settings: settings,
+                    builder: (_) => const ForcedUpgradePage(),
+                  ),
+                );
+              }
+              return child ?? const SizedBox.shrink();
+            },
           );
         },
         ),

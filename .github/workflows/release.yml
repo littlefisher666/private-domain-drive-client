@@ -16,6 +16,15 @@ on:
         description: "可选；留空时按所选平台各自最新版本自动递增 PATCH，例如 1.0.1 → 1.0.2"
         required: false
         type: string
+      force_update:
+        description: "本次升级是否强制：为是时低于本次版本的用户端将被拦截升级"
+        required: false
+        type: boolean
+        default: false
+      min_supported_version:
+        description: "可选；显式最低支持版本（X.Y.Z 或 vX.Y.Z）；留空且未勾选强制升级时沿用上一版同平台清单值"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -40,6 +49,8 @@ jobs:
       android_tag_name: ${{ steps.version.outputs.android_tag_name }}
       macos_version_name: ${{ steps.version.outputs.macos_version_name }}
       macos_tag_name: ${{ steps.version.outputs.macos_tag_name }}
+      android_min_supported_version: ${{ steps.version.outputs.android_min_supported_version }}
+      macos_min_supported_version: ${{ steps.version.outputs.macos_min_supported_version }}
       build_number: ${{ steps.version.outputs.build_number }}
 
     steps:
@@ -59,6 +70,9 @@ jobs:
         env:
           REQUESTED_VERSION: ${{ inputs.version }}
           PLATFORMS: ${{ inputs.platforms }}
+          FORCE_UPDATE: ${{ inputs.force_update }}
+          MIN_SUPPORTED_VERSION: ${{ inputs.min_supported_version }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -94,6 +108,88 @@ jobs:
             echo "版本号格式错误：$REQUESTED_VERSION，应为 1.1.2 或 v1.1.2"
             exit 1
           fi
+
+          # 最低支持版本输入：force_update 为是时等价于取本次平台版本；显式输入
+          # （允许 v 前缀）优先；两者都未提供时沿用上一版同平台清单值。
+          force_update="$(printf '%s' "${FORCE_UPDATE:-false}" | tr '[:upper:]' '[:lower:]')"
+          explicit_min_supported="${MIN_SUPPORTED_VERSION:-}"
+          explicit_min_supported="${explicit_min_supported#v}"
+          if [[ -n "$explicit_min_supported" ]] && ! [[ "$explicit_min_supported" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "最低支持版本格式错误：$MIN_SUPPORTED_VERSION，应为 1.4.0 或 v1.4.0"
+            exit 1
+          fi
+
+          version_gt() {
+            [[ "$1" != "$2" ]] && [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" == "$1" ]]
+          }
+
+          # 读取上一版同平台清单的最低支持版本：按 Releases API 取版本号最高的
+          # 同平台发布（不依赖接口返回顺序），下载其更新清单资产后读取字段。
+          # 无同平台发布或无清单资产时返回空；查询失败报错终止，避免把已有
+          # 门槛静默清空。
+          read_previous_min_supported() {
+            local platform="$1"
+            local releases_url previous_manifest_url
+            releases_url="${GITHUB_API_URL:-https://api.github.com}/repos/${GITHUB_REPOSITORY}/releases?per_page=100"
+            if ! previous_manifest_url="$(
+              curl -sSfL \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "$releases_url" \
+                | jq -r --arg prefix "${platform}/" '
+                    [ .[]
+                      | select((.tag_name // "") | startswith($prefix))
+                      | { tag: .tag_name, assets: (.assets // []) }
+                      | . + { version: (.tag[($prefix | length):] | sub("^v"; "")) }
+                      | select(.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
+                    ]
+                    | sort_by([.version | split(".")[] | tonumber])
+                    | last
+                    | (.assets[]? | select(.name == "private-domain-drive-update.json") | .browser_download_url)
+                    // empty
+                  '
+            )"; then
+              echo "平台 ${platform} 上一版清单查询失败（GitHub API 请求或响应异常）" >&2
+              return 1
+            fi
+            if [[ -z "$previous_manifest_url" ]]; then
+              echo "平台 ${platform} 无历史清单资产，最低支持版本按空处理" >&2
+              return 0
+            fi
+            if ! curl -sSfL -H "Authorization: Bearer ${GITHUB_TOKEN}" "$previous_manifest_url" \
+              | jq -r '(.minSupportedVersion // "") | tostring'; then
+              echo "平台 ${platform} 上一版清单下载或解析失败" >&2
+              return 1
+            fi
+          }
+
+          # 确定最低支持版本并校验：格式须为 X.Y.Z（v 前缀去除后），且不高于本次
+          # 平台版本；force_update 与显式输入冲突时报错终止。
+          resolve_min_supported() {
+            local platform="$1" current="$2" raw_min normalized
+            if [[ "$force_update" == "true" ]]; then
+              if [[ -n "$explicit_min_supported" && "$explicit_min_supported" != "$current" ]]; then
+                echo "force_update 与 min_supported_version 冲突：本次 ${platform} 发布版本为 ${current}，显式最低支持版本为 ${explicit_min_supported}" >&2
+                return 1
+              fi
+              raw_min="$current"
+            elif [[ -n "$explicit_min_supported" ]]; then
+              raw_min="$explicit_min_supported"
+            else
+              raw_min="$(read_previous_min_supported "$platform")" || return 1
+              echo "平台 ${platform} 未提供门槛，沿用上一版最低支持版本：${raw_min:-无}" >&2
+            fi
+            normalized="${raw_min#v}"
+            if [[ -n "$normalized" ]] && ! [[ "$normalized" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "最低支持版本格式错误：${raw_min}，应为 X.Y.Z 或 vX.Y.Z" >&2
+              return 1
+            fi
+            if [[ -n "$normalized" ]] && version_gt "$normalized" "$current"; then
+              echo "最低支持版本 ${normalized} 高于本次 ${platform} 发布版本 ${current}" >&2
+              return 1
+            fi
+            echo "$normalized"
+          }
 
           # REST API 触发时 platforms 可能为空，按默认值 both 处理
           PLATFORMS="${PLATFORMS:-both}"
@@ -132,12 +228,23 @@ jobs:
             fi
           fi
 
+          android_min_supported=""
+          macos_min_supported=""
+          if [[ "$publish_android" == "true" ]]; then
+            android_min_supported="$(resolve_min_supported android "$android_version")"
+          fi
+          if [[ "$publish_macos" == "true" ]]; then
+            macos_min_supported="$(resolve_min_supported macos "$macos_version")"
+          fi
+
           echo "publish_android=$publish_android" >> "$GITHUB_OUTPUT"
           echo "publish_macos=$publish_macos" >> "$GITHUB_OUTPUT"
           echo "android_version_name=$android_version" >> "$GITHUB_OUTPUT"
           echo "android_tag_name=${android_tag_name:-}" >> "$GITHUB_OUTPUT"
           echo "macos_version_name=$macos_version" >> "$GITHUB_OUTPUT"
           echo "macos_tag_name=${macos_tag_name:-}" >> "$GITHUB_OUTPUT"
+          echo "android_min_supported_version=$android_min_supported" >> "$GITHUB_OUTPUT"
+          echo "macos_min_supported_version=$macos_min_supported" >> "$GITHUB_OUTPUT"
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
 
           echo "发布平台：$PLATFORMS（Android：$publish_android，macOS：$publish_macos）"
@@ -145,10 +252,10 @@ jobs:
             echo "## 发布版本"
             echo "- 本次发布平台：\`$PLATFORMS\`"
             if [[ "$publish_android" == "true" ]]; then
-              echo "- Android 发布版本：\`$android_tag_name\`"
+              echo "- Android 发布版本：\`$android_tag_name\`（最低支持版本：\`${android_min_supported:-无限制}\`）"
             fi
             if [[ "$publish_macos" == "true" ]]; then
-              echo "- macOS 发布版本：\`$macos_tag_name\`"
+              echo "- macOS 发布版本：\`$macos_tag_name\`（最低支持版本：\`${macos_min_supported:-无限制}\`）"
             fi
             echo "- 构建号：\`$build_number\`"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -626,10 +733,13 @@ jobs:
           MACOS_VERSION: ${{ needs.prepare.outputs.macos_version_name }}
           ANDROID_TAG_NAME: ${{ needs.prepare.outputs.android_tag_name }}
           MACOS_TAG_NAME: ${{ needs.prepare.outputs.macos_tag_name }}
+          ANDROID_MIN_SUPPORTED: ${{ needs.prepare.outputs.android_min_supported_version }}
+          MACOS_MIN_SUPPORTED: ${{ needs.prepare.outputs.macos_min_supported_version }}
         run: |
           set -euo pipefail
           # 每个平台 Release 附带自己的清单，assets 仅含该平台字段；清单版本与平台 tag 版本一致。
           # 资产下载地址优先 OSS 镜像直链（该平台镜像成功时），否则回退 GitHub Release 下载地址。
+          # minSupportedVersion 为发布时确定的最低支持版本，空值表示不限制。
           if [[ "$PUBLISH_ANDROID" == "true" ]]; then
             mkdir -p dist/android
             android_base_url="${RELEASE_BASE_URL}/releases/download/${ANDROID_TAG_NAME}"
@@ -639,9 +749,10 @@ jobs:
             android_url="${android_base_url}/${android_name}"
             jq -n \
               --arg version "$ANDROID_VERSION" \
+              --arg min_supported "$ANDROID_MIN_SUPPORTED" \
               --rawfile notes release_notes_plain_android.txt \
               --arg name "$android_name" --arg url "$android_url" --arg digest "$android_digest" \
-              '{version: $version, notes: ($notes | gsub("\\s+$"; "")), assets: {android: {name: $name, url: $url, digest: $digest}}}' \
+              '{version: $version, notes: ($notes | gsub("\\s+$"; "")), minSupportedVersion: $min_supported, assets: {android: {name: $name, url: $url, digest: $digest}}}' \
               > dist/android/private-domain-drive-update.json
           fi
           if [[ "$PUBLISH_MACOS" == "true" ]]; then
@@ -653,9 +764,10 @@ jobs:
             macos_url="${macos_base_url}/${macos_name}"
             jq -n \
               --arg version "$MACOS_VERSION" \
+              --arg min_supported "$MACOS_MIN_SUPPORTED" \
               --rawfile notes release_notes_plain_macos.txt \
               --arg name "$macos_name" --arg url "$macos_url" --arg digest "$macos_digest" \
-              '{version: $version, notes: ($notes | gsub("\\s+$"; "")), assets: {macos: {name: $name, url: $url, digest: $digest}}}' \
+              '{version: $version, notes: ($notes | gsub("\\s+$"; "")), minSupportedVersion: $min_supported, assets: {macos: {name: $name, url: $url, digest: $digest}}}' \
               > dist/macos/private-domain-drive-update.json
           fi
 

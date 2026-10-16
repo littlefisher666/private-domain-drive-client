@@ -16,17 +16,25 @@ class ReleaseAsset {
 }
 
 class GithubRelease {
-  const GithubRelease(
-      {required this.version, required this.notes, required this.assets});
+  const GithubRelease({
+    required this.version,
+    required this.notes,
+    required this.assets,
+    this.minSupportedVersion,
+  });
   final String version;
   final String notes;
   final List<ReleaseAsset> assets;
+
+  /// 清单最低支持版本（已去除 v 前缀）；缺省、为空或非字符串时表示不限制。
+  final String? minSupportedVersion;
 
   factory GithubRelease.fromJson(Map<String, dynamic> json) {
     final assets = json['assets'] as Map<String, dynamic>;
     return GithubRelease(
       version: (json['version'] as String).replaceFirst(RegExp(r'^v'), ''),
       notes: (json['notes'] as String?) ?? '',
+      minSupportedVersion: _parseMinSupportedVersion(json['minSupportedVersion']),
       assets: assets.values
           .cast<Map<String, dynamic>>()
           .map(
@@ -38,6 +46,12 @@ class GithubRelease {
           )
           .toList(),
     );
+  }
+
+  static String? _parseMinSupportedVersion(Object? value) {
+    if (value is! String) return null;
+    final normalized = value.replaceFirst(RegExp(r'^v'), '').trim();
+    return normalized.isEmpty ? null : normalized;
   }
 }
 

@@ -17,14 +17,27 @@ class UpdateCheckResult {
     required this.currentVersion,
     required this.latestVersion,
     this.availableUpdate,
+    this.minSupportedVersion,
   });
 
   final String currentVersion;
   final String latestVersion;
   final AvailableUpdate? availableUpdate;
 
+  /// 本平台清单的最低支持版本（已去除 v 前缀）；缺省或为空表示不限制。
+  final String? minSupportedVersion;
+
   bool get hasUpdate =>
       UpdateService.compareVersions(latestVersion, currentVersion) > 0;
+
+  /// 当前版本低于最低支持版本即判定强制升级；忽略 `+build`。
+  /// 字段缺省、为空或无法解析（非数字点分版本）时不判定。
+  bool get requiresForcedUpgrade {
+    final minimum = minSupportedVersion;
+    if (minimum == null || minimum.isEmpty) return false;
+    if (!RegExp(r'^\d+(\.\d+)*$').hasMatch(minimum)) return false;
+    return UpdateService.compareVersions(currentVersion, minimum) < 0;
+  }
 }
 
 class UpdateService {
@@ -59,12 +72,17 @@ class UpdateService {
       );
     }
     debugPrint('[更新检查] 远端版本：${release.version}');
+    final minimum = release.minSupportedVersion;
+    if (minimum != null) {
+      debugPrint('[更新检查] 最低支持版本：$minimum');
+    }
     final comparison = compareVersions(release.version, current.name);
     debugPrint('[更新检查] 比较结果：$comparison');
     if (comparison <= 0) {
       return UpdateCheckResult(
         currentVersion: current.name,
         latestVersion: release.version,
+        minSupportedVersion: minimum,
       );
     }
     debugPrint('[更新检查] 查找资产：$assetPrefix*$assetSuffix');
@@ -77,6 +95,7 @@ class UpdateService {
       return UpdateCheckResult(
         currentVersion: current.name,
         latestVersion: release.version,
+        minSupportedVersion: minimum,
       );
     }
     debugPrint('[更新检查] 找到发布资产：${asset.name}');
@@ -84,6 +103,7 @@ class UpdateService {
       currentVersion: current.name,
       latestVersion: release.version,
       availableUpdate: AvailableUpdate(release: release, asset: asset),
+      minSupportedVersion: minimum,
     );
   }
 

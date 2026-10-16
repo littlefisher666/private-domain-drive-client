@@ -15,6 +15,8 @@ Future<void> main() async {
   MediaKit.ensureInitialized();
   final controller = await AppBootstrap.initialize();
   runApp(PrivateDomainDriveApp(controller: controller));
+  // 两端统一的启动静默门禁检查：不阻塞启动、失败放行；调试开关同时关闭该检查。
+  unawaited(controller.checkForcedUpgradeGate());
   if (!kIsWeb &&
       Platform.isMacOS &&
       !AppConstants.disableStartupUpdateCheck &&

@@ -22,7 +22,8 @@ class AppConstants {
   static const fcSignRequests =
       bool.fromEnvironment('FC_SIGN_REQUESTS', defaultValue: true);
 
-  /// 关闭启动时的自动更新检查（Sparkle 静默检查）；设置页手动检查不受影响。
+  /// 关闭启动检查：同时跳过更新提示的静默检查与强制升级门禁检查
+  /// （本地调试用）；设置页手动检查不受影响。
   static const disableStartupUpdateCheck =
       bool.fromEnvironment('DISABLE_STARTUP_UPDATE_CHECK');
 }

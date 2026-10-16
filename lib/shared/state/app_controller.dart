@@ -6,13 +6,17 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/constants/app_constants.dart';
 import '../../core/errors/app_error.dart';
+import '../../core/version/app_version.dart';
 import '../../features/auth/domain/user_session.dart';
 import '../../features/auth/infrastructure/saved_credentials_store.dart';
 import '../../features/auth/infrastructure/session_repository.dart';
 import '../../features/transfer/domain/transfer_task.dart';
 import '../../features/transfer/infrastructure/upload_staging.dart';
 import '../../features/preview/infrastructure/text_preview_loader.dart';
+import '../../features/settings/application/update_service.dart';
+import '../../features/settings/infrastructure/github_release_client.dart';
 import '../../features/workspace/domain/file_item.dart';
 import '../../features/workspace/domain/directory_alias.dart';
 import '../../features/workspace/domain/move_task_entry.dart';
@@ -247,13 +251,22 @@ class AppController extends ChangeNotifier {
       OssClient? ossClient,
       SavedCredentialsStore? savedCredentialsStore,
       UploadStaging? uploadStaging,
-      TransferKeepaliveService? transferKeepalive})
+      TransferKeepaliveService? transferKeepalive,
+      UpdateService? updateService,
+      bool? disableStartupUpdateCheck})
       : _sessionRepository = sessionRepository,
         _ossClient = ossClient ?? OssClient(),
         _savedCredentialsStore =
             savedCredentialsStore ?? SavedCredentialsStore(),
         _transferKeepalive =
             transferKeepalive ?? createTransferKeepaliveService(),
+        _updateService = updateService ??
+            UpdateService(
+              versionReader: PackageAppVersionReader(),
+              releaseClient: GithubReleaseClient(),
+            ),
+        _disableStartupUpdateCheck = disableStartupUpdateCheck ??
+            AppConstants.disableStartupUpdateCheck,
 
         // testWidgets（FakeAsync）环境下未 mock 的 platform channel 永远
         // 不会回复，path_provider 调用会阻塞入队路径；测试默认禁用 staging
@@ -278,9 +291,14 @@ class AppController extends ChangeNotifier {
 
   /// 相册等模块与主控制器共用同一个 OSS 客户端（凭证配置状态共享）。
   OssClient get ossClient => _ossClient;
+
+  /// 更新服务与设置页、强制升级拦截页共享同一实例（检查结果口径一致）。
+  UpdateService get updateService => _updateService;
   final SavedCredentialsStore _savedCredentialsStore;
   final UploadStaging? _uploadStaging;
   final TransferKeepaliveService _transferKeepalive;
+  final UpdateService _updateService;
+  final bool _disableStartupUpdateCheck;
   bool _transferKeepaliveActive = false;
   bool _keepalivePermissionRequested = false;
   GalleryIndexHooks? _galleryHooks;
@@ -398,6 +416,10 @@ class AppController extends ChangeNotifier {
   bool _bootstrapped = false;
   ThemeMode _themeMode = ThemeMode.light;
   bool _autoCheckUpdates = true;
+
+  /// 强制升级门禁检查结果；非空表示当前版本低于最低支持版本、拦截生效。
+  UpdateCheckResult? _forcedUpgradeResult;
+  bool _forcedUpgradeChecking = false;
   int _treeRevision = 0;
   bool _isMultiSelectionMode = false;
   String? _selectionAnchorPath;
@@ -542,6 +564,39 @@ class AppController extends ChangeNotifier {
       // 偏好写入失败时仍保留本次会话的选择。
     }
   }
+
+  /// 强制升级拦截是否生效；生效时应用外壳以强制升级页替换整棵界面。
+  bool get forcedUpgradeActive => _forcedUpgradeResult != null;
+
+  /// 拦截生效时的检查结果（当前版本、最低支持版本与可用升级资产）。
+  UpdateCheckResult? get forcedUpgradeResult => _forcedUpgradeResult;
+
+  /// 启动静默检查与拦截页「重试」共用的门禁检查：成功后按结果更新门禁
+  /// 状态；失败（离线、超时、响应异常）静默放行且不缓存结论，下一次启动
+  /// 或重试时重新检查。不受 macOS「启动时自动检查更新」开关约束，
+  /// 仅受编译期调试开关 `DISABLE_STARTUP_UPDATE_CHECK` 约束。
+  Future<void> checkForcedUpgradeGate() async {
+    if (_disableStartupUpdateCheck || _forcedUpgradeChecking) return;
+    _forcedUpgradeChecking = true;
+    try {
+      final result = await _updateService.checkLatest();
+      final forced = result.requiresForcedUpgrade;
+      _forcedUpgradeResult = forced ? result : null;
+      debugPrint(forced
+          ? '[强制升级] 当前版本 ${result.currentVersion} 低于最低支持版本 '
+              '${result.minSupportedVersion}，进入拦截'
+          : '[强制升级] 门禁检查通过，当前版本 ${result.currentVersion}');
+    } catch (error, stackTrace) {
+      debugPrint('[强制升级] 门禁检查失败，放行：$error');
+      debugPrintStack(stackTrace: stackTrace, label: '[强制升级] 门禁检查异常堆栈');
+      // 失败不改变门禁状态：启动阶段保持放行，拦截期间保持拦截。
+      return;
+    } finally {
+      _forcedUpgradeChecking = false;
+      notifyListeners();
+    }
+  }
+
   int get treeRevision => _treeRevision;
   Capabilities get capabilities =>
       _session?.capabilities ?? const Capabilities.member();

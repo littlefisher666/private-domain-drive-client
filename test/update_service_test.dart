@@ -284,4 +284,209 @@ void main() {
     expect(result.hasUpdate, isFalse);
     expect(result.availableUpdate, isNull);
   });
+
+  test('解析最低支持版本字段并去除 v 前缀', () {
+    final release = GithubRelease.fromJson({
+      'version': '1.2.4',
+      'notes': '',
+      'minSupportedVersion': 'v1.2.0',
+      'assets': {
+        'android': {
+          'name': 'private-domain-drive-android-v1.2.4.apk',
+          'url': 'https://example.com/android.apk',
+          'digest': 'sha256:abc',
+        },
+      },
+    });
+    expect(release.minSupportedVersion, '1.2.0');
+  });
+
+  test('最低支持版本缺省、空串或非字符串时按不限制解析', () {
+    Map<String, dynamic> manifest(Object? value) => {
+          'version': '1.2.4',
+          'notes': '',
+          if (value != null) 'minSupportedVersion': value,
+          'assets': {
+            'android': {
+              'name': 'private-domain-drive-android-v1.2.4.apk',
+              'url': 'https://example.com/android.apk',
+              'digest': 'sha256:abc',
+            },
+          },
+        };
+
+    expect(GithubRelease.fromJson(manifest(null)).minSupportedVersion, isNull);
+    expect(GithubRelease.fromJson(manifest('')).minSupportedVersion, isNull);
+    expect(GithubRelease.fromJson(manifest('  ')).minSupportedVersion, isNull);
+    expect(GithubRelease.fromJson(manifest(1.2)).minSupportedVersion, isNull);
+  });
+
+  group('强制升级判定', () {
+    UpdateCheckResult result({required String current, String? minimum}) =>
+        UpdateCheckResult(
+          currentVersion: current,
+          latestVersion: '9.9.9',
+          minSupportedVersion: minimum,
+        );
+
+    test('当前版本低于最低支持版本时判定为强制', () {
+      expect(
+        result(current: '1.1.4', minimum: '1.2.0').requiresForcedUpgrade,
+        isTrue,
+      );
+    });
+
+    test('当前版本等于或高于最低支持版本时不判定', () {
+      expect(
+        result(current: '1.2.0', minimum: '1.2.0').requiresForcedUpgrade,
+        isFalse,
+      );
+      expect(
+        result(current: '1.2.1', minimum: '1.2.0').requiresForcedUpgrade,
+        isFalse,
+      );
+    });
+
+    test('比较忽略 +build 构建号', () {
+      expect(
+        result(current: '1.1.4+9', minimum: '1.2.0').requiresForcedUpgrade,
+        isTrue,
+      );
+      expect(
+        result(current: '1.2.0+9', minimum: '1.2.0').requiresForcedUpgrade,
+        isFalse,
+      );
+    });
+
+    test('缺省、空值或无法解析时不判定', () {
+      expect(result(current: '1.1.4').requiresForcedUpgrade, isFalse);
+      expect(
+        result(current: '1.1.4', minimum: '').requiresForcedUpgrade,
+        isFalse,
+      );
+      expect(
+        result(current: '1.1.4', minimum: 'abc').requiresForcedUpgrade,
+        isFalse,
+      );
+    });
+  });
+
+  test('checkLatest 传递最低支持版本并判定强制', () async {
+    final service = _serviceWith(
+      currentVersion: '1.1.4',
+      releases: [_apiRelease(tagName: 'android/v1.2.0')],
+      manifest: {
+        'version': '1.2.0',
+        'notes': '',
+        'minSupportedVersion': '1.2.0',
+        'assets': {
+          'android': {
+            'name': 'private-domain-drive-android-v1.2.0.apk',
+            'url': 'https://example.com/android.apk',
+            'digest': 'sha256:abc',
+          },
+        },
+      },
+    );
+
+    final result = await service.checkLatest();
+    expect(result.minSupportedVersion, '1.2.0');
+    expect(result.requiresForcedUpgrade, isTrue);
+    expect(result.availableUpdate, isNotNull);
+  });
+
+  test('清单缺少本平台资产时仍判定强制且无升级资产', () async {
+    final service = _serviceWith(
+      currentVersion: '1.1.4',
+      releases: [_apiRelease(tagName: 'android/v1.2.0')],
+      manifest: {
+        'version': '1.2.0',
+        'notes': '',
+        'minSupportedVersion': '1.2.0',
+        'assets': {
+          'macos': {
+            'name': 'private-domain-drive-macos-v1.2.0.dmg',
+            'url': 'https://example.com/macos.dmg',
+            'digest': 'sha256:def',
+          },
+        },
+      },
+    );
+
+    final result = await service.checkLatest();
+    expect(result.minSupportedVersion, '1.2.0');
+    expect(result.requiresForcedUpgrade, isTrue);
+    expect(result.availableUpdate, isNull);
+  });
+
+  test('清单版本不高于当前版本时门槛仍参与判定（沿用清单场景）', () async {
+    final service = _serviceWith(
+      currentVersion: '1.3.0',
+      releases: [_apiRelease(tagName: 'android/v1.2.0')],
+      manifest: {
+        'version': '1.2.0',
+        'notes': '',
+        'minSupportedVersion': '1.2.0',
+        'assets': {
+          'android': {
+            'name': 'private-domain-drive-android-v1.2.0.apk',
+            'url': 'https://example.com/android.apk',
+            'digest': 'sha256:abc',
+          },
+        },
+      },
+    );
+
+    final result = await service.checkLatest();
+    expect(result.minSupportedVersion, '1.2.0');
+    expect(result.requiresForcedUpgrade, isFalse);
+  });
+
+  test('macOS 端读取清单门槛用于强制判定', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final service = _serviceWith(
+      currentVersion: '1.1.4',
+      releases: [_apiRelease(tagName: 'macos/v1.2.0')],
+      manifest: {
+        'version': '1.2.0',
+        'notes': '',
+        'minSupportedVersion': 'v1.2.0',
+        'assets': {
+          'macos': {
+            'name': 'private-domain-drive-macos-v1.2.0.dmg',
+            'url': 'https://example.com/macos.dmg',
+            'digest': 'sha256:def',
+          },
+        },
+      },
+    );
+
+    final result = await service.checkLatest();
+    expect(result.minSupportedVersion, '1.2.0');
+    expect(result.requiresForcedUpgrade, isTrue);
+    expect(result.availableUpdate, isNotNull);
+  });
+
+  test('旧清单缺少最低支持版本字段时不判定强制', () async {
+    final service = _serviceWith(
+      currentVersion: '1.2.3',
+      releases: [_apiRelease(tagName: 'android/v1.2.4')],
+      manifest: {
+        'version': '1.2.4',
+        'notes': '',
+        'assets': {
+          'android': {
+            'name': 'private-domain-drive-android-v1.2.4.apk',
+            'url': 'https://example.com/android.apk',
+            'digest': 'sha256:abc',
+          },
+        },
+      },
+    );
+
+    final result = await service.checkLatest();
+    expect(result.minSupportedVersion, isNull);
+    expect(result.requiresForcedUpgrade, isFalse);
+    expect(result.hasUpdate, isTrue);
+  });
 }
