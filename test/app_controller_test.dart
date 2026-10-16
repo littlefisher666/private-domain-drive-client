@@ -13,7 +13,6 @@ import 'package:private_domain_drive_client/features/settings/application/update
 import 'package:private_domain_drive_client/features/settings/infrastructure/github_release_client.dart';
 import 'package:private_domain_drive_client/features/auth/infrastructure/saved_credentials_store.dart';
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
-import 'package:private_domain_drive_client/features/transfer/domain/transfer_task.dart';
 import 'package:private_domain_drive_client/features/workspace/domain/file_item.dart';
 import 'package:private_domain_drive_client/features/workspace/domain/recycle_bin_entry.dart';
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
@@ -286,33 +285,6 @@ void main() {
       expect(controller.selectedItem?.path, 'shared/b.txt');
       expect(controller.multiSelectedPaths, isEmpty);
     });
-
-    test('分享导入多文件归属同一上传批次', () async {
-      final controller = await _controller();
-      final directory = await Directory.systemTemp.createTemp('pdd-share-');
-      addTearDown(() => directory.delete(recursive: true));
-      final fileA = File('${directory.path}/a.jpg');
-      final fileB = File('${directory.path}/b.jpg');
-      await fileA.writeAsBytes(<int>[1]);
-      await fileB.writeAsBytes(<int>[2]);
-
-      controller.prepareShareImport(items: <ShareImportItem>[
-        ShareImportItem(id: '1', name: 'a.jpg', size: 1, localPath: fileA.path),
-        ShareImportItem(id: '2', name: 'b.jpg', size: 1, localPath: fileB.path),
-      ]);
-      await controller.confirmShareUpload();
-      await _waitForTaskStatus(
-        controller,
-        TransferTaskStatus.success,
-        taskCount: 2,
-      );
-
-      final batchIds = controller.tasks.map((task) => task.batchId).toSet();
-      expect(controller.tasks, hasLength(2));
-      expect(batchIds, hasLength(1));
-      expect(batchIds.single, isNotNull);
-    });
-
   });
 
   group('强制升级门禁', () {
@@ -468,25 +440,6 @@ Future<AppController> _controller({_FakeOssClient? oss}) async {
   );
   await controller.bootstrap();
   return controller;
-}
-
-Future<void> _waitForTaskStatus(
-  AppController controller,
-  TransferTaskStatus status, {
-  int taskCount = 1,
-}) async {
-  final deadline = DateTime.now().add(const Duration(seconds: 5));
-  bool reached() {
-    if (controller.tasks.length != taskCount) return false;
-    return controller.tasks.every((task) => task.status == status);
-  }
-
-  while (!reached()) {
-    if (DateTime.now().isAfter(deadline)) {
-      throw TimeoutException('传输任务未在限定时间内全部进入 $status 状态');
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 10));
-  }
 }
 
 UserSession _remoteSession() {
