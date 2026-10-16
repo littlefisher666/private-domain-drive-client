@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:auto_updater/auto_updater.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
 import '../../../core/constants/app_constants.dart';
 
@@ -48,15 +49,25 @@ class MacosSparkleUpdater implements UpdaterListener {
   MacosSparkleUpdater({
     this.feedUrl = defaultFeedUrl,
     @visibleForTesting SparkleUpdaterApi api = const PluginSparkleUpdaterApi(),
-  }) : _api = api;
+    @visibleForTesting http.Client? probeClient,
+  })  : _api = api,
+        _probeClient = probeClient;
 
   static const String defaultFeedUrl =
       'https://raw.githubusercontent.com/littlefisher666/private-domain-drive-client/appcast/appcast.xml';
 
+  /// OSS 固定路径 appcast（公开读）；探测通过时优先作为本次检查的 Sparkle feed。
+  static const String ossFeedUrl =
+      '${AppConstants.ossMirrorBaseUrl}/releases/macos/appcast.xml';
+
+  static const Duration _feedProbeTimeout = Duration(seconds: 5);
+
   static final MacosSparkleUpdater instance = MacosSparkleUpdater();
 
+  /// feed 回退地址；OSS appcast 探测不可用时使用。
   final String feedUrl;
   final SparkleUpdaterApi _api;
+  final http.Client? _probeClient;
 
   final StreamController<SparkleUpdateStatus> _statusController =
       StreamController<SparkleUpdateStatus>.broadcast();
@@ -76,13 +87,33 @@ class MacosSparkleUpdater implements UpdaterListener {
   Future<void> initialize() async {
     if (_initialized) return;
     _api.addListener(this);
-    await _api.setFeedURL(feedUrl);
+    await _api.setFeedURL(await _resolveFeedUrl());
     // Sparkle 原生层在插件初始化时就已 start，会按默认 86400s 自行调度检查；
     // 调试环境关闭该自动调度（0 = 禁用），手动检查不受影响。
     if (AppConstants.disableStartupUpdateCheck) {
       await _api.setScheduledCheckInterval(0);
     }
     _initialized = true;
+  }
+
+  /// OSS appcast 固定路径探测：通过时用 OSS feed，不可用回退默认 feed。
+  Future<String> _resolveFeedUrl() async {
+    final client = _probeClient ?? http.Client();
+    try {
+      final response =
+          await client.get(Uri.parse(ossFeedUrl)).timeout(_feedProbeTimeout);
+      debugPrint('[Sparkle] OSS appcast 探测状态：${response.statusCode}');
+      if (response.statusCode == 200) {
+        debugPrint('[Sparkle] 使用 OSS feed：$ossFeedUrl');
+        return ossFeedUrl;
+      }
+    } catch (error) {
+      debugPrint('[Sparkle] OSS appcast 探测失败：$error');
+    } finally {
+      if (_probeClient == null) client.close();
+    }
+    debugPrint('[Sparkle] 回退 GitHub feed：$feedUrl');
+    return feedUrl;
   }
 
   /// 启动后的静默检查；Sparkle 自动检查失败时不打扰用户，回到空闲状态。

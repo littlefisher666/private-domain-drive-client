@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 
+import '../../../core/constants/app_constants.dart';
 import '../../../core/version/app_version.dart';
 import 'system_proxy.dart';
 
@@ -70,6 +71,7 @@ class GithubReleaseClient {
     'User-Agent': 'private-domain-drive-client',
   };
   static const _requestTimeout = Duration(seconds: 10);
+  static const _feedRequestTimeout = Duration(seconds: 5);
 
   /// 首次请求时解析一次系统代理并缓存客户端。
   /// 未检测到系统代理时保持默认直连（HttpClient 自身仍会读取
@@ -90,12 +92,48 @@ class GithubReleaseClient {
     return _resolvedClient!;
   }
 
-  /// 查询当前平台的最新发布：从 Releases 列表中按 tag 前缀
-  /// （`android/` 或 `macos/`）匹配，并选取其中**版本号最高**的一个，
-  /// 下载其更新清单。列表顺序不保证最新在前（GitHub 实测会穿插旧共享
-  /// 序列与各平台条目），因此不得依赖接口排序取第一个。
+  /// 查询当前平台的最新发布：优先读取 OSS 固定路径更新清单
+  /// （`releases/<platform>/update.json`，公开读）；不可用时回退 GitHub Releases
+  /// 列表链路。
   /// 没有平台匹配的发布或清单资产时返回 null，由调用方按“已是最新版本”处理。
   Future<GithubRelease?> latestForPlatform({required String tagPrefix}) async {
+    final viaOss = await _fetchManifestFromOss(tagPrefix);
+    if (viaOss != null) return viaOss;
+    return _latestForPlatformFromGithub(tagPrefix);
+  }
+
+  /// OSS 固定路径更新清单：请求失败、状态码非 200 或内容无法解析时返回 null，
+  /// 由调用方转入 GitHub 回退链路；本方法不抛出异常。
+  Future<GithubRelease?> _fetchManifestFromOss(String tagPrefix) async {
+    final platform = tagPrefix.replaceFirst(RegExp(r'/$'), '');
+    final manifestUrl =
+        '${AppConstants.ossMirrorBaseUrl}/releases/$platform/update.json';
+    debugPrint('[更新检查] 读取 OSS 更新清单：$manifestUrl');
+    try {
+      final client = await _client;
+      final response = await client
+          .get(Uri.parse(manifestUrl), headers: _headers)
+          .timeout(_feedRequestTimeout);
+      debugPrint('[更新检查] OSS 更新清单响应状态：${response.statusCode}');
+      if (response.statusCode != 200) return null;
+      final body = utf8.decode(response.bodyBytes);
+      final release = GithubRelease.fromJson(
+        jsonDecode(body) as Map<String, dynamic>,
+      );
+      debugPrint(
+          '[更新检查] OSS 清单版本：${release.version}，资产数：${release.assets.length}');
+      return release;
+    } catch (error) {
+      debugPrint('[更新检查] OSS 更新清单不可用，回退 GitHub 链路：$error');
+      return null;
+    }
+  }
+
+  /// GitHub 回退链路：从 Releases 列表中按 tag 前缀（`android/` 或 `macos/`）
+  /// 匹配，并选取其中**版本号最高**的一个，下载其更新清单。列表顺序不保证
+  /// 最新在前（GitHub 实测会穿插旧共享序列与各平台条目），因此不得依赖接口
+  /// 排序取第一个。
+  Future<GithubRelease?> _latestForPlatformFromGithub(String tagPrefix) async {
     debugPrint('[更新检查] 查询平台发布列表（tag 前缀：$tagPrefix）');
     try {
       final releases = await _fetchReleases();

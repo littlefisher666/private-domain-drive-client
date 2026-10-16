@@ -672,7 +672,7 @@ jobs:
           echo "ossutil 已安装：$ossutil_bin"
 
       - name: 上传 OSS 镜像
-        # 镜像仅作加速手段：任一资产上传失败只记录回退标记（保持 false），不标记流水线失败。
+        # 镜像仅作加速手段：任一资产上传或匿名探测未通过只记录回退标记（保持 false），不标记流水线失败。
         continue-on-error: true
         env:
           PUBLISH_ANDROID: ${{ needs.prepare.outputs.publish_android }}
@@ -694,30 +694,55 @@ jobs:
 
           ossutil_config="$RUNNER_TEMP/.ossutilconfig"
           upload_asset() {
-            local asset="$1" platform="$2" version="$3"
-            echo "上传 $asset -> oss://private-domain-drive/releases/${platform}/${version}/"
-            "$ossutil_bin" cp "$asset" "oss://private-domain-drive/releases/${platform}/${version}/" \
-              -c "$ossutil_config" --acl public-read --bigfile-threshold=10 --jobs=4 --force
+            local asset="$1" platform="$2" version="$3" object_name="$4" content_type="${5:-}"
+            local meta_args=()
+            [[ -n "$content_type" ]] && meta_args=(--meta "Content-Type:${content_type}")
+            echo "上传 $asset -> oss://private-domain-drive/releases/${platform}/${version}/${object_name}"
+            "$ossutil_bin" cp "$asset" "oss://private-domain-drive/releases/${platform}/${version}/${object_name}" \
+              -c "$ossutil_config" --acl public-read "${meta_args[@]}" \
+              --bigfile-threshold=10 --jobs=4 --force
+          }
+
+          # 上传后以匿名请求探测镜像直链，探测不通过同样视为镜像失败（回退 GitHub 地址）。
+          probe_asset() {
+            local platform="$1" version="$2" object_name="$3"
+            local url="${OSS_MIRROR_BASE_URL}/releases/${platform}/${version}/${object_name}"
+            local code
+            code=$(curl -s -o /dev/null -w '%{http_code}' -r 0-1023 --max-time 60 "$url" || true)
+            echo "镜像匿名探测：$url -> $code"
+            [[ "$code" == "200" || "$code" == "206" ]]
           }
 
           android_mirror_ok=false
           if [[ "$PUBLISH_ANDROID" == "true" ]]; then
-            if upload_asset "dist/private-domain-drive-android-v${ANDROID_VERSION}.apk" android "$ANDROID_VERSION"; then
+            # OSS 默认域名对 key 含 .apk 或 Content-Type 为 apk mime 的对象做匿名下载拦截
+            # （返回 400 ApkDownloadForbidden），安卓镜像对象因此以 .bin 命名并显式写
+            # octet-stream；对象字节与原 APK 完全一致，清单 name/digest 不受影响。
+            android_object="private-domain-drive-android-v${ANDROID_VERSION}.bin"
+            if upload_asset "dist/private-domain-drive-android-v${ANDROID_VERSION}.apk" android "$ANDROID_VERSION" \
+                 "$android_object" "application/octet-stream" \
+               && probe_asset android "$ANDROID_VERSION" "$android_object"; then
               android_mirror_ok=true
             else
-              echo "Android 资产上传 OSS 失败，本次回退 GitHub 下载地址" >&2
+              echo "Android 资产镜像失败（上传或匿名探测未通过），本次回退 GitHub 下载地址" >&2
             fi
           fi
 
           macos_mirror_ok=false
           if [[ "$PUBLISH_MACOS" == "true" ]]; then
             macos_mirror_ok=true
-            upload_asset "dist/private-domain-drive-macos-v${MACOS_VERSION}.dmg" macos "$MACOS_VERSION" || macos_mirror_ok=false
+            upload_asset "dist/private-domain-drive-macos-v${MACOS_VERSION}.dmg" macos "$MACOS_VERSION" \
+              "private-domain-drive-macos-v${MACOS_VERSION}.dmg" \
+              && probe_asset macos "$MACOS_VERSION" "private-domain-drive-macos-v${MACOS_VERSION}.dmg" \
+              || macos_mirror_ok=false
             if [[ "${sparkle_enabled:-false}" == "true" ]]; then
-              upload_asset "dist/private-domain-drive-macos-v${MACOS_VERSION}.zip" macos "$MACOS_VERSION" || macos_mirror_ok=false
+              upload_asset "dist/private-domain-drive-macos-v${MACOS_VERSION}.zip" macos "$MACOS_VERSION" \
+                "private-domain-drive-macos-v${MACOS_VERSION}.zip" \
+                && probe_asset macos "$MACOS_VERSION" "private-domain-drive-macos-v${MACOS_VERSION}.zip" \
+                || macos_mirror_ok=false
             fi
             if [[ "$macos_mirror_ok" != "true" ]]; then
-              echo "macOS 资产上传 OSS 失败，本次回退 GitHub 下载地址" >&2
+              echo "macOS 资产镜像失败（上传或匿名探测未通过），本次回退 GitHub 下载地址" >&2
             fi
           fi
 
@@ -743,10 +768,12 @@ jobs:
           if [[ "$PUBLISH_ANDROID" == "true" ]]; then
             mkdir -p dist/android
             android_base_url="${RELEASE_BASE_URL}/releases/download/${ANDROID_TAG_NAME}"
-            if [[ "${OSS_MIRROR_ANDROID_OK:-false}" == "true" ]]; then
-              android_base_url="${OSS_MIRROR_BASE_URL}/releases/android/${ANDROID_VERSION}"
-            fi
             android_url="${android_base_url}/${android_name}"
+            if [[ "${OSS_MIRROR_ANDROID_OK:-false}" == "true" ]]; then
+              # 安卓镜像对象以 .bin 命名（见“上传 OSS 镜像”步骤注释），清单 url 按 .bin 拼装；
+              # name 字段保持 .apk 不变，客户端本地保存名与安装流程不受影响。
+              android_url="${OSS_MIRROR_BASE_URL}/releases/android/${ANDROID_VERSION}/${android_name%.apk}.bin"
+            fi
             jq -n \
               --arg version "$ANDROID_VERSION" \
               --arg min_supported "$ANDROID_MIN_SUPPORTED" \
@@ -769,6 +796,53 @@ jobs:
               --arg name "$macos_name" --arg url "$macos_url" --arg digest "$macos_digest" \
               '{version: $version, notes: ($notes | gsub("\\s+$"; "")), minSupportedVersion: $min_supported, assets: {macos: {name: $name, url: $url, digest: $digest}}}' \
               > dist/macos/private-domain-drive-update.json
+          fi
+
+      - name: 上传 OSS 更新清单
+        # 更新发现链路仅作加速：上传或匿名探测未通过时删除 OSS 旧指针，
+        # 客户端探测失败后回退 GitHub 链路，不标记流水线失败。
+        continue-on-error: true
+        env:
+          PUBLISH_ANDROID: ${{ needs.prepare.outputs.publish_android }}
+          PUBLISH_MACOS: ${{ needs.prepare.outputs.publish_macos }}
+        run: |
+          set -uo pipefail
+
+          ossutil_bin="${OSSUTIL_BIN:-}"
+          if [[ -z "$ossutil_bin" || ! -x "$ossutil_bin" ]]; then
+            echo "ossutil 不可用（凭证缺失或安装失败），跳过更新清单上传"
+            exit 0
+          fi
+
+          ossutil_config="$RUNNER_TEMP/.ossutilconfig"
+
+          # 上传失败或探测未通过时删除旧指针：客户端据此探测到不可用并回退
+          # GitHub 链路，避免读到过期清单假报“已是最新”。
+          publish_manifest() {
+            local platform="$1"
+            local local_file="dist/${platform}/private-domain-drive-update.json"
+            local object="oss://private-domain-drive/releases/${platform}/update.json"
+            local url="${OSS_MIRROR_BASE_URL}/releases/${platform}/update.json"
+            local code=""
+            if [[ -f "$local_file" ]] && "$ossutil_bin" cp "$local_file" "$object" \
+                 -c "$ossutil_config" --acl public-read \
+                 --meta "Content-Type:application/json" --force; then
+              code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "$url" || true)
+            fi
+            echo "${platform} 更新清单匿名探测：$url -> ${code:-无}"
+            if [[ "$code" == "200" ]]; then
+              echo "${platform} 更新清单已上传：$object"
+            else
+              echo "${platform} 更新清单上传或探测未通过，删除 OSS 旧指针以触发客户端回退 GitHub" >&2
+              "$ossutil_bin" rm "$object" -c "$ossutil_config" --force || true
+            fi
+          }
+
+          if [[ "$PUBLISH_ANDROID" == "true" ]]; then
+            publish_manifest android
+          fi
+          if [[ "$PUBLISH_MACOS" == "true" ]]; then
+            publish_manifest macos
           fi
 
       - name: 创建 Android Release
@@ -934,4 +1008,26 @@ jobs:
             echo "appcast 已推送到 appcast 分支"
           else
             echo "appcast.xml 无变化，跳过推送"
+          fi
+
+          # 同步上传 OSS 固定路径，供新客户端优先拉取；上传或探测未通过时
+          # 删除旧对象，客户端探测失败后回退 GitHub feed（同内容、持续维护）。
+          ossutil_bin="${OSSUTIL_BIN:-}"
+          if [[ -z "$ossutil_bin" || ! -x "$ossutil_bin" ]]; then
+            echo "ossutil 不可用（凭证缺失或安装失败），跳过 OSS appcast 上传"
+            exit 0
+          fi
+          ossutil_config="$RUNNER_TEMP/.ossutilconfig"
+          appcast_object="oss://private-domain-drive/releases/macos/appcast.xml"
+          appcast_url="${OSS_MIRROR_BASE_URL}/releases/macos/appcast.xml"
+          appcast_code=""
+          if "$ossutil_bin" cp appcast.xml "$appcast_object" \
+               -c "$ossutil_config" --acl public-read \
+               --meta "Content-Type:application/xml" --force; then
+            appcast_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "$appcast_url" || true)
+          fi
+          echo "OSS appcast 匿名探测：$appcast_url -> ${appcast_code:-无}"
+          if [[ "$appcast_code" != "200" ]]; then
+            echo "OSS appcast 上传或探测未通过，删除旧对象以触发客户端回退 GitHub feed" >&2
+            "$ossutil_bin" rm "$appcast_object" -c "$ossutil_config" --force || true
           fi

@@ -1,6 +1,8 @@
 import 'package:auto_updater/auto_updater.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:private_domain_drive_client/features/settings/infrastructure/macos_sparkle_updater.dart';
 
 class _FakeSparkleApi implements SparkleUpdaterApi {
@@ -46,6 +48,20 @@ AppcastItem _item(String version) => AppcastItem(
       channel: '',
     );
 
+MacosSparkleUpdater _updater(_FakeSparkleApi api) =>
+    MacosSparkleUpdater(api: api, probeClient: _probeClient());
+
+/// 默认探测结果为 404，保持既有用例走 GitHub 回退 feed。
+http.Client _probeClient({int statusCode = 404, List<Uri>? requestLog}) {
+  return MockClient((request) async {
+    requestLog?.add(request.url);
+    return http.Response('', statusCode);
+  });
+}
+
+http.Client _failingProbeClient() =>
+    MockClient((request) async => throw http.ClientException('连接失败'));
+
 void main() {
   tearDown(() {
     debugDefaultTargetPlatformOverride = null;
@@ -64,7 +80,7 @@ void main() {
 
   test('初始化设置 feed 地址并注册事件监听', () async {
     final api = _FakeSparkleApi();
-    final updater = MacosSparkleUpdater(api: api);
+    final updater = _updater(api);
 
     await updater.initialize();
 
@@ -72,9 +88,35 @@ void main() {
     expect(api.listener, same(updater));
   });
 
+  test('OSS appcast 探测通过时使用 OSS feed', () async {
+    final api = _FakeSparkleApi();
+    final requestLog = <Uri>[];
+    final updater = MacosSparkleUpdater(
+      api: api,
+      probeClient: _probeClient(statusCode: 200, requestLog: requestLog),
+    );
+
+    await updater.initialize();
+
+    expect(api.feedUrl, MacosSparkleUpdater.ossFeedUrl);
+    expect(requestLog.single.path, '/releases/macos/appcast.xml');
+  });
+
+  test('OSS appcast 探测异常时回退默认 feed', () async {
+    final api = _FakeSparkleApi();
+    final updater = MacosSparkleUpdater(
+      api: api,
+      probeClient: _failingProbeClient(),
+    );
+
+    await updater.initialize();
+
+    expect(api.feedUrl, MacosSparkleUpdater.defaultFeedUrl);
+  });
+
   test('手动检查进入检查中状态并以前台方式发起', () async {
     final api = _FakeSparkleApi();
-    final updater = MacosSparkleUpdater(api: api);
+    final updater = _updater(api);
 
     await updater.checkManually();
 
@@ -84,7 +126,7 @@ void main() {
 
   test('启动静默检查以后台方式发起', () async {
     final api = _FakeSparkleApi();
-    final updater = MacosSparkleUpdater(api: api);
+    final updater = _updater(api);
 
     await updater.startupCheck();
 
@@ -93,7 +135,7 @@ void main() {
 
   test('手动检查失败进入失败状态，游离的错误事件被忽略', () async {
     final api = _FakeSparkleApi();
-    final updater = MacosSparkleUpdater(api: api);
+    final updater = _updater(api);
     final statuses = <SparkleUpdateStatus>[];
     updater.statusStream.listen(statuses.add);
 
@@ -112,7 +154,7 @@ void main() {
 
   test('启动静默检查失败不打扰用户，回到空闲状态', () async {
     final api = _FakeSparkleApi();
-    final updater = MacosSparkleUpdater(api: api);
+    final updater = _updater(api);
     final statuses = <SparkleUpdateStatus>[];
     updater.statusStream.listen(statuses.add);
 
@@ -126,7 +168,7 @@ void main() {
 
   test('无进行中检查时收到的错误事件被忽略', () async {
     final api = _FakeSparkleApi();
-    final updater = MacosSparkleUpdater(api: api);
+    final updater = _updater(api);
     final statuses = <SparkleUpdateStatus>[];
     updater.statusStream.listen(statuses.add);
 
@@ -139,7 +181,7 @@ void main() {
 
   test('已是最新版本进入 upToDate 状态', () async {
     final api = _FakeSparkleApi();
-    final updater = MacosSparkleUpdater(api: api);
+    final updater = _updater(api);
 
     await updater.checkManually();
     updater.onUpdaterUpdateNotAvailable(null);
@@ -149,7 +191,7 @@ void main() {
 
   test('发现新版本记录版本号并回到空闲状态交由原生弹窗接管', () async {
     final api = _FakeSparkleApi();
-    final updater = MacosSparkleUpdater(api: api);
+    final updater = _updater(api);
 
     await updater.checkManually();
     updater.onUpdaterUpdateAvailable(_item('1.2.4'));
@@ -160,7 +202,7 @@ void main() {
 
   test('检查失败后重复错误事件不重复广播', () async {
     final api = _FakeSparkleApi();
-    final updater = MacosSparkleUpdater(api: api);
+    final updater = _updater(api);
     final statuses = <SparkleUpdateStatus>[];
     updater.statusStream.listen(statuses.add);
 

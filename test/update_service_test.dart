@@ -13,17 +13,35 @@ class _FixedVersionReader implements AppVersionReader {
   final String version;
 
   @override
-  Future<AppVersion> read() async => AppVersion(name: version, buildNumber: '1');
+  Future<AppVersion> read() async =>
+      AppVersion(name: version, buildNumber: '1');
 }
 
-const _releasesPath = '/repos/littlefisher666/private-domain-drive-client/releases';
+const _releasesPath =
+    '/repos/littlefisher666/private-domain-drive-client/releases';
+const _ossHost = 'private-domain-drive.oss-cn-hangzhou.aliyuncs.com';
+const _ossFeedPath = '/releases/android/update.json';
 
 GithubReleaseClient _clientWith({
   required List<Map<String, dynamic>> releases,
   Map<String, dynamic>? manifest,
+  Map<String, dynamic>? ossManifest,
+  int ossStatus = 404,
+  bool ossThrows = false,
+  List<Uri>? requestLog,
 }) {
   return GithubReleaseClient(
     client: MockClient((request) async {
+      requestLog?.add(request.url);
+      if (request.url.host == _ossHost) {
+        if (ossThrows) throw http.ClientException('连接失败');
+        if (ossManifest == null) return http.Response('not found', ossStatus);
+        return http.Response.bytes(
+          utf8.encode(jsonEncode(ossManifest)),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }
       if (request.url.path == _releasesPath) {
         return http.Response.bytes(
           utf8.encode(jsonEncode(releases)),
@@ -45,10 +63,21 @@ UpdateService _serviceWith({
   required String currentVersion,
   required List<Map<String, dynamic>> releases,
   Map<String, dynamic>? manifest,
+  Map<String, dynamic>? ossManifest,
+  int ossStatus = 404,
+  bool ossThrows = false,
+  List<Uri>? requestLog,
 }) {
   return UpdateService(
     versionReader: _FixedVersionReader(currentVersion),
-    releaseClient: _clientWith(releases: releases, manifest: manifest),
+    releaseClient: _clientWith(
+      releases: releases,
+      manifest: manifest,
+      ossManifest: ossManifest,
+      ossStatus: ossStatus,
+      ossThrows: ossThrows,
+      requestLog: requestLog,
+    ),
   );
 }
 
@@ -488,5 +517,105 @@ void main() {
     expect(result.minSupportedVersion, isNull);
     expect(result.requiresForcedUpgrade, isFalse);
     expect(result.hasUpdate, isTrue);
+  });
+
+  test('OSS 清单命中时优先采用且不再请求 GitHub', () async {
+    final requestLog = <Uri>[];
+    final service = _serviceWith(
+      currentVersion: '1.2.3',
+      releases: const [],
+      ossManifest: {
+        'version': '1.3.0',
+        'notes': 'OSS 优先',
+        'assets': {
+          'android': {
+            'name': 'private-domain-drive-android-v1.3.0.apk',
+            'url': 'https://$_ossHost/releases/android/'
+                'private-domain-drive-android-v1.3.0.apk.bin',
+            'digest': 'sha256:abc',
+          },
+        },
+      },
+      requestLog: requestLog,
+    );
+
+    final result = await service.checkLatest();
+    expect(result.latestVersion, '1.3.0');
+    expect(result.hasUpdate, isTrue);
+    expect(result.availableUpdate, isNotNull);
+    expect(result.availableUpdate!.asset.digest, 'sha256:abc');
+    // 仅一次 OSS 清单请求，未触达 GitHub Releases 列表。
+    expect(requestLog, hasLength(1));
+    expect(requestLog.single.host, _ossHost);
+    expect(requestLog.single.path, _ossFeedPath);
+  });
+
+  test('OSS 清单非 200 时回退 GitHub 链路', () async {
+    final service = _serviceWith(
+      currentVersion: '1.2.3',
+      releases: [_apiRelease(tagName: 'android/v1.2.4')],
+      manifest: {
+        'version': '1.2.4',
+        'notes': '',
+        'assets': {
+          'android': {
+            'name': 'private-domain-drive-android-v1.2.4.apk',
+            'url': 'https://example.com/android.apk',
+            'digest': 'sha256:abc',
+          },
+        },
+      },
+      ossStatus: 500,
+    );
+
+    final result = await service.checkLatest();
+    expect(result.latestVersion, '1.2.4');
+    expect(result.availableUpdate, isNotNull);
+  });
+
+  test('OSS 清单请求异常时回退 GitHub 链路', () async {
+    final service = _serviceWith(
+      currentVersion: '1.2.3',
+      releases: [_apiRelease(tagName: 'android/v1.2.4')],
+      manifest: {
+        'version': '1.2.4',
+        'notes': '',
+        'assets': {
+          'android': {
+            'name': 'private-domain-drive-android-v1.2.4.apk',
+            'url': 'https://example.com/android.apk',
+            'digest': 'sha256:abc',
+          },
+        },
+      },
+      ossThrows: true,
+    );
+
+    final result = await service.checkLatest();
+    expect(result.latestVersion, '1.2.4');
+    expect(result.availableUpdate, isNotNull);
+  });
+
+  test('OSS 清单解析失败时回退 GitHub 链路', () async {
+    final service = _serviceWith(
+      currentVersion: '1.2.3',
+      releases: [_apiRelease(tagName: 'android/v1.2.4')],
+      manifest: {
+        'version': '1.2.4',
+        'notes': '',
+        'assets': {
+          'android': {
+            'name': 'private-domain-drive-android-v1.2.4.apk',
+            'url': 'https://example.com/android.apk',
+            'digest': 'sha256:abc',
+          },
+        },
+      },
+      ossManifest: const {'version': '1.3.0', 'assets': 'oops'},
+    );
+
+    final result = await service.checkLatest();
+    expect(result.latestVersion, '1.2.4');
+    expect(result.availableUpdate, isNotNull);
   });
 }
