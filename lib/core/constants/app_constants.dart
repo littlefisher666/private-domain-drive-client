@@ -25,4 +25,10 @@ class AppConstants {
   /// 关闭启动时的自动更新检查（Sparkle 静默检查）；设置页手动检查不受影响。
   static const disableStartupUpdateCheck =
       bool.fromEnvironment('DISABLE_STARTUP_UPDATE_CHECK');
+
+  /// OSS 发布目录公开直链前缀（`releases/` 前缀公开读），与发布流水线
+  /// `OSS_MIRROR_BASE_URL` 保持一致。更新发现链路优先读取其固定路径
+  /// 清单/appcast，不可用时回退 GitHub 链路。
+  static const ossMirrorBaseUrl =
+      'https://private-domain-drive.oss-cn-hangzhou.aliyuncs.com';
 }
