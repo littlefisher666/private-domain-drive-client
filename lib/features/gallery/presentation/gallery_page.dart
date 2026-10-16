@@ -3,51 +3,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../app/router/route_names.dart';
-import '../../../core/utils/file_size_formatter.dart';
-import '../../../shared/widgets/app_feedback.dart';
 import '../application/gallery_controller.dart';
 import '../domain/photo_entry.dart';
 import '../domain/timeline_group.dart';
 import 'gallery_scope.dart';
 import 'gallery_viewer_page.dart';
-
-/// 确认后执行批量删除；非阻塞反馈，删除期间通过防重入避免重复提交。
-Future<void> confirmAndDeleteEntries(
-  BuildContext context,
-  GalleryController controller,
-  List<PhotoEntry> entries,
-) async {
-  if (entries.isEmpty) return;
-  if (controller.deleteBusy) {
-    AppFeedback.showSnack(context, '正在删除中，请稍候…');
-    return;
-  }
-  final confirmed = await showDialog<bool>(
-    context: context,
-    builder: (dialogContext) => AlertDialog(
-      title: const Text('删除所选照片'),
-      content: Text('将 ${entries.length} 张照片和视频移入回收站？'),
-      actions: <Widget>[
-        TextButton(
-          onPressed: () => Navigator.of(dialogContext).pop(false),
-          child: const Text('取消'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(dialogContext).pop(true),
-          child: const Text('删除'),
-        ),
-      ],
-    ),
-  );
-  if (confirmed != true || !context.mounted) return;
-  // 立即清空多选，避免删除进行中同一批条目被再次提交。
-  controller.clearSelection();
-  AppFeedback.showSnack(context, '正在移入回收站 ${entries.length} 项…');
-  await controller.deleteEntries(entries);
-  if (context.mounted) {
-    AppFeedback.showSnack(context, '已移入回收站');
-  }
-}
+import 'widgets/gallery_page_desktop_selection_bar.dart';
+import 'widgets/gallery_page_desktop_shortcuts.dart';
+import 'widgets/gallery_page_desktop_status_line.dart';
+import 'widgets/gallery_page_error_view.dart';
+import 'widgets/gallery_page_group_header.dart';
+import 'widgets/gallery_page_mobile_app_bar.dart';
+import 'widgets/gallery_page_mobile_batch_bar.dart';
+import 'widgets/gallery_page_photo_cell.dart';
+import 'widgets/gallery_page_scan_progress_view.dart';
 
 /// 相册时间线页：双端共用实现，桌面端按月分组并支持框选/快捷键，
 /// 移动端按天分组并支持长按多选。
@@ -97,10 +66,10 @@ class _GalleryPageState extends State<GalleryPage> {
         content = const Center(child: CircularProgressIndicator());
         break;
       case GalleryPhase.scanning:
-        content = _ScanProgressView(controller: controller);
+        content = GalleryPageScanProgressView(controller: controller);
         break;
       case GalleryPhase.error:
-        content = _ErrorView(
+        content = GalleryPageErrorView(
           message: controller.errorMessage ?? '相册加载失败',
           onRetry: () {
             _loadStarted = false;
@@ -117,11 +86,11 @@ class _GalleryPageState extends State<GalleryPage> {
     return Scaffold(
       backgroundColor: widget.desktopChrome ? scheme.surface : null,
       appBar:
-          widget.desktopChrome ? null : _MobileAppBar(controller: controller),
+          widget.desktopChrome ? null : GalleryPageMobileAppBar(controller: controller),
       body: Column(
         children: <Widget>[
           if (widget.desktopChrome)
-            _DesktopSelectionBar(controller: controller),
+            GalleryPageDesktopSelectionBar(controller: controller),
           if (controller.phase == GalleryPhase.repairing)
             Material(
               color: scheme.tertiaryContainer,
@@ -152,11 +121,11 @@ class _GalleryPageState extends State<GalleryPage> {
               ),
             ),
           Expanded(child: content),
-          if (widget.desktopChrome) _DesktopStatusLine(controller: controller),
+          if (widget.desktopChrome) GalleryPageDesktopStatusLine(controller: controller),
         ],
       ),
       bottomNavigationBar: !widget.desktopChrome && controller.isSelecting
-          ? _MobileBatchBar(controller: controller)
+          ? GalleryPageMobileBatchBar(controller: controller)
           : null,
     );
   }
@@ -190,7 +159,7 @@ class _GalleryPageState extends State<GalleryPage> {
 
     final items = <Widget>[
       for (final group in groups) ...<Widget>[
-        _GroupHeader(
+        GalleryPageGroupHeader(
           group: group,
           collapsed: _collapsedGroups.contains(group.key),
           onToggle: () => setState(() {
@@ -213,7 +182,7 @@ class _GalleryPageState extends State<GalleryPage> {
             itemCount: group.entries.length,
             itemBuilder: (context, index) {
               final entry = group.entries[index];
-              return _PhotoCell(
+              return GalleryPagePhotoCell(
                 controller: controller,
                 entry: entry,
                 cellKey: _cellKeys.putIfAbsent(entry.key, GlobalKey.new),
@@ -270,7 +239,7 @@ class _GalleryPageState extends State<GalleryPage> {
                 setState(() => _selectionRect = null);
               }
             },
-            child: _DesktopShortcuts(
+            child: GalleryPageDesktopShortcuts(
               controller: controller,
               child: list,
             ),
@@ -343,688 +312,6 @@ class _GalleryPageState extends State<GalleryPage> {
     Navigator.of(context).pushNamed(
       RouteNames.galleryViewer,
       arguments: GalleryViewerArguments(initialKey: entry.key),
-    );
-  }
-}
-
-/// 桌面端快捷键：⌘A 全选、⌘C 复制、⌘V 粘贴上传（界面不展示快捷键说明）。
-class _DesktopShortcuts extends StatelessWidget {
-  const _DesktopShortcuts({required this.controller, required this.child});
-
-  final GalleryController controller;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return CallbackShortcuts(
-      bindings: <ShortcutActivator, VoidCallback>{
-        const SingleActivator(LogicalKeyboardKey.keyA, meta: true):
-            controller.selectAll,
-        const SingleActivator(LogicalKeyboardKey.keyC, meta: true): () {
-          _copy(context);
-        },
-        const SingleActivator(LogicalKeyboardKey.keyV, meta: true):
-            controller.pasteUpload,
-      },
-      child: Focus(
-        autofocus: true,
-        child: child,
-      ),
-    );
-  }
-
-  Future<void> _copy(BuildContext context) async {
-    final selected = controller.selectedKeys
-        .map(controller.entryOfKey)
-        .whereType<PhotoEntry>()
-        .toList();
-    if (selected.isEmpty) return;
-    final error = await controller.copyToClipboard(selected);
-    if (context.mounted) {
-      AppFeedback.showSnack(context, error ?? '已复制 ${selected.length} 张原图到剪贴板');
-    }
-  }
-}
-
-class _GroupHeader extends StatelessWidget {
-  const _GroupHeader({
-    required this.group,
-    required this.collapsed,
-    required this.onToggle,
-  });
-
-  final TimelineGroup group;
-  final bool collapsed;
-  final VoidCallback onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return InkWell(
-      onTap: onToggle,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
-          children: <Widget>[
-            Text(
-              group.label,
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              '${group.entries.length} 张',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const Spacer(),
-            AnimatedRotation(
-              turns: collapsed ? -0.25 : 0,
-              duration: const Duration(milliseconds: 150),
-              child: Icon(
-                Icons.expand_more,
-                size: 20,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PhotoCell extends StatefulWidget {
-  const _PhotoCell({
-    required this.controller,
-    required this.entry,
-    required this.cellKey,
-    required this.desktop,
-    required this.onTap,
-    this.onLongPress,
-  });
-
-  final GalleryController controller;
-  final PhotoEntry entry;
-  final GlobalKey cellKey;
-  final bool desktop;
-  final VoidCallback onTap;
-  final VoidCallback? onLongPress;
-
-  @override
-  State<_PhotoCell> createState() => _PhotoCellState();
-}
-
-class _PhotoCellState extends State<_PhotoCell> {
-  bool _hovering = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return KeyedSubtree(
-      key: widget.cellKey,
-      child: MouseRegion(
-        onEnter:
-            widget.desktop ? (_) => setState(() => _hovering = true) : null,
-        onExit:
-            widget.desktop ? (_) => setState(() => _hovering = false) : null,
-        child: GestureDetector(
-          onTap: widget.onTap,
-          onLongPress: widget.onLongPress,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(widget.desktop ? 6 : 2),
-            child: Stack(
-              fit: StackFit.expand,
-              children: <Widget>[
-                ColoredBox(
-                  color: scheme.surfaceContainerHighest,
-                  child: _ThumbnailView(
-                      controller: widget.controller, entry: widget.entry),
-                ),
-                // 云朵角标：有角标 = 原图未缓存本机。
-                ValueListenableBuilder<Set<String>>(
-                  valueListenable: widget.controller.cachedKeysListenable,
-                  builder: (context, cached, _) {
-                    if (cached.contains(widget.entry.key)) {
-                      return const SizedBox.shrink();
-                    }
-                    return Positioned(
-                      left: 6,
-                      bottom: 6,
-                      child: _CloudBadge(),
-                    );
-                  },
-                ),
-                if (widget.entry.mediaType == PhotoMediaType.video)
-                  Positioned(
-                    right: 6,
-                    bottom: 6,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 5, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.55),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: const Icon(
-                        Icons.videocam,
-                        size: 12,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                ValueListenableBuilder<Set<String>>(
-                  valueListenable: widget.controller.selectionListenable,
-                  builder: (context, selected, _) {
-                    final isSelected = selected.contains(widget.entry.key);
-                    final selecting = selected.isNotEmpty;
-                    if (!isSelected &&
-                        !selecting &&
-                        !(_hovering && widget.desktop)) {
-                      return const SizedBox.shrink();
-                    }
-                    return Positioned(
-                      top: 6,
-                      left: 6,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 120),
-                        width: 20,
-                        height: 20,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: isSelected
-                              ? scheme.primary
-                              : Colors.black.withValues(alpha: 0.35),
-                          border: isSelected
-                              ? null
-                              : Border.all(color: Colors.white, width: 1.5),
-                        ),
-                        child: isSelected
-                            ? const Icon(Icons.check,
-                                size: 14, color: Colors.white)
-                            : null,
-                      ),
-                    );
-                  },
-                ),
-                ValueListenableBuilder<Set<String>>(
-                  valueListenable: widget.controller.selectionListenable,
-                  builder: (context, selected, _) {
-                    return IgnorePointer(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          border: selected.contains(widget.entry.key)
-                              ? Border.all(
-                                  color: scheme.primary,
-                                  width: 2.5,
-                                )
-                              : null,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ThumbnailView extends StatefulWidget {
-  const _ThumbnailView({required this.controller, required this.entry});
-
-  final GalleryController controller;
-  final PhotoEntry entry;
-
-  @override
-  State<_ThumbnailView> createState() => _ThumbnailViewState();
-}
-
-class _ThumbnailViewState extends State<_ThumbnailView> {
-  late Future<List<int>?> _future;
-  String? _fetchedThumbKey;
-
-  @override
-  void initState() {
-    super.initState();
-    _startFetch();
-  }
-
-  void _startFetch() {
-    _fetchedThumbKey = widget.entry.thumbKey;
-    _future = widget.controller.loadGridThumbnail(widget.entry);
-  }
-
-  @override
-  void didUpdateWidget(covariant _ThumbnailView oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // key 或缩略图映射变化都重载：存量缩略图补齐完成后，同一 key 的
-    // 条目会从"无映射"变为"有映射"，需要重试加载。
-    if (oldWidget.entry.key != widget.entry.key ||
-        widget.entry.thumbKey != _fetchedThumbKey) {
-      _startFetch();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isVideo = widget.entry.mediaType == PhotoMediaType.video;
-    return FutureBuilder<List<int>?>(
-      future: _future,
-      builder: (context, snapshot) {
-        final bytes = snapshot.data;
-        if (bytes != null && bytes.isNotEmpty) {
-          return Image.memory(
-            Uint8List.fromList(bytes),
-            fit: BoxFit.cover,
-            gaplessPlayback: true,
-          );
-        }
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const SizedBox.shrink();
-        }
-        // 无缩略图（含无截帧映射的视频）展示占位图。
-        return Center(
-          child: Icon(
-            isVideo ? Icons.videocam_outlined : Icons.image_outlined,
-            size: 32,
-            color: Theme.of(context).colorScheme.outline,
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _CloudBadge extends StatelessWidget {
-  const _CloudBadge();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: Colors.black.withValues(alpha: 0.55),
-      ),
-      child: const Icon(
-        Icons.cloud_outlined,
-        size: 13,
-        color: Colors.white,
-      ),
-    );
-  }
-}
-
-class _MobileAppBar extends StatelessWidget implements PreferredSizeWidget {
-  const _MobileAppBar({required this.controller});
-
-  final GalleryController controller;
-
-  @override
-  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<Set<String>>(
-      valueListenable: controller.selectionListenable,
-      builder: (context, selected, _) {
-        final selecting = selected.isNotEmpty;
-        return AppBar(
-          leading: selecting
-              ? IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: controller.clearSelection,
-                )
-              : null,
-          title: Text(selecting ? '已选择 ${selected.length} 张' : '相册'),
-          actions: <Widget>[
-            if (selecting)
-              IconButton(
-                tooltip: '全选',
-                icon: const Icon(Icons.select_all),
-                onPressed: controller.selectAll,
-              )
-            else
-              PopupMenuButton<String>(
-                tooltip: '更多操作',
-                onSelected: (value) {
-                  if (value == 'rebuild-index' &&
-                      controller.phase != GalleryPhase.scanning) {
-                    AppFeedback.showSnack(context, '正在重建照片索引…');
-                    controller.rebuildIndex();
-                  }
-                },
-                itemBuilder: (context) => <PopupMenuEntry<String>>[
-                  const PopupMenuItem<String>(
-                    value: 'rebuild-index',
-                    child: Text('重建照片索引'),
-                  ),
-                ],
-              ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _MobileBatchBar extends StatelessWidget {
-  const _MobileBatchBar({required this.controller});
-
-  final GalleryController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final selected = controller.selectedKeys
-        .map(controller.entryOfKey)
-        .whereType<PhotoEntry>()
-        .toList();
-    return SafeArea(
-      top: false,
-      child: Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface,
-          border: Border(
-            top:
-                BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: <Widget>[
-            _BatchAction(
-              icon: Icons.download_outlined,
-              label: '下载原图',
-              onTap: () => controller.downloadOriginals(selected),
-            ),
-            _BatchAction(
-              icon: Icons.share_outlined,
-              label: '分享',
-              onTap: () => _share(context, selected),
-            ),
-            _BatchAction(
-              icon: Icons.delete_outline,
-              label: '删除',
-              danger: true,
-              onTap: () => _delete(context, selected),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _share(BuildContext context, List<PhotoEntry> selected) async {
-    if (selected.isEmpty) return;
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(selected.any((entry) => !controller.isCached(entry.key))
-            ? '正在下载原图，完成后自动分享…'
-            : '正在准备分享…'),
-      ),
-    );
-    final error = await controller.shareEntries(selected);
-    if (error != null) {
-      messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(SnackBar(content: Text(error)));
-    }
-  }
-
-  Future<void> _delete(BuildContext context, List<PhotoEntry> selected) async {
-    await confirmAndDeleteEntries(context, controller, selected);
-  }
-}
-
-class _BatchAction extends StatelessWidget {
-  const _BatchAction({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.danger = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  final bool danger;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = danger ? Theme.of(context).colorScheme.error : null;
-    return InkWell(
-      borderRadius: BorderRadius.circular(10),
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Icon(icon, size: 22, color: color),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: color,
-                  ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _DesktopSelectionBar extends StatelessWidget {
-  const _DesktopSelectionBar({required this.controller});
-
-  final GalleryController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<Set<String>>(
-      valueListenable: controller.selectionListenable,
-      builder: (context, selected, _) {
-        if (selected.isEmpty) return const SizedBox.shrink();
-        final theme = Theme.of(context);
-        final scheme = theme.colorScheme;
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
-            border: Border(
-              bottom: BorderSide(color: scheme.outlineVariant),
-            ),
-          ),
-          child: Row(
-            children: <Widget>[
-              Text(
-                '已选择 ${selected.length} 张',
-                style: theme.textTheme.titleSmall,
-              ),
-              const Spacer(),
-              TextButton(
-                onPressed: controller.selectAll,
-                child: const Text('全选'),
-              ),
-              ValueListenableBuilder<bool>(
-                valueListenable: controller.clipboardCopiedListenable,
-                builder: (context, copied, _) => TextButton(
-                  onPressed: () async {
-                    final entries = selected
-                        .map(controller.entryOfKey)
-                        .whereType<PhotoEntry>();
-                    final error = await controller.copyToClipboard(entries);
-                    if (context.mounted) {
-                      AppFeedback.showSnack(
-                          context, error ?? '已复制 ${entries.length} 张原图到剪贴板');
-                    }
-                  },
-                  child: Text(copied ? '已复制' : '复制'),
-                ),
-              ),
-              TextButton(
-                onPressed: () {
-                  controller.downloadOriginals(selected
-                      .map(controller.entryOfKey)
-                      .whereType<PhotoEntry>());
-                },
-                child: const Text('下载原图'),
-              ),
-              TextButton(
-                onPressed: () {
-                  confirmAndDeleteEntries(
-                    context,
-                    controller,
-                    selected
-                        .map(controller.entryOfKey)
-                        .whereType<PhotoEntry>()
-                        .toList(),
-                  );
-                },
-                style: TextButton.styleFrom(
-                  foregroundColor: scheme.error,
-                ),
-                child: const Text('删除'),
-              ),
-              TextButton(
-                onPressed: controller.clearSelection,
-                child: const Text('取消'),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _DesktopStatusLine extends StatelessWidget {
-  const _DesktopStatusLine({required this.controller});
-
-  final GalleryController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
-        border: Border(
-          top: BorderSide(color: theme.colorScheme.outlineVariant),
-        ),
-      ),
-      child: ValueListenableBuilder<Set<String>>(
-        valueListenable: controller.cachedKeysListenable,
-        builder: (context, cached, _) {
-          final entries = controller.entries;
-          final totalBytes =
-              entries.fold<int>(0, (sum, entry) => sum + entry.size);
-          final uncached = entries.where((e) => !cached.contains(e.key)).length;
-          return Row(
-            children: <Widget>[
-              Expanded(
-                child: Text(
-                  '共 ${entries.length} 张照片和视频 · 已用空间 '
-                  '${FileSizeFormatter.format(totalBytes)}'
-                  '${uncached > 0 ? ' · 其中 $uncached 张原图未缓存到本机' : ''}',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-              TextButton(
-                onPressed: controller.phase == GalleryPhase.scanning
-                    ? null
-                    : () {
-                        AppFeedback.showSnack(context, '正在重建照片索引…');
-                        controller.rebuildIndex();
-                      },
-                child: const Text('重建索引'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _ScanProgressView extends StatelessWidget {
-  const _ScanProgressView({required this.controller});
-
-  final GalleryController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Center(
-      child: ValueListenableBuilder<(int, int)?>(
-        valueListenable: controller.scanProgressListenable,
-        builder: (context, progress, _) {
-          final total = progress?.$2 ?? 0;
-          final processed = progress?.$1 ?? 0;
-          final ratio = total > 0 ? processed / total : 0.0;
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              SizedBox(
-                width: 48,
-                height: 48,
-                child: total > 0
-                    ? CircularProgressIndicator(value: ratio)
-                    : const CircularProgressIndicator(),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                '正在建立照片索引…',
-                style: theme.textTheme.titleMedium,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                total > 0 ? '已处理 $processed / $total 张' : '正在扫描网盘中的照片和视频',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _ErrorView extends StatelessWidget {
-  const _ErrorView({required this.message, required this.onRetry});
-
-  final String message;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Icon(Icons.cloud_off_outlined,
-              size: 56, color: Theme.of(context).colorScheme.outline),
-          const SizedBox(height: 12),
-          Text(message, style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 12),
-          OutlinedButton(onPressed: onRetry, child: const Text('重试')),
-        ],
-      ),
     );
   }
 }
