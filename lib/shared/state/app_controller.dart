@@ -1,7 +1,5 @@
-import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../features/auth/application/session_controller.dart';
 import '../../features/auth/domain/login_result.dart';
@@ -28,11 +26,11 @@ import '../../features/workspace/domain/delete_models.dart';
 import '../../features/workspace/domain/move_models.dart';
 import '../../features/workspace/domain/move_task_entry.dart';
 import '../../features/workspace/domain/recycle_bin_entry.dart';
-import '../../features/workspace/infrastructure/alias_repository.dart';
 import '../../features/workspace/infrastructure/oss_client.dart';
 import '../gallery_index_hooks.dart';
 import '../path_utils.dart' as path_utils;
 import '../transfer_keepalive.dart';
+import 'app_services.dart';
 
 // 迁移期兼容：DirectorySizeState 改由 WorkspaceController 定义，
 // 经本文件继续对外可见，避免调用方在拆除门面前感知类型移动。
@@ -60,66 +58,44 @@ export '../../features/workspace/domain/delete_models.dart'
     show BatchDeletePreview, BatchDeleteSummary, DeleteProgress;
 
 /// 应用状态控制器。会话与权限来自已部署的 FC，不在生产路径伪造身份。
+///
+/// 门面层：全部控制器装配与生命周期收敛在 [AppServices]（见
+/// `app_services.dart`），本类仅保留原 API 并逐成员委托，拆除门面前的
+/// 过渡层。
 class AppController extends ChangeNotifier {
-  AppController(
-      {required SessionRepository sessionRepository,
-      OssClient? ossClient,
-      SavedCredentialsStore? savedCredentialsStore,
-      UploadStaging? uploadStaging,
-      TransferKeepaliveService? transferKeepalive,
-      UpdateService? updateService,
-      bool? disableStartupUpdateCheck})
-      : _ossClient = ossClient ?? OssClient() {
-    _sessionController = SessionController(
-      sessionRepository: sessionRepository,
-      ossClient: _ossClient,
-      savedCredentialsStore: savedCredentialsStore,
-    )
-      ..beforeSessionCleared = _handleBeforeSessionCleared
-      ..onSessionChanged = _handleSessionChanged
-      ..addListener(notifyListeners);
-    _ossClient.onCredentialExpired = _sessionController.handleCredentialExpired;
-    _workspaceController = WorkspaceController(
-      sessionController: _sessionController,
-      ossClient: _ossClient,
-    )..addListener(notifyListeners);
-    _transferQueue = TransferQueue(
-      transferKeepalive: transferKeepalive ?? createTransferKeepaliveService(),
-    );
-    _transferController = TransferController(
-      sessionController: _sessionController,
-      workspaceController: _workspaceController,
-      transferQueue: _transferQueue,
-      ossClient: _ossClient,
-      uploadStaging: uploadStaging,
-    )..addListener(notifyListeners);
-    _shareImportController = ShareImportController(
-      sessionController: _sessionController,
-      workspaceController: _workspaceController,
-      transferController: _transferController,
-    )..addListener(notifyListeners);
-    _moveController = MoveController(
-      sessionController: _sessionController,
-      workspaceController: _workspaceController,
-      ossClient: _ossClient,
-    )..addListener(notifyListeners);
-    _recycleBinController = RecycleBinController(
-      sessionController: _sessionController,
-      workspaceController: _workspaceController,
-      ossClient: _ossClient,
-    )..addListener(notifyListeners);
-    _aliasController = AliasController(
-      sessionController: _sessionController,
-      workspaceController: _workspaceController,
-      aliasRepository: AliasRepository(ossClient: _ossClient),
-      ossClient: _ossClient,
-    )..addListener(notifyListeners);
-    _settingsController = SettingsController(
-      updateService: updateService,
-      disableStartupUpdateCheck: disableStartupUpdateCheck,
-    )..addListener(notifyListeners);
+  AppController({
+    required SessionRepository sessionRepository,
+    OssClient? ossClient,
+    SavedCredentialsStore? savedCredentialsStore,
+    UploadStaging? uploadStaging,
+    TransferKeepaliveService? transferKeepalive,
+    UpdateService? updateService,
+    bool? disableStartupUpdateCheck,
+  }) : this.fromServices(AppServices(
+          sessionRepository: sessionRepository,
+          ossClient: ossClient,
+          savedCredentialsStore: savedCredentialsStore,
+          uploadStaging: uploadStaging,
+          transferKeepalive: transferKeepalive,
+          updateService: updateService,
+          disableStartupUpdateCheck: disableStartupUpdateCheck,
+        ));
+
+  /// 包装外部完成装配的 [AppServices] 聚合层（app_bootstrap 路径）。
+  AppController.fromServices(AppServices services) : _services = services {
+    _sessionController = services.sessionController;
+    _workspaceController = services.workspaceController;
+    _transferQueue = services.transferQueue;
+    _transferController = services.transferController;
+    _shareImportController = services.shareImportController;
+    _moveController = services.moveController;
+    _recycleBinController = services.recycleBinController;
+    _aliasController = services.aliasController;
+    _settingsController = services.settingsController;
+    services.addListener(notifyListeners);
   }
 
+  final AppServices _services;
   late final SessionController _sessionController;
 
   /// 工作区域状态由 [WorkspaceController] 持有；迁移期经门面继续暴露原 API。
@@ -145,10 +121,9 @@ class AppController extends ChangeNotifier {
 
   /// 设置域状态由 [SettingsController] 持有；迁移期经门面继续暴露原 API。
   late final SettingsController _settingsController;
-  final OssClient _ossClient;
 
   /// 相册等模块与主控制器共用同一个 OSS 客户端（凭证配置状态共享）。
-  OssClient get ossClient => _ossClient;
+  OssClient get ossClient => _services.ossClient;
 
   /// 更新服务与设置页、强制升级拦截页共享同一实例（检查结果口径一致）。
   UpdateService get updateService => _settingsController.updateService;
@@ -291,17 +266,7 @@ class AppController extends ChangeNotifier {
   Capabilities get capabilities =>
       _session?.capabilities ?? const Capabilities.member();
 
-  Future<void> bootstrap() async {
-    try {
-      final preferences = await SharedPreferences.getInstance();
-      _workspaceController.restorePreferences(preferences);
-      await _transferQueue.restore(preferences);
-      _settingsController.restorePreferences(preferences);
-    } catch (_) {
-      // 偏好读取失败不应阻断会话恢复。
-    }
-    await _sessionController.bootstrap();
-  }
+  Future<void> bootstrap() => _services.bootstrap();
 
   /// 更新显示模式；偏好会在下次启动时恢复。
   Future<void> setThemeMode(ThemeMode mode) =>
@@ -332,23 +297,8 @@ class AppController extends ChangeNotifier {
   /// 无需刷新；失效时由 [SessionController.handleCredentialExpired] 引导重新登录。
   Future<void> ensureSessionReady() => _sessionController.ensureSessionReady();
 
-  /// 会话清除前的跨域清理：取消运行中传输并清空队列暂停与冲突决策状态。
-  void _handleBeforeSessionCleared() {
-    for (final taskId in _transferQueue.runningTaskIds) {
-      _transferQueue.markCanceled(taskId);
-      unawaited(_ossClient.cancelTransfer(taskId));
-    }
-    _transferQueue.clearPendingTasks();
-    _transferQueue.clearPauseRequests();
-    _transferQueue.setQueuePaused(false);
-    _transferController.clearBatchConflictState();
-  }
-
-  /// 会话变更后的跨域复位：工作区域与分享导入状态分别委托各控制器。
-  void _handleSessionChanged() {
-    _workspaceController.handleSessionChanged();
-    _shareImportController.handleSessionChanged();
-  }
+  /// 会话清除前的跨域清理与会话变更后的跨域复位改由 [AppServices]
+  /// 编排（SessionController 钩子直接指向聚合层）。
 
   Future<List<FileItem>> listDirectory([String? path]) =>
       _workspaceController.listDirectory(path);
@@ -672,19 +622,7 @@ class AppController extends ChangeNotifier {
 
   @override
   void dispose() {
-    _transferQueue.markRunningCanceled();
-    for (final taskId in _transferQueue.runningTaskIds) {
-      unawaited(_ossClient.cancelTransfer(taskId));
-    }
-    _workspaceController.dispose();
-    _recycleBinController.dispose();
-    _aliasController.dispose();
-    _moveController.dispose();
-    _shareImportController.dispose();
-    _transferController.dispose();
-    _transferQueue.dispose();
-    _sessionController.dispose();
-    _settingsController.dispose();
+    _services.dispose();
     super.dispose();
   }
 }
