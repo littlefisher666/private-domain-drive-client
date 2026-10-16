@@ -22,10 +22,14 @@ import '../infrastructure/media_bridge.dart';
 import '../infrastructure/original_cache_store.dart';
 import '../infrastructure/photo_index_repository.dart';
 
+part 'gallery_controller_hooks.dart';
+
 enum GalleryPhase { idle, loading, scanning, repairing, ready, error }
 
 /// 相册模块应用层控制器：索引同步、时间线数据、原图缓存状态与批量操作。
-class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
+class GalleryController extends ChangeNotifier
+    with _GalleryControllerHooks
+    implements GalleryIndexHooks {
   GalleryController({
     required AppServices services,
     required OssClient ossClient,
@@ -47,13 +51,18 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
 
   final AppServices _services;
   final OssClient _ossClient;
+  @override
   final GalleryDatabase _database;
+  @override
   final MediaBridge _mediaBridge;
   final ClipboardBridge _clipboard;
+  @override
   late final PhotoIndexRepository _repository;
+  @override
   late final OriginalCacheStore _cacheStore;
 
   /// 会话状态只读访问：按域取自聚合层的会话控制器。
+  @override
   UserSession? get _session => _services.sessionController.session;
 
   /// 复制成功的瞬时反馈：按钮与 ⌘C 共用，2 秒后自动复位。
@@ -64,14 +73,18 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   GalleryPhase _phase = GalleryPhase.idle;
   String? _errorMessage;
   String? _accountKey;
+  @override
   List<PhotoEntry> _entries = const <PhotoEntry>[];
   String? _repairNotice;
   bool _thumbBackfillStarted = false;
 
   /// 全量扫描进行中标记与增量记账：扫描期间上传/还原、删除的 key，
   /// 由扫描写回时合并，避免整体覆盖造成条目丢失或复活。
+  @override
   bool _scanInProgress = false;
+  @override
   final Set<String> _scanPendingUpserts = <String>{};
+  @override
   final Set<String> _scanPendingDeletes = <String>{};
 
   /// 已缓存原图的对象 key 集合（角标与秒开判断依据）。
@@ -349,6 +362,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
     }
   }
 
+  @override
   Future<void> _refreshCachedKeys() async {
     try {
       final paths = await _database.readAllCachedPaths();
@@ -711,99 +725,6 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
     await _refreshCachedKeys();
     notifyListeners();
     return file;
-  }
-
-  // ---------- GalleryIndexHooks ----------
-
-  @override
-  Future<String?> prepareVideoThumbnail(
-      String objectPath, String localPath) async {
-    final bytes = await _mediaBridge.captureVideoThumbnail(localPath);
-    if (bytes == null) return null;
-    final temp = await getTemporaryDirectory();
-    final directory =
-        Directory('${temp.path}${Platform.pathSeparator}gallery_thumbs');
-    await directory.create(recursive: true);
-    final file = File(
-      '${directory.path}${Platform.pathSeparator}'
-      '${DateTime.now().microsecondsSinceEpoch}.jpg',
-    );
-    await file.writeAsBytes(bytes, flush: true);
-    return file.path;
-  }
-
-  @override
-  Future<String?> prepareImageThumbnail(
-      String objectPath, String localPath) async {
-    try {
-      final file = File(localPath);
-      if (await file.length() <= GalleryConfig.oversizedImageLimit) {
-        return null;
-      }
-      final bytes = await _mediaBridge.resizeImage(localPath);
-      if (bytes == null) return null;
-      final temp = await getTemporaryDirectory();
-      final directory =
-          Directory('${temp.path}${Platform.pathSeparator}gallery_thumbs');
-      await directory.create(recursive: true);
-      final thumb = File(
-        '${directory.path}${Platform.pathSeparator}'
-        '${DateTime.now().microsecondsSinceEpoch}.jpg',
-      );
-      await thumb.writeAsBytes(bytes, flush: true);
-      return thumb.path;
-    } catch (error) {
-      debugPrint('[gallery] 超大图缩略图生成失败（不阻塞）: $error');
-      return null;
-    }
-  }
-
-  @override
-  Future<void> onMediaUploaded({
-    required String objectPath,
-    required String localPath,
-    String? thumbLocalPath,
-  }) async {
-    final session = _session;
-    if (session == null || !session.isRemote) return;
-    final entry = await _repository.addUploadedMedia(
-      session,
-      objectPath: objectPath,
-      localPath: localPath,
-      thumbLocalPath: thumbLocalPath,
-    );
-    if (entry == null) return;
-    if (_scanInProgress) _scanPendingUpserts.add(entry.key);
-    _entries = await _database.readAllEntries();
-    notifyListeners();
-  }
-
-  @override
-  Future<void> onObjectsDeleted(Set<String> objectKeys) async {
-    final session = _session;
-    if (session == null || !session.isRemote) return;
-    if (_scanInProgress) {
-      _scanPendingDeletes
-          .addAll(objectKeys.where(_repository.isMediaKey));
-    }
-    await _repository.removeDeletedMedia(session, objectKeys);
-    await _cacheStore.removeCached(objectKeys);
-    _entries = await _database.readAllEntries();
-    await _refreshCachedKeys();
-    notifyListeners();
-  }
-
-  @override
-  Future<void> onObjectsRestored(Set<String> objectKeys) async {
-    final session = _session;
-    if (session == null || !session.isRemote) return;
-    if (_scanInProgress) {
-      _scanPendingUpserts
-          .addAll(objectKeys.where(_repository.isMediaKey));
-    }
-    await _repository.restoreMedia(session, objectKeys);
-    _entries = await _database.readAllEntries();
-    notifyListeners();
   }
 
   @override
