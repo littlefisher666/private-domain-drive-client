@@ -9,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/errors/app_error.dart';
 import '../../core/version/app_version.dart';
+import '../../features/auth/application/session_controller.dart';
+import '../../features/auth/domain/login_result.dart';
 import '../../features/auth/domain/user_session.dart';
 import '../../features/auth/infrastructure/saved_credentials_store.dart';
 import '../../features/auth/infrastructure/session_repository.dart';
@@ -81,20 +83,6 @@ class ShareImportBatchState {
   final int received;
   final bool finished;
   final int failedCount;
-}
-
-class LoginResult {
-  const LoginResult.success(this.session)
-      : ok = true,
-        message = null;
-
-  const LoginResult.failure(this.message)
-      : ok = false,
-        session = null;
-
-  final bool ok;
-  final String? message;
-  final UserSession? session;
 }
 
 class BatchDeletePreview {
@@ -231,10 +219,7 @@ class AppController extends ChangeNotifier {
       TransferKeepaliveService? transferKeepalive,
       UpdateService? updateService,
       bool? disableStartupUpdateCheck})
-      : _sessionRepository = sessionRepository,
-        _ossClient = ossClient ?? OssClient(),
-        _savedCredentialsStore =
-            savedCredentialsStore ?? SavedCredentialsStore(),
+      : _ossClient = ossClient ?? OssClient(),
         _transferKeepalive =
             transferKeepalive ?? createTransferKeepaliveService(),
         _updateService = updateService ??
@@ -253,11 +238,19 @@ class AppController extends ChangeNotifier {
             (Platform.environment.containsKey('FLUTTER_TEST')
                 ? null
                 : UploadStaging()) {
-    _ossClient.onCredentialExpired = handleCredentialExpired;
+    _sessionController = SessionController(
+      sessionRepository: sessionRepository,
+      ossClient: _ossClient,
+      savedCredentialsStore: savedCredentialsStore,
+    )
+      ..beforeSessionCleared = _handleBeforeSessionCleared
+      ..onSessionChanged = _handleSessionChanged
+      ..addListener(notifyListeners);
+    _ossClient.onCredentialExpired = _sessionController.handleCredentialExpired;
     _aliasRepository = AliasRepository(ossClient: _ossClient);
   }
 
-  final SessionRepository _sessionRepository;
+  late final SessionController _sessionController;
   final OssClient _ossClient;
   late final DirectorySummaryService _directorySummaryService =
       DirectorySummaryService(
@@ -271,7 +264,6 @@ class AppController extends ChangeNotifier {
 
   /// 更新服务与设置页、强制升级拦截页共享同一实例（检查结果口径一致）。
   UpdateService get updateService => _updateService;
-  final SavedCredentialsStore _savedCredentialsStore;
   final UploadStaging? _uploadStaging;
   final TransferKeepaliveService _transferKeepalive;
   final UpdateService _updateService;
@@ -361,7 +353,9 @@ class AppController extends ChangeNotifier {
   final ValueNotifier<DeleteProgress?> deleteStateListenable =
       ValueNotifier<DeleteProgress?>(null);
 
-  UserSession? _session;
+  /// 会话状态由 [SessionController] 持有，此处保留只读引用供内部消费。
+  UserSession? get _session => _sessionController.session;
+
   String _currentPath = rootPrefix;
 
   /// 最近一次加载的别名表；根目录浏览与别名写入时刷新。
@@ -390,7 +384,6 @@ class AppController extends ChangeNotifier {
 
   /// 待弹目录选择弹窗的批次 id 列表（防重入签名来源）。
   final List<String> _shareBatchIds = <String>[];
-  bool _bootstrapped = false;
   ThemeMode _themeMode = ThemeMode.light;
   bool _autoCheckUpdates = true;
 
@@ -423,8 +416,8 @@ class AppController extends ChangeNotifier {
   /// 保证「记录被清空到零」这类集合不变的场景也会回写一次。
   bool _uploadPendingSignatureAligned = false;
 
-  UserSession? get session => _session;
-  bool get isLoggedIn => _session != null;
+  UserSession? get session => _sessionController.session;
+  bool get isLoggedIn => _sessionController.isLoggedIn;
   String get currentPath => _currentPath;
 
   /// 当前会话的工作区根目录，供目录选择器等需要全树导航的场景使用。
@@ -520,7 +513,7 @@ class AppController extends ChangeNotifier {
   bool get isMultiSelectionMode => _isMultiSelectionMode;
   int get multiSelectedCount => multiSelectedPathsListenable.value.length;
   Set<String> get multiSelectedPaths => multiSelectedPathsListenable.value;
-  bool get bootstrapped => _bootstrapped;
+  bool get bootstrapped => _sessionController.bootstrapped;
   ThemeMode get themeMode => _themeMode;
 
   /// 是否在启动时自动检查更新（仅 macOS Sparkle 路径消费）。
@@ -599,19 +592,7 @@ class AppController extends ChangeNotifier {
     } catch (_) {
       // 偏好读取失败不应阻断会话恢复。
     }
-    try {
-      final restored = await _sessionRepository.restore();
-      if (restored != null && restored.isRemote) {
-        _session = restored;
-        _currentPath =
-            restored.rootPrefix.isEmpty ? rootPrefix : restored.rootPrefix;
-        await _ossClient.configureSession(restored);
-      }
-    } catch (_) {
-      // Keep app usable even if secure storage restore fails.
-    }
-    _bootstrapped = true;
-    notifyListeners();
+    await _sessionController.bootstrap();
   }
 
   /// 更新显示模式；偏好会在下次启动时恢复。
@@ -633,130 +614,56 @@ class AppController extends ChangeNotifier {
   Future<LoginResult> login({
     required String account,
     required String password,
-  }) async {
-    try {
-      final session = await _sessionRepository.login(
-        account: account,
-        password: password,
-      );
-      _session = session;
-      _currentPath =
-          session.rootPrefix.isEmpty ? rootPrefix : session.rootPrefix;
-      if (session.isRemote) {
-        await _ossClient.configureSession(session);
-      }
-      _directorySummaryService.bumpGeneration();
-      selectedItemListenable.value = null;
-      _clearDirectorySizeCache();
-      await _rememberCredentials(account: account.trim(), password: password);
-      notifyListeners();
-      return LoginResult.success(session);
-    } on AppError catch (error) {
-      return LoginResult.failure(error.message);
-    } catch (error) {
-      debugPrint('[login] unexpected error: $error');
-      return const LoginResult.failure('登录失败，请稍后重试');
-    }
-  }
+  }) =>
+      _sessionController.login(account: account, password: password);
 
   /// 供登录页预填最近一次成功登录的用户名与密码。
-  Future<SavedCredentials?> readSavedCredentials() {
-    return _savedCredentialsStore.read();
-  }
+  Future<SavedCredentials?> readSavedCredentials() =>
+      _sessionController.readSavedCredentials();
 
-  Future<void> _rememberCredentials({
-    required String account,
-    required String password,
-  }) async {
-    try {
-      await _savedCredentialsStore.write(
-        SavedCredentials(account: account, password: password),
+  Future<void> logout() => _sessionController.logout();
+
+  Future<String?> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) =>
+      _sessionController.changePassword(
+        currentPassword: currentPassword,
+        newPassword: newPassword,
       );
-    } catch (_) {
-      // 凭据记忆失败不应影响登录流程。
-    }
-  }
 
-  Future<void> logout() async {
+  /// 校验当前会话可用。访问密钥为登录下发的长期密钥，
+  /// 无需刷新；失效时由 [SessionController.handleCredentialExpired] 引导重新登录。
+  Future<void> ensureSessionReady() => _sessionController.ensureSessionReady();
+
+  UserSession _requireSession() => _sessionController.requireSession();
+
+  /// 会话清除前的跨域清理：取消运行中传输并清空队列暂停与冲突决策状态。
+  void _handleBeforeSessionCleared() {
     for (final taskId in _runningTransferIds) {
       _canceledTransferIds.add(taskId);
       unawaited(_ossClient.cancelTransfer(taskId));
     }
-    await _ossClient.clearConfiguration();
-    await _sessionRepository.logout();
+    _pendingTransferIds.clear();
+    _pauseRequestedTransferIds.clear();
+    transferQueuePausedListenable.value = false;
+    _batchConflictResolutions.clear();
+  }
+
+  /// 会话变更后的跨域复位：工作区路径/选择/统计与分享状态。
+  void _handleSessionChanged() {
+    final session = _sessionController.session;
+    if (session != null) {
+      _currentPath =
+          session.rootPrefix.isEmpty ? rootPrefix : session.rootPrefix;
+    }
     _directorySummaryService.bumpGeneration();
-    _session = null;
     _remoteDirectories.clear();
     selectedItemListenable.value = null;
     _clearDirectorySizeCache();
     clearMultiSelection();
     _pendingShareItems = const <ShareImportItem>[];
     _clearShareBatchState();
-    _pendingTransferIds.clear();
-    _pauseRequestedTransferIds.clear();
-    transferQueuePausedListenable.value = false;
-    _batchConflictResolutions.clear();
-    notifyListeners();
-  }
-
-  Future<String?> changePassword({
-    required String currentPassword,
-    required String newPassword,
-  }) async {
-    final session = _session;
-    if (session == null) {
-      return '请先登录';
-    }
-    if (newPassword.length < 8) {
-      return '新密码至少需要 8 个字符';
-    }
-    try {
-      _session = await _sessionRepository.changePassword(
-        session: session,
-        currentPassword: currentPassword,
-        newPassword: newPassword,
-      );
-      await _rememberCredentials(
-        account: session.account,
-        password: newPassword,
-      );
-      notifyListeners();
-      return null;
-    } on AppError catch (error) {
-      return error.message;
-    } catch (error) {
-      debugPrint('[changePassword] unexpected error: $error');
-      return '修改失败，请稍后重试';
-    }
-  }
-
-  /// 校验当前会话可用。访问密钥为登录下发的长期密钥，
-  /// 无需刷新；失效时由 [handleCredentialExpired] 引导重新登录。
-  Future<void> ensureSessionReady() async {
-    final session = _session;
-    if (session == null || !session.isRemote) {
-      return;
-    }
-    if (session.credentials?.isValid != true) {
-      throw AppError('会话缺少 OSS 凭证，请重新登录', code: 'REMOTE_SESSION_REQUIRED');
-    }
-    await _ossClient.configureSession(session);
-  }
-
-  /// OSS 鉴权失败（密钥被撤销等）时清除会话，由外层引导用户重新登录。
-  void handleCredentialExpired() {
-    if (_session == null) {
-      return;
-    }
-    unawaited(logout());
-  }
-
-  UserSession _requireSession() {
-    final session = _session;
-    if (session == null || !session.isRemote || session.credentials == null) {
-      throw AppError('请先登录', code: 'REMOTE_SESSION_REQUIRED');
-    }
-    return session;
   }
 
   Future<List<FileItem>> listDirectory([String? path]) async {
@@ -4041,6 +3948,7 @@ class AppController extends ChangeNotifier {
     deleteStateListenable.dispose();
     tasksListenable.dispose();
     transferConcurrencyListenable.dispose();
+    _sessionController.dispose();
     super.dispose();
   }
 }
