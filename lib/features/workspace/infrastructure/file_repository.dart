@@ -1,4 +1,5 @@
-import '../../../shared/state/app_controller.dart';
+import '../application/recycle_bin_controller.dart';
+import '../application/workspace_controller.dart';
 import '../domain/file_item.dart';
 import 'oss_client.dart';
 
@@ -18,37 +19,42 @@ abstract class FileRepository {
   });
 }
 
+/// Mock 仓库：目录浏览与统计取自 [WorkspaceController]，
+/// 删除（移入回收站）编排取自 RecycleBinController。
 class MockFileRepository implements FileRepository {
-  MockFileRepository(this._controller);
+  MockFileRepository(this._workspaceController, this._recycleBinController);
 
-  final AppController _controller;
-
-  @override
-  Future<List<FileItem>> list(String path) => _controller.listDirectory(path);
+  final WorkspaceController _workspaceController;
+  final RecycleBinController _recycleBinController;
 
   @override
-  Future<void> createFolder(String name) => _controller.createFolder(name);
+  Future<List<FileItem>> list(String path) =>
+      _workspaceController.listDirectory(path);
+
+  @override
+  Future<void> createFolder(String name) =>
+      _workspaceController.createFolder(name);
 
   @override
   Future<void> rename(FileItem item, String newName) =>
-      _controller.renameItem(item, newName);
+      _workspaceController.renameItem(item, newName);
 
   @override
-  Future<void> delete(FileItem item) => _controller.deleteItem(item);
+  Future<void> delete(FileItem item) => _recycleBinController.deleteItem(item);
 
   @override
   Future<DirectorySummary?> cachedSummary(String path) =>
-      _controller.cachedDirectorySummary(path);
+      _workspaceController.cachedDirectorySummary(path);
 
   @override
   Future<Map<String, DirectorySummary>> cachedSummaries(
           Iterable<String> paths) =>
-      _controller.cachedDirectorySummaries(paths);
+      _workspaceController.cachedDirectorySummaries(paths);
 
   @override
   Future<void> refreshSummaries(
     Iterable<String> paths, {
     required void Function(String path, DirectorySummary summary) onResult,
   }) =>
-      _controller.refreshDirectorySummaries(paths, onResult: onResult);
+      _workspaceController.refreshDirectorySummaries(paths, onResult: onResult);
 }

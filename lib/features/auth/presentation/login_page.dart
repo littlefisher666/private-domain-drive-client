@@ -25,7 +25,7 @@ class _LoginPageState extends State<LoginPage> {
   /// 预填最近一次成功登录的凭据；改密成功后会同步更新记忆，
   /// 避免预填过期密码。首次启动无记忆时保持为空。
   Future<void> _loadRememberedCredentials() async {
-    final credentials = await AppScope.read(context).readSavedCredentials();
+    final credentials = await AppScope.read(context).sessionController.readSavedCredentials();
     if (!mounted || credentials == null) {
       return;
     }
@@ -52,7 +52,7 @@ class _LoginPageState extends State<LoginPage> {
     });
 
     final controller = AppScope.read(context);
-    final result = await controller.login(
+    final result = await controller.sessionController.login(
       account: _accountController.text,
       password: _passwordController.text,
     );

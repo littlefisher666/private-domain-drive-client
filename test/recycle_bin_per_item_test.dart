@@ -10,7 +10,7 @@ import 'package:private_domain_drive_client/features/workspace/domain/file_item.
 import 'package:private_domain_drive_client/features/workspace/domain/recycle_bin_entry.dart';
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
 import 'package:private_domain_drive_client/features/workspace/presentation/recycle_bin_page.dart';
-import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/shared/state/app_services.dart';
 import 'package:private_domain_drive_client/shared/state/app_scope.dart';
 
 void main() {
@@ -22,15 +22,15 @@ void main() {
       final controller = await _controller(oss: oss);
       addTearDown(controller.dispose);
 
-      final preview = await controller.prepareBatchDelete(const <FileItem>[
+      final preview = await controller.recycleBinController.prepareBatchDelete(const <FileItem>[
         FileItem(path: 'shared/目录/', name: '目录', isDirectory: true),
         FileItem(path: 'shared/图片/', name: '图片', isDirectory: true),
         FileItem(path: 'shared/说明.md', name: '说明.md', isDirectory: false),
       ]);
-      final result = await controller.deleteBatch(preview);
+      final result = await controller.recycleBinController.deleteBatch(preview);
 
       expect(result.failedPaths, isEmpty);
-      final entries = await controller.listRecycleBin();
+      final entries = await controller.recycleBinController.listRecycleBin();
       expect(entries, hasLength(3));
       expect(
         entries.map((entry) => entry.name).toSet(),
@@ -61,10 +61,10 @@ void main() {
         isDirectory: false,
       );
 
-      await controller.deleteItem(item);
-      await controller.deleteItem(item);
+      await controller.recycleBinController.deleteItem(item);
+      await controller.recycleBinController.deleteItem(item);
 
-      final entries = await controller.listRecycleBin();
+      final entries = await controller.recycleBinController.listRecycleBin();
       expect(entries, hasLength(2));
       expect(
         entries.map((entry) => entry.name).toSet(),
@@ -80,13 +80,13 @@ void main() {
       final controller = await _controller(oss: oss);
       addTearDown(controller.dispose);
 
-      final preview = await controller.prepareBatchDelete(const <FileItem>[
+      final preview = await controller.recycleBinController.prepareBatchDelete(const <FileItem>[
         FileItem(path: 'shared/x/a.txt', name: 'a.txt', isDirectory: false),
         FileItem(path: 'shared/y/a.txt', name: 'a.txt', isDirectory: false),
       ]);
-      await controller.deleteBatch(preview);
+      await controller.recycleBinController.deleteBatch(preview);
 
-      final entries = await controller.listRecycleBin();
+      final entries = await controller.recycleBinController.listRecycleBin();
       expect(entries, hasLength(2));
       expect(entries.map((entry) => entry.name), contains('a.txt'));
       final renamed = entries
@@ -108,10 +108,10 @@ void main() {
         isDirectory: true,
       );
 
-      await controller.deleteItem(item);
-      await controller.deleteItem(item);
+      await controller.recycleBinController.deleteItem(item);
+      await controller.recycleBinController.deleteItem(item);
 
-      final entries = await controller.listRecycleBin();
+      final entries = await controller.recycleBinController.listRecycleBin();
       expect(entries, hasLength(2));
       expect(
         entries.map((entry) => entry.name).toSet(),
@@ -131,11 +131,11 @@ void main() {
       final controller = await _controller(oss: oss);
       addTearDown(controller.dispose);
 
-      await controller.deleteItem(
+      await controller.recycleBinController.deleteItem(
         const FileItem(path: 'shared/目录/', name: '目录', isDirectory: true),
       );
 
-      final entries = await controller.listRecycleBin();
+      final entries = await controller.recycleBinController.listRecycleBin();
       expect(entries, hasLength(1));
       final entry = entries.single;
       expect(entry.name, '目录');
@@ -155,13 +155,13 @@ void main() {
       final controller = await _controller(oss: oss);
       addTearDown(controller.dispose);
 
-      final preview = await controller.prepareBatchDelete(const <FileItem>[
+      final preview = await controller.recycleBinController.prepareBatchDelete(const <FileItem>[
         FileItem(path: 'shared/目录/', name: '目录', isDirectory: true),
         FileItem(path: 'shared/目录/a.txt', name: 'a.txt', isDirectory: false),
       ]);
-      await controller.deleteBatch(preview);
+      await controller.recycleBinController.deleteBatch(preview);
 
-      final entries = await controller.listRecycleBin();
+      final entries = await controller.recycleBinController.listRecycleBin();
       expect(entries, hasLength(1));
       expect(entries.single.name, '目录');
       expect(oss.copies, hasLength(2));
@@ -176,16 +176,16 @@ void main() {
       final controller = await _controller(oss: oss);
       addTearDown(controller.dispose);
 
-      final preview = await controller.prepareBatchDelete(const <FileItem>[
+      final preview = await controller.recycleBinController.prepareBatchDelete(const <FileItem>[
         FileItem(path: 'shared/a.txt', name: 'a.txt', isDirectory: false),
         FileItem(path: 'shared/b.txt', name: 'b.txt', isDirectory: false),
       ]);
-      final result = await controller.deleteBatch(preview);
+      final result = await controller.recycleBinController.deleteBatch(preview);
 
       expect(result.failedPaths, <String>['shared/b.txt']);
       expect(oss.deleted, contains('shared/a.txt'));
       expect(oss.deleted, isNot(contains('shared/b.txt')));
-      final entries = await controller.listRecycleBin();
+      final entries = await controller.recycleBinController.listRecycleBin();
       expect(entries, hasLength(1));
       expect(entries.single.name, 'a.txt');
     });
@@ -220,7 +220,7 @@ void main() {
 
       await tester.pumpWidget(
         AppScope(
-          controller: controller,
+          services: controller,
           child: const MaterialApp(home: RecycleBinPage()),
         ),
       );
@@ -248,19 +248,19 @@ void main() {
 
 Future<void> _seedManifest(
   _TrashOssClient oss,
-  AppController controller,
+  AppServices controller,
   RecycleBinEntry entry,
 ) async {
   await oss.uploadText(
     'shared/.trash/${entry.id}/manifest.json',
     entry.encode(),
-    controller.session!,
+    controller.sessionController.session!,
   );
 }
 
-Future<AppController> _controller({_TrashOssClient? oss}) async {
+Future<AppServices> _controller({_TrashOssClient? oss}) async {
   SharedPreferences.setMockInitialValues(<String, Object>{});
-  final controller = AppController(
+  final controller = AppServices(
     sessionRepository: _FakeSessionRepository(_session()),
     ossClient: oss ?? _TrashOssClient(),
   );

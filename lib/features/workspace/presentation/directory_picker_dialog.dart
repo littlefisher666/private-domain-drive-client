@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 
-import '../../../../shared/state/app_controller.dart';
+import '../../../../shared/state/app_services.dart';
+import '../../../../shared/path_utils.dart' as path_utils;
 
 /// 目录选择对话框：面包屑 + 目录列表导航，用于选定移动目标（含根目录）。
 Future<String?> showDirectoryPickerDialog(
   BuildContext context, {
-  required AppController controller,
+  required AppServices controller,
   Set<String> invalidPrefixes = const <String>{},
   Set<String> invalidPaths = const <String>{},
   String title = '选择目标目录',
@@ -32,7 +33,7 @@ class _DirectoryPickerDialog extends StatefulWidget {
     required this.confirmLabel,
   });
 
-  final AppController controller;
+  final AppServices controller;
   final Set<String> invalidPrefixes;
   final Set<String> invalidPaths;
   final String title;
@@ -43,13 +44,13 @@ class _DirectoryPickerDialog extends StatefulWidget {
 }
 
 class _DirectoryPickerDialogState extends State<_DirectoryPickerDialog> {
-  late String _path = widget.controller.currentPath;
+  late String _path = widget.controller.workspaceController.currentPath;
   late Future<List<_DirectoryOption>> _future = _load(_path);
 
   Future<List<_DirectoryOption>> _load(String path) async {
     // 对话框只展示文件夹名称，用轻量前缀列举即可，避免工作区浏览的
     // 逐目录统计请求拖慢进出目录速度。根目录下同时合并别名条目。
-    final directories = await widget.controller.listPickerDirectories(path);
+    final directories = await widget.controller.workspaceController.listPickerDirectories(path);
     return directories
         .map((item) => _DirectoryOption(
               path: item.path,
@@ -69,18 +70,18 @@ class _DirectoryPickerDialogState extends State<_DirectoryPickerDialog> {
   }
 
   void _goUp() {
-    _enter(widget.controller.parentPath(_path));
+    _enter(path_utils.parentPathOf(_path));
   }
 
   bool get _canConfirm =>
-      !widget.controller.isMoving &&
+      !widget.controller.moveController.isMoving &&
       !widget.invalidPaths.contains(_path) &&
       !widget.invalidPrefixes.any((prefix) => _path.startsWith(prefix));
 
   List<(String, String)> get _breadcrumbs {
-    final root = widget.controller.workspaceRoot;
+    final root = widget.controller.workspaceController.workspaceRoot;
     final segments = <(String, String)>[
-      (widget.controller.displayPath(root), root),
+      (widget.controller.workspaceController.displayPath(root), root),
     ];
     if (_path.length > root.length) {
       final relative = _path.substring(root.length);
@@ -137,7 +138,7 @@ class _DirectoryPickerDialogState extends State<_DirectoryPickerDialog> {
                 ],
               ],
             ),
-            if (_path != widget.controller.workspaceRoot)
+            if (_path != widget.controller.workspaceController.workspaceRoot)
               Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton.icon(

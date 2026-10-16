@@ -11,7 +11,7 @@ import 'package:private_domain_drive_client/features/gallery/domain/photo_manife
 import 'package:private_domain_drive_client/features/gallery/infrastructure/gallery_database.dart';
 import 'package:private_domain_drive_client/features/gallery/infrastructure/photo_index_repository.dart';
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
-import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/shared/state/app_services.dart';
 import 'package:private_domain_oss/private_domain_oss.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -370,14 +370,14 @@ void main() {
         exifGate: gate,
       );
       final database = _MemoryDatabase();
-      final app = AppController(
+      final app = AppServices(
         sessionRepository: _FakeSessionRepository(_session()),
         ossClient: oss,
       );
       addTearDown(app.dispose);
       await app.bootstrap();
       final controller = GalleryController(
-        appController: app,
+        services: app,
         ossClient: oss,
         database: database,
       );

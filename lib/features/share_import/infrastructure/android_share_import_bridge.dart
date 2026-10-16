@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-import '../../../shared/state/app_controller.dart';
+import '../domain/share_import_models.dart';
 
 /// 分享导入信封事件：批次开始 / 单项到达 / 批次完成。
 sealed class ShareImportEvent {

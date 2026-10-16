@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
 import 'package:private_domain_drive_client/features/preview/presentation/preview_page.dart';
-import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/shared/state/app_services.dart';
 import 'package:private_domain_drive_client/shared/state/app_scope.dart';
 
 void main() {
@@ -12,7 +12,7 @@ void main() {
   }) {
     return tester.pumpWidget(
       AppScope(
-        controller: AppController(sessionRepository: MemorySessionRepository()),
+        services: AppServices(sessionRepository: MemorySessionRepository()),
         child: MaterialApp(
           home: PreviewPage(
             arguments: PreviewPageArguments(

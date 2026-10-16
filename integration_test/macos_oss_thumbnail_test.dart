@@ -11,7 +11,7 @@ import 'package:private_domain_drive_client/features/transfer/domain/transfer_ta
 import 'package:private_domain_drive_client/features/workspace/domain/file_item.dart';
 import 'package:private_domain_drive_client/main.dart' as app;
 import 'package:private_domain_drive_client/shared/cache/disk_image_cache.dart';
-import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/shared/state/app_services.dart';
 import 'package:private_domain_drive_client/shared/widgets/file_icon.dart';
 
 const _runOssThumbnailTest = bool.fromEnvironment('RUN_OSS_THUMBNAIL_TEST');
@@ -260,12 +260,12 @@ void main() {
       app.main();
       await tester.pumpAndSettle(const Duration(seconds: 10));
 
-      final controller = AppBootstrap.controller;
+      final controller = AppBootstrap.services;
       await _ensureLoggedIn(controller);
-      expect(controller.capabilities.upload, isTrue);
-      expect(controller.capabilities.delete, isTrue);
+      expect(controller.sessionController.capabilities.upload, isTrue);
+      expect(controller.sessionController.capabilities.delete, isTrue);
 
-      final originalPath = controller.currentPath;
+      final originalPath = controller.workspaceController.currentPath;
       final runId = 'thumbnail-${DateTime.now().millisecondsSinceEpoch}';
       final runPath = 'shared/_qa/$runId/';
       final uploadDirectory =
@@ -280,7 +280,7 @@ void main() {
           '${uploadDirectory.path}/${uploadIndex++}-$fileName',
         );
         await source.writeAsBytes(bytes);
-        await controller.uploadFile(
+        await controller.transferController.uploadFile(
           fileName: fileName,
           localPath: source.path,
           fileSize: bytes.length,
@@ -293,12 +293,12 @@ void main() {
 
       try {
         await _ensureQaDirectory(controller, tester);
-        controller.setCurrentPath('shared/_qa/');
-        await controller.createFolder(runId);
+        controller.workspaceController.setCurrentPath('shared/_qa/');
+        await controller.workspaceController.createFolder(runId);
         testDirectoryCreated = true;
-        controller.setCurrentPath(runPath);
+        controller.workspaceController.setCurrentPath(runPath);
 
-        final uploadStart = controller.tasks.length;
+        final uploadStart = controller.transferQueue.tasks.length;
         for (final entry in _imageFixtures.entries) {
           await enqueueUpload(entry.key, entry.value);
         }
@@ -310,12 +310,12 @@ void main() {
         }
         await _waitForTasks(controller, tester, uploadStart);
 
-        var items = await controller.listDirectory(runPath);
+        var items = await controller.workspaceController.listDirectory(runPath);
         expect(items.where((item) => !item.isDirectory), hasLength(18));
 
         for (final name in _imageFixtures.keys) {
           final item = items.singleWhere((candidate) => candidate.name == name);
-          final thumbnail = await controller.loadThumbnail(item);
+          final thumbnail = await controller.workspaceController.loadThumbnail(item);
           expect(thumbnail, isNotEmpty, reason: '$name 未返回缩略图字节');
           final codec = await ui.instantiateImageCodec(
             Uint8List.fromList(thumbnail),
@@ -333,20 +333,20 @@ void main() {
         const localizedDirectory = '相册';
         const localizedFileName = '8寸雅典摆台 XXJ_4477.JPG';
         final localizedPath = '$runPath$localizedDirectory/';
-        await controller.createFolder(localizedDirectory);
-        final localizedUploadStart = controller.tasks.length;
+        await controller.workspaceController.createFolder(localizedDirectory);
+        final localizedUploadStart = controller.transferQueue.tasks.length;
         await enqueueUpload(
           localizedFileName,
           _imageFixtures['qa-thumbnail.jpg']!,
           targetPath: localizedPath,
         );
         await _waitForTasks(controller, tester, localizedUploadStart);
-        final localizedItems = await controller.listDirectory(localizedPath);
+        final localizedItems = await controller.workspaceController.listDirectory(localizedPath);
         final localizedItem = localizedItems.singleWhere(
           (item) => item.name == localizedFileName,
         );
         final localizedThumbnail =
-            await controller.loadThumbnail(localizedItem);
+            await controller.workspaceController.loadThumbnail(localizedItem);
         expect(localizedThumbnail, isNotEmpty, reason: '中文路径图片未返回缩略图字节');
         final localizedCodec = await ui.instantiateImageCodec(
           Uint8List.fromList(localizedThumbnail),
@@ -368,7 +368,7 @@ void main() {
               .split('/')
               .where((segment) => segment.isNotEmpty)
               .last;
-          final existingThumbnail = await controller.loadThumbnail(
+          final existingThumbnail = await controller.workspaceController.loadThumbnail(
             FileItem(
               path: _existingThumbnailPath,
               name: existingName,
@@ -410,9 +410,9 @@ void main() {
                   itemCount: items.length,
                   itemBuilder: (context, index) => FileTypeThumbnail(
                     item: items[index],
-                    loader: controller.loadThumbnail,
+                    loader: controller.workspaceController.loadThumbnail,
                     height: double.infinity,
-                    cacheNamespace: controller.thumbnailCacheNamespace,
+                    cacheNamespace: controller.workspaceController.thumbnailCacheNamespace,
                   ),
                 ),
               ),
@@ -440,7 +440,7 @@ void main() {
         var realLoaderCalls = 0;
         Future<List<int>> countingLoader(FileItem item) async {
           realLoaderCalls++;
-          return controller.loadThumbnail(item);
+          return controller.workspaceController.loadThumbnail(item);
         }
 
         // 缩略图组件不再跨挂载持有内存缓存，重复展示由磁盘缓存承担：
@@ -449,7 +449,7 @@ void main() {
           tester,
           item: original,
           loader: countingLoader,
-          namespace: controller.thumbnailCacheNamespace,
+          namespace: controller.workspaceController.thumbnailCacheNamespace,
         );
         expect(realLoaderCalls, 1);
         await _waitForDiskCachedThumbnail(controller, original);
@@ -457,7 +457,7 @@ void main() {
           tester,
           item: original,
           loader: countingLoader,
-          namespace: controller.thumbnailCacheNamespace,
+          namespace: controller.workspaceController.thumbnailCacheNamespace,
         );
         expect(realLoaderCalls, 2);
 
@@ -465,14 +465,14 @@ void main() {
           ..._imageFixtures['qa-thumbnail.png']!,
           0,
         ];
-        final replacementStart = controller.tasks.length;
+        final replacementStart = controller.transferQueue.tasks.length;
         await enqueueUpload(
           'qa-thumbnail.png',
           replacement,
           targetPath: runPath,
         );
         await _waitForTasks(controller, tester, replacementStart);
-        items = await controller.listDirectory(runPath);
+        items = await controller.workspaceController.listDirectory(runPath);
         final updated = items.singleWhere(
           (item) => item.name == 'qa-thumbnail.png',
         );
@@ -481,17 +481,17 @@ void main() {
           tester,
           item: updated,
           loader: countingLoader,
-          namespace: controller.thumbnailCacheNamespace,
+          namespace: controller.workspaceController.thumbnailCacheNamespace,
         );
         expect(realLoaderCalls, 3);
 
-        await controller.logout();
+        await controller.sessionController.logout();
         loggedOutForFallback = true;
         await tester.pumpWidget(
           MaterialApp(
             home: FileTypeThumbnail(
               item: updated,
-              loader: controller.loadThumbnail,
+              loader: controller.workspaceController.loadThumbnail,
               cacheNamespace: 'logged-out',
             ),
           ),
@@ -505,19 +505,19 @@ void main() {
         loggedOutForFallback = false;
       } finally {
         await uploadDirectory.delete(recursive: true);
-        if (loggedOutForFallback || !controller.isLoggedIn) {
+        if (loggedOutForFallback || !controller.sessionController.isLoggedIn) {
           await _ensureLoggedIn(controller);
         }
         if (testDirectoryCreated) {
           try {
-            await controller.deleteItem(
+            await controller.recycleBinController.deleteItem(
               FileItem(path: runPath, name: runId, isDirectory: true),
             );
           } catch (_) {
             // 不掩盖测试主体断言；失败时保留隔离目录供人工清理。
           }
         }
-        controller.setCurrentPath(originalPath);
+        controller.workspaceController.setCurrentPath(originalPath);
       }
     },
     skip: !_runOssThumbnailTest,
@@ -525,9 +525,9 @@ void main() {
   );
 }
 
-Future<void> _ensureLoggedIn(AppController controller) async {
-  if (controller.isLoggedIn) return;
-  final result = await controller.login(
+Future<void> _ensureLoggedIn(AppServices controller) async {
+  if (controller.sessionController.isLoggedIn) return;
+  final result = await controller.sessionController.login(
     account: _qaAccount,
     password: _qaPassword,
   );
@@ -535,24 +535,24 @@ Future<void> _ensureLoggedIn(AppController controller) async {
 }
 
 Future<void> _ensureQaDirectory(
-  AppController controller,
+  AppServices controller,
   WidgetTester tester,
 ) async {
-  controller.setCurrentPath('shared/');
-  final rootItems = await controller.listDirectory('shared/');
+  controller.workspaceController.setCurrentPath('shared/');
+  final rootItems = await controller.workspaceController.listDirectory('shared/');
   if (rootItems.any((item) => item.path == 'shared/_qa/')) return;
-  await controller.createFolder('_qa');
+  await controller.workspaceController.createFolder('_qa');
   await tester.pump();
 }
 
 Future<void> _waitForTasks(
-  AppController controller,
+  AppServices controller,
   WidgetTester tester,
   int startIndex,
 ) async {
   final deadline = DateTime.now().add(const Duration(minutes: 2));
   while (DateTime.now().isBefore(deadline)) {
-    final tasks = controller.tasks.skip(startIndex).toList();
+    final tasks = controller.transferQueue.tasks.skip(startIndex).toList();
     if (tasks.isNotEmpty && tasks.every((task) => _isTerminal(task.status))) {
       expect(
         tasks.where((task) => task.status == TransferTaskStatus.failed),
@@ -600,11 +600,11 @@ Future<void> _pumpSingleThumbnail(
 
 /// 缩略图写入磁盘缓存是 fire-and-forget 的，轮询等待其落盘。
 Future<void> _waitForDiskCachedThumbnail(
-  AppController controller,
+  AppServices controller,
   FileItem item,
 ) async {
   final cacheKey = DiskImageCache.cacheKey(
-    namespace: controller.thumbnailCacheNamespace,
+    namespace: controller.workspaceController.thumbnailCacheNamespace,
     path: item.path,
     versionToken: item.objectVersionToken,
     process: ImageThumbnailSpec.process(),

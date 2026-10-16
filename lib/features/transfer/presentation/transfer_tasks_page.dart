@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../app/theme/cupertino_desktop.dart';
-import '../../../shared/state/app_controller.dart';
+import '../../../shared/state/app_services.dart';
 import '../../../shared/state/app_scope.dart';
 import '../../../shared/widgets/app_feedback.dart';
 import '../domain/transfer_task.dart';
@@ -13,7 +13,7 @@ class _TransferHeaderActions extends StatelessWidget {
     required this.paused,
   });
 
-  final AppController controller;
+  final AppServices controller;
   final List<TransferTask> tasks;
   final bool paused;
 
@@ -32,7 +32,7 @@ class _TransferHeaderActions extends StatelessWidget {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: <Widget>[
         Text(
-          '${controller.runningTransferCount}/${controller.transferConcurrency} 进行中 · ${controller.pendingTransferCount} 等待'
+          '${controller.transferQueue.runningTransferCount}/${controller.transferQueue.transferConcurrency} 进行中 · ${controller.transferQueue.pendingTransferCount} 等待'
           '${paused ? ' · 已暂停' : ''}',
           style: Theme.of(context).textTheme.bodySmall,
         ),
@@ -45,10 +45,10 @@ class _TransferHeaderActions extends StatelessWidget {
           OutlinedButton.icon(
             onPressed: () {
               if (paused) {
-                controller.resumeAllTransfers();
+                controller.transferController.resumeAllTransfers();
                 AppFeedback.showSnack(context, '已继续全部传输任务');
               } else {
-                controller.pauseAllTransfers();
+                controller.transferController.pauseAllTransfers();
                 AppFeedback.showSnack(context, '已暂停全部传输任务');
               }
             },
@@ -60,7 +60,7 @@ class _TransferHeaderActions extends StatelessWidget {
           ),
           OutlinedButton(
             onPressed: () {
-              controller.cancelAllTransfers();
+              controller.transferController.cancelAllTransfers();
               AppFeedback.showSnack(context, '已取消全部未完成任务');
             },
             child: const Text('全部取消'),
@@ -69,14 +69,14 @@ class _TransferHeaderActions extends StatelessWidget {
         if (interruptedCount > 0) ...<Widget>[
           OutlinedButton(
             onPressed: () {
-              controller.resumeAllInterruptedUploads();
+              controller.transferController.resumeAllInterruptedUploads();
               AppFeedback.showSnack(context, '已继续上传 $interruptedCount 个中断任务');
             },
             child: Text('全部继续 ($interruptedCount)'),
           ),
           OutlinedButton(
             onPressed: () {
-              controller.abandonAllInterruptedUploads();
+              controller.transferController.abandonAllInterruptedUploads();
               AppFeedback.showSnack(context, '已放弃 $interruptedCount 个中断任务');
             },
             child: const Text('全部放弃'),
@@ -86,7 +86,7 @@ class _TransferHeaderActions extends StatelessWidget {
           onPressed: tasks.isEmpty
               ? null
               : () {
-                  controller.clearCompletedTasks();
+                  controller.transferController.clearCompletedTasks();
                   AppFeedback.showSnack(context, '已清除已完成和已取消任务');
                 },
           child: const Text('清除已结束'),
@@ -97,7 +97,7 @@ class _TransferHeaderActions extends StatelessWidget {
 
   Future<void> _showConcurrencyPicker(
     BuildContext context,
-    AppController controller,
+    AppServices controller,
   ) async {
     final value = await showDialog<int>(
       context: context,
@@ -115,7 +115,7 @@ class _TransferHeaderActions extends StatelessWidget {
               child: Row(
                 children: <Widget>[
                   Expanded(child: Text('$value 个并发')),
-                  if (value == controller.transferConcurrency)
+                  if (value == controller.transferQueue.transferConcurrency)
                     const Icon(Icons.check, size: 18),
                 ],
               ),
@@ -124,7 +124,7 @@ class _TransferHeaderActions extends StatelessWidget {
       ),
     );
     if (value == null) return;
-    await controller.setTransferConcurrency(value);
+    await controller.transferQueue.setTransferConcurrency(value);
     if (context.mounted) {
       AppFeedback.showSnack(context, '并发数已设为 $value');
     }
@@ -331,25 +331,25 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
 
   void _clearTaskSelection() => setState(_selectedTaskIds.clear);
 
-  void _retrySelectedTasks(AppController controller, List<TransferTask> tasks) {
+  void _retrySelectedTasks(AppServices controller, List<TransferTask> tasks) {
     final taskIds = tasks
         .where((task) => _selectedTaskIds.contains(task.id) && _canRetry(task))
         .map((task) => task.id)
         .toList(growable: false);
     if (taskIds.isEmpty) return;
-    controller.retryTasks(taskIds);
+    controller.transferController.retryTasks(taskIds);
     _clearTaskSelection();
     AppFeedback.showSnack(context, '已重新开始 ${taskIds.length} 个任务');
   }
 
   void _cancelSelectedTasks(
-      AppController controller, List<TransferTask> tasks) {
+      AppServices controller, List<TransferTask> tasks) {
     final taskIds = tasks
         .where((task) => _selectedTaskIds.contains(task.id) && _canCancel(task))
         .map((task) => task.id)
         .toList(growable: false);
     if (taskIds.isEmpty) return;
-    controller.cancelTasks(taskIds);
+    controller.transferController.cancelTasks(taskIds);
     _clearTaskSelection();
     AppFeedback.showSnack(context, '已取消 ${taskIds.length} 个任务');
   }
@@ -427,11 +427,11 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
         widget.desktopChrome || MediaQuery.sizeOf(context).width >= 960;
 
     return ValueListenableBuilder<int>(
-      valueListenable: controller.transferConcurrencyListenable,
+      valueListenable: controller.transferQueue.transferConcurrencyListenable,
       builder: (context, _, __) => ValueListenableBuilder<List<TransferTask>>(
-        valueListenable: controller.tasksListenable,
+        valueListenable: controller.transferQueue.tasksListenable,
         builder: (context, tasks, _) => ValueListenableBuilder<bool>(
-          valueListenable: controller.transferQueuePausedListenable,
+          valueListenable: controller.transferQueue.transferQueuePausedListenable,
           builder: (context, paused, _) => _buildBody(
             context: context,
             controller: controller,
@@ -447,7 +447,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
 
   Widget _buildBody({
     required BuildContext context,
-    required AppController controller,
+    required AppServices controller,
     required List<TransferTask> tasks,
     required ThemeData theme,
     required bool desktop,
@@ -689,7 +689,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                                       TransferTaskStatus.interrupted) ...<Widget>[
                                     OutlinedButton(
                                       onPressed: () {
-                                        controller
+                                        controller.transferController
                                             .resumeInterruptedUpload(task.id);
                                         AppFeedback.showSnack(
                                           context,
@@ -701,7 +701,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                                     const SizedBox(width: 8),
                                     OutlinedButton(
                                       onPressed: () {
-                                        controller
+                                        controller.transferController
                                             .abandonInterruptedUpload(task.id);
                                         AppFeedback.showSnack(
                                           context,
@@ -717,7 +717,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                                               task.status ==
                                                   TransferTaskStatus.canceled
                                           ? () {
-                                              controller.retryTask(task.id);
+                                              controller.transferController.retryTask(task.id);
                                               AppFeedback.showSnack(
                                                 context,
                                                 '已重新开始 ${task.name}',
@@ -733,7 +733,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                                               task.status ==
                                                   TransferTaskStatus.pending
                                           ? () {
-                                              controller.cancelTask(task.id);
+                                              controller.transferController.cancelTask(task.id);
                                               AppFeedback.showSnack(
                                                 context,
                                                 '已取消 ${task.name}',
@@ -784,8 +784,8 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
     final statsText = tasks.isEmpty
         ? '上传、下载、重试与取消'
         : <String>[
-            '${controller.runningTransferCount} 进行中 · '
-                '${controller.pendingTransferCount} 等待',
+            '${controller.transferQueue.runningTransferCount} 进行中 · '
+                '${controller.transferQueue.pendingTransferCount} 等待',
             if (paused) '已暂停',
             if (interruptedCount > 0) '$interruptedCount 个已中断',
             if (unfinishedTotalBytes > 0)
@@ -818,24 +818,24 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                         tooltip: '传输设置',
                         onSelected: (value) {
                           if (value == 'pause-all') {
-                            controller.pauseAllTransfers();
+                            controller.transferController.pauseAllTransfers();
                             AppFeedback.showSnack(context, '已暂停全部传输任务');
                           } else if (value == 'resume-queue') {
-                            controller.resumeAllTransfers();
+                            controller.transferController.resumeAllTransfers();
                             AppFeedback.showSnack(context, '已继续全部传输任务');
                           } else if (value == 'cancel-all') {
-                            controller.cancelAllTransfers();
+                            controller.transferController.cancelAllTransfers();
                             AppFeedback.showSnack(context, '已取消全部未完成任务');
                           } else if (value == 'resume-all') {
-                            controller.resumeAllInterruptedUploads();
+                            controller.transferController.resumeAllInterruptedUploads();
                             AppFeedback.showSnack(
                                 context, '已继续上传 $interruptedCount 个中断任务');
                           } else if (value == 'abandon-all') {
-                            controller.abandonAllInterruptedUploads();
+                            controller.transferController.abandonAllInterruptedUploads();
                             AppFeedback.showSnack(
                                 context, '已放弃 $interruptedCount 个中断任务');
                           } else if (value == 'clear') {
-                            controller.clearCompletedTasks();
+                            controller.transferController.clearCompletedTasks();
                             AppFeedback.showSnack(context, '已清除已结束任务');
                           }
                         },
@@ -912,7 +912,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
 
   Widget _buildMobileTaskCard({
     required BuildContext context,
-    required AppController controller,
+    required AppServices controller,
     required ThemeData theme,
     required TransferTask task,
   }) {
@@ -1050,7 +1050,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                           const BoxConstraints.tightFor(width: 32, height: 32),
                       padding: EdgeInsets.zero,
                       onPressed: () {
-                        controller.resumeInterruptedUpload(task.id);
+                        controller.transferController.resumeInterruptedUpload(task.id);
                         AppFeedback.showSnack(context, '已继续上传 ${task.name}');
                       },
                       icon: const Icon(Icons.play_arrow_rounded, size: 20),
@@ -1062,7 +1062,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                           const BoxConstraints.tightFor(width: 32, height: 32),
                       padding: EdgeInsets.zero,
                       onPressed: () {
-                        controller.abandonInterruptedUpload(task.id);
+                        controller.transferController.abandonInterruptedUpload(task.id);
                         AppFeedback.showSnack(context, '已放弃 ${task.name}');
                       },
                       icon: const Icon(Icons.delete_outline_rounded, size: 18),
@@ -1076,7 +1076,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                           const BoxConstraints.tightFor(width: 32, height: 32),
                       padding: EdgeInsets.zero,
                       onPressed: () {
-                        controller.retryTask(task.id);
+                        controller.transferController.retryTask(task.id);
                         AppFeedback.showSnack(context, '已重新开始 ${task.name}');
                       },
                       icon: const Icon(Icons.refresh_rounded, size: 18),
@@ -1089,7 +1089,7 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
                           const BoxConstraints.tightFor(width: 32, height: 32),
                       padding: EdgeInsets.zero,
                       onPressed: () {
-                        controller.cancelTask(task.id);
+                        controller.transferController.cancelTask(task.id);
                         AppFeedback.showSnack(context, '已取消 ${task.name}');
                       },
                       icon: const Icon(Icons.close_rounded, size: 18),

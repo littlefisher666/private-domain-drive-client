@@ -4,7 +4,7 @@ import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 
 import '../../../app/theme/cupertino_desktop.dart';
 import '../../../core/utils/window_actions.dart';
-import '../../../shared/state/app_controller.dart';
+import '../../../shared/path_utils.dart' as path_utils;
 import '../../../shared/state/app_scope.dart';
 import '../../gallery/presentation/gallery_page.dart';
 import '../../settings/presentation/settings_page.dart';
@@ -29,7 +29,7 @@ class _HomeShellState extends State<HomeShell> {
   void _select(int value) {
     if (value == 3) {
       _recycleBinVisit++;
-      AppScope.of(context).setRecycleBinPath(AppController.rootPrefix);
+      AppScope.of(context).recycleBinController.setRecycleBinPath(path_utils.rootPrefix);
     }
     if (value == 4) _settingsVisit++;
     setState(() => _index = value);
@@ -62,15 +62,15 @@ class _HomeShellState extends State<HomeShell> {
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: overlayStyle,
       child: PopScope(
-        canPop: _index == 0 && controller.backNavigationPath() == null,
+        canPop: _index == 0 && controller.workspaceController.backNavigationPath() == null,
         onPopInvokedWithResult: (didPop, _) {
           if (didPop) {
             return;
           }
           if (_index == 3) {
-            final up = controller.recycleBinUpPath();
-            if (up != controller.recycleBinPath) {
-              controller.setRecycleBinPath(up);
+            final up = controller.recycleBinController.recycleBinUpPath();
+            if (up != controller.recycleBinController.recycleBinPath) {
+              controller.recycleBinController.setRecycleBinPath(up);
               return;
             }
             _select(0);
@@ -80,9 +80,9 @@ class _HomeShellState extends State<HomeShell> {
             _select(0);
             return;
           }
-          final target = controller.backNavigationPath();
+          final target = controller.workspaceController.backNavigationPath();
           if (target != null) {
-            controller.setCurrentPath(target);
+            controller.workspaceController.setCurrentPath(target);
           }
         },
         child: Scaffold(
@@ -158,7 +158,7 @@ class _DesktopShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final controller = AppScope.of(context);
-    final session = controller.session;
+    final session = controller.sessionController.session;
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final title = switch (index) {
@@ -228,18 +228,18 @@ class _DesktopShell extends StatelessWidget {
                               child: ListView(
                                 padding: EdgeInsets.zero,
                                 children:
-                                    controller.sidebarDirectories.map((path) {
+                                    controller.workspaceController.sidebarDirectories.map((path) {
                                   final selected =
-                                      controller.currentPath == path &&
+                                      controller.workspaceController.currentPath == path &&
                                           index == 0;
-                                  final label = controller.displayPath(path);
+                                  final label = controller.workspaceController.displayPath(path);
                                   return _SideNavItem(
                                     selected: selected,
                                     icon: Icons.circle,
                                     iconSize: 8,
                                     label: label,
                                     onTap: () {
-                                      controller.setCurrentPath(path);
+                                      controller.workspaceController.setCurrentPath(path);
                                       _selectPage(0);
                                     },
                                   );

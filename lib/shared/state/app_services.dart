@@ -24,7 +24,7 @@ import '../transfer_keepalive.dart';
 /// 应用控制器聚合层：持有并装配全部子控制器，向外提供统一的
 /// 生命周期入口（[bootstrap]/[dispose]）与装配 setter。
 ///
-/// 装配策略与原 `AppController` 构造函数一致：
+/// 装配策略（原门面已拆除，装配收敛于本类）：
 /// - [OssClient] 创建一次，注入所有需要直连 OSS 的控制器；
 /// - `onCredentialExpired` 指向 [SessionController.handleCredentialExpired]；
 /// - 会话生命周期钩子（beforeSessionCleared/onSessionChanged）在本层编排

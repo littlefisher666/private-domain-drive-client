@@ -8,7 +8,7 @@ import 'package:private_domain_drive_client/app/bootstrap/app_bootstrap.dart';
 import 'package:private_domain_drive_client/features/transfer/domain/transfer_task.dart';
 import 'package:private_domain_drive_client/features/workspace/domain/file_item.dart';
 import 'package:private_domain_drive_client/main.dart' as app;
-import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/shared/state/app_services.dart';
 
 const _runOssCrudTest = bool.fromEnvironment('RUN_OSS_CRUD_TEST');
 
@@ -21,10 +21,10 @@ void main() {
       app.main();
       await tester.pumpAndSettle(const Duration(seconds: 10));
 
-      final controller = AppBootstrap.controller;
-      expect(controller.isLoggedIn, isTrue);
+      final controller = AppBootstrap.services;
+      expect(controller.sessionController.isLoggedIn, isTrue);
 
-      final originalPath = controller.currentPath;
+      final originalPath = controller.workspaceController.currentPath;
       final runId = 'batch-qa-${DateTime.now().millisecondsSinceEpoch}';
       final runPath = 'shared/_qa/$runId/';
       final downloadDirectory =
@@ -39,7 +39,7 @@ void main() {
       String? cancelTaskId;
 
       void observeTransfers() {
-        for (final task in controller.tasks) {
+        for (final task in controller.transferQueue.tasks) {
           if (task.id == progressTaskId) {
             final total = task.totalBytes ?? 0;
             if (task.transferredBytes > 0 && task.transferredBytes < total) {
@@ -56,19 +56,19 @@ void main() {
               task.transferredBytes > 0 &&
               task.transferredBytes < (task.totalBytes ?? 0)) {
             cancelRequested = true;
-            scheduleMicrotask(() => controller.cancelTask(task.id));
+            scheduleMicrotask(() => controller.transferController.cancelTask(task.id));
           }
         }
       }
 
-      controller.tasksListenable.addListener(observeTransfers);
+      controller.transferQueue.tasksListenable.addListener(observeTransfers);
 
       try {
         await _ensureQaDirectory(controller, tester);
-        controller.setCurrentPath('shared/_qa/');
-        await controller.createFolder(runId);
+        controller.workspaceController.setCurrentPath('shared/_qa/');
+        await controller.workspaceController.createFolder(runId);
         testDirectoryCreated = true;
-        controller.setCurrentPath(runPath);
+        controller.workspaceController.setCurrentPath(runPath);
 
         final firstContent = utf8.encode('批量下载文件 A');
         final secondContent = utf8.encode('批量下载文件 B');
@@ -84,36 +84,36 @@ void main() {
         await _writeRepeatedFile(cancelSource, 256 * 1024 * 1024);
 
         // 确保会话与 OSS 凭证已配置，并立刻通过真实列表请求验证登录下发的长期密钥可用。
-        await controller.ensureSessionReady();
-        await controller.listDirectory(runPath);
+        await controller.sessionController.ensureSessionReady();
+        await controller.workspaceController.listDirectory(runPath);
 
-        final taskStart = controller.tasks.length;
-        await controller.uploadFile(
+        final taskStart = controller.transferQueue.tasks.length;
+        await controller.transferController.uploadFile(
           fileName: 'a.txt',
           localPath: firstSource.path,
           fileSize: firstContent.length,
         );
-        await controller.uploadFile(
+        await controller.transferController.uploadFile(
           fileName: 'b.txt',
           localPath: secondSource.path,
           fileSize: secondContent.length,
         );
 
-        await controller.setTransferConcurrency(1);
-        await controller.uploadFile(
+        await controller.transferQueue.setTransferConcurrency(1);
+        await controller.transferController.uploadFile(
           fileName: 'large-progress.bin',
           localPath: progressSource.path,
           fileSize: await progressSource.length(),
         );
-        progressTaskId = controller.tasks.last.id;
-        await controller.uploadFile(
+        progressTaskId = controller.transferQueue.tasks.last.id;
+        await controller.transferController.uploadFile(
           fileName: 'queued.txt',
           localPath: queuedSource.path,
           fileSize: await queuedSource.length(),
         );
-        final queuedTaskId = controller.tasks.last.id;
+        final queuedTaskId = controller.transferQueue.tasks.last.id;
         expect(
-          controller.tasks
+          controller.transferQueue.tasks
               .singleWhere((task) => task.id == queuedTaskId)
               .status,
           TransferTaskStatus.pending,
@@ -129,21 +129,21 @@ void main() {
           isTrue,
         );
 
-        final cancelStart = controller.tasks.length;
-        await controller.uploadFile(
+        final cancelStart = controller.transferQueue.tasks.length;
+        await controller.transferController.uploadFile(
           fileName: 'canceled.bin',
           localPath: cancelSource.path,
           fileSize: await cancelSource.length(),
         );
-        cancelTaskId = controller.tasks.last.id;
+        cancelTaskId = controller.transferQueue.tasks.last.id;
         await _waitForTasks(controller, tester, cancelStart,
             allowCanceled: true, timeout: const Duration(minutes: 5));
         final canceledTask =
-            controller.tasks.singleWhere((task) => task.id == cancelTaskId);
+            controller.transferQueue.tasks.singleWhere((task) => task.id == cancelTaskId);
         expect(cancelRequested, isTrue, reason: '测试必须在原生上传运行中发起取消');
         expect(canceledTask.status, TransferTaskStatus.canceled);
 
-        var files = await controller.listDirectory(runPath);
+        var files = await controller.workspaceController.listDirectory(runPath);
         final downloadItems = files.where((item) => !item.isDirectory).toList();
         expect(
             downloadItems.map((item) => item.name),
@@ -160,12 +160,12 @@ void main() {
 
         final secondItem =
             downloadItems.singleWhere((item) => item.name == 'b.txt');
-        await controller.renameItem(secondItem, 'b-renamed.txt');
-        files = await controller.listDirectory(runPath);
+        await controller.workspaceController.renameItem(secondItem, 'b-renamed.txt');
+        files = await controller.workspaceController.listDirectory(runPath);
         expect(files.map((item) => item.name), contains('b-renamed.txt'));
         expect(files.map((item) => item.name), isNot(contains('b.txt')));
 
-        final batchId = controller.enqueueDownloads(
+        final batchId = controller.transferController.enqueueDownloads(
           files.where(
             (item) => item.name == 'a.txt' || item.name == 'b-renamed.txt',
           ),
@@ -174,7 +174,7 @@ void main() {
         await _waitForBatch(controller, tester, batchId);
 
         final batchTasks =
-            controller.tasks.where((task) => task.batchId == batchId).toList();
+            controller.transferQueue.tasks.where((task) => task.batchId == batchId).toList();
         expect(batchTasks, hasLength(2));
         expect(
             batchTasks
@@ -188,21 +188,21 @@ void main() {
           secondContent,
         );
 
-        controller.setCurrentPath(runPath);
-        await controller.createFolder('资料');
-        controller.setCurrentPath('$runPath资料/');
-        final nestedTaskStart = controller.tasks.length;
-        await controller.uploadFile(
+        controller.workspaceController.setCurrentPath(runPath);
+        await controller.workspaceController.createFolder('资料');
+        controller.workspaceController.setCurrentPath('$runPath资料/');
+        final nestedTaskStart = controller.transferQueue.tasks.length;
+        await controller.transferController.uploadFile(
           fileName: 'nested.txt',
           localPath: firstSource.path,
           fileSize: firstContent.length,
         );
         await _waitForTasks(controller, tester, nestedTaskStart);
-        final nestedItems = await controller.listDirectory('$runPath资料/');
-        controller.setCurrentPath(runPath);
-        final rootItems = await controller.listDirectory(runPath);
+        final nestedItems = await controller.workspaceController.listDirectory('$runPath资料/');
+        controller.workspaceController.setCurrentPath(runPath);
+        final rootItems = await controller.workspaceController.listDirectory(runPath);
         final nestedFolder = rootItems.singleWhere((item) => item.name == '资料');
-        final recursive = await controller.enqueueDownloadsRecursively(
+        final recursive = await controller.transferController.enqueueDownloadsRecursively(
           <FileItem>[nestedFolder, nestedItems.single],
           targetDirectory: downloadDirectory.path,
         );
@@ -213,27 +213,27 @@ void main() {
           firstContent,
         );
 
-        final preview = await controller.prepareBatchDelete(rootItems);
+        final preview = await controller.recycleBinController.prepareBatchDelete(rootItems);
         expect(preview.objectCount, greaterThanOrEqualTo(6));
-        final result = await controller.deleteBatch(preview);
+        final result = await controller.recycleBinController.deleteBatch(preview);
         expect(result.failedPaths, isEmpty);
         expect(result.deletedPaths, hasLength(preview.objectCount));
-        final remaining = await controller.listDirectory(runPath);
+        final remaining = await controller.workspaceController.listDirectory(runPath);
         expect(remaining, isEmpty);
       } finally {
-        controller.tasksListenable.removeListener(observeTransfers);
+        controller.transferQueue.tasksListenable.removeListener(observeTransfers);
         await downloadDirectory.delete(recursive: true);
         await uploadDirectory.delete(recursive: true);
         if (testDirectoryCreated) {
           try {
-            await controller.deleteItem(
+            await controller.recycleBinController.deleteItem(
               FileItem(path: runPath, name: runId, isDirectory: true),
             );
           } catch (_) {
             // 不掩盖测试主体的断言；清理由下一次 QA 运行或人工检查处理。
           }
         }
-        controller.setCurrentPath(originalPath);
+        controller.workspaceController.setCurrentPath(originalPath);
       }
     },
     skip: !_runOssCrudTest,
@@ -241,18 +241,18 @@ void main() {
 }
 
 Future<void> _ensureQaDirectory(
-  AppController controller,
+  AppServices controller,
   WidgetTester tester,
 ) async {
-  controller.setCurrentPath('shared/');
-  final rootItems = await controller.listDirectory('shared/');
+  controller.workspaceController.setCurrentPath('shared/');
+  final rootItems = await controller.workspaceController.listDirectory('shared/');
   if (rootItems.any((item) => item.path == 'shared/_qa/')) return;
-  await controller.createFolder('_qa');
+  await controller.workspaceController.createFolder('_qa');
   await tester.pump();
 }
 
 Future<void> _waitForTasks(
-  AppController controller,
+  AppServices controller,
   WidgetTester tester,
   int startIndex, {
   Duration timeout = const Duration(minutes: 2),
@@ -260,7 +260,7 @@ Future<void> _waitForTasks(
 }) async {
   final deadline = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(deadline)) {
-    final tasks = controller.tasks.skip(startIndex).toList();
+    final tasks = controller.transferQueue.tasks.skip(startIndex).toList();
     if (tasks.isNotEmpty && tasks.every((task) => _isTerminal(task.status))) {
       expect(tasks.where((task) => task.status == TransferTaskStatus.failed),
           isEmpty,
@@ -296,14 +296,14 @@ Future<void> _writeRepeatedFile(File file, int size) async {
 }
 
 Future<void> _waitForBatch(
-  AppController controller,
+  AppServices controller,
   WidgetTester tester,
   String batchId,
 ) async {
   final deadline = DateTime.now().add(const Duration(minutes: 2));
   while (DateTime.now().isBefore(deadline)) {
     final tasks =
-        controller.tasks.where((task) => task.batchId == batchId).toList();
+        controller.transferQueue.tasks.where((task) => task.batchId == batchId).toList();
     if (tasks.isNotEmpty && tasks.every((task) => _isTerminal(task.status))) {
       expect(tasks.where((task) => task.status == TransferTaskStatus.failed),
           isEmpty,

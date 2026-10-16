@@ -24,15 +24,15 @@ void main() {
     'macOS：读取既有图片的真实 OSS 缩略图',
     () async {
       final controller = await AppBootstrap.initialize();
-      if (!controller.isLoggedIn) {
-        final result = await controller.login(
+      if (!controller.sessionController.isLoggedIn) {
+        final result = await controller.sessionController.login(
           account: _qaAccount,
           password: _qaPassword,
         );
         expect(result.ok, isTrue, reason: result.message);
       }
 
-      final items = await controller.listDirectory('shared/相册/');
+      final items = await controller.workspaceController.listDirectory('shared/相册/');
       final item =
           items.singleWhere((candidate) => candidate.path == _targetPath);
       final nativeObject = (await PrivateDomainOss().listObjects(
@@ -70,7 +70,7 @@ void main() {
         }
       }
 
-      final thumbnail = await controller.loadThumbnail(item);
+      final thumbnail = await controller.workspaceController.loadThumbnail(item);
       expect(thumbnail, isNotEmpty);
       debugPrint('缩略图探针生产调用结果：bytes=${thumbnail.length}');
     },

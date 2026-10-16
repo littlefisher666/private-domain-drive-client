@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
-import '../../../shared/state/app_controller.dart';
+import '../../../shared/state/app_services.dart';
 import '../../../shared/state/app_scope.dart';
 import '../../../shared/widgets/app_feedback.dart';
 import '../../transfer/domain/transfer_task.dart';
@@ -427,7 +427,7 @@ class _MobileDetailSheet extends StatelessWidget {
                     ('格式', entry.extension.toUpperCase()),
                   ]),
                   _group('来源', <(String, String)>[
-                    ('所在目录', app.displayPath(entry.directory)),
+                    ('所在目录', app.workspaceController.displayPath(entry.directory)),
                     if (entry.device != null) ('上传设备', entry.device!),
                     ('本机缓存', cached ? '已缓存' : '未缓存'),
                   ]),
@@ -514,7 +514,7 @@ class _DesktopViewer extends StatefulWidget {
   });
 
   final GalleryController gallery;
-  final AppController app;
+  final AppServices app;
   final PhotoEntry entry;
   final List<PhotoEntry> sequence;
   final VoidCallback onBack;
@@ -904,7 +904,7 @@ class _InfoPanel extends StatelessWidget {
                     theme,
                     '来源',
                     <(String, String)>[
-                      ('所在目录', app.displayPath(entry.directory)),
+                      ('所在目录', app.workspaceController.displayPath(entry.directory)),
                       if (entry.device != null) ('上传设备', entry.device!),
                     ],
                     trailing: _cacheRow(cached),

@@ -7,9 +7,10 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../../shared/cache/disk_image_cache.dart';
 import '../../../shared/gallery_index_hooks.dart';
-import '../../../shared/state/app_controller.dart';
+import '../../../shared/state/app_services.dart';
 import '../../auth/domain/user_session.dart';
 import '../../transfer/domain/transfer_task.dart';
+import '../../workspace/domain/delete_models.dart';
 import '../../workspace/domain/file_item.dart';
 import '../../workspace/infrastructure/oss_client.dart';
 import '../domain/gallery_config.dart';
@@ -26,12 +27,12 @@ enum GalleryPhase { idle, loading, scanning, repairing, ready, error }
 /// 相册模块应用层控制器：索引同步、时间线数据、原图缓存状态与批量操作。
 class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   GalleryController({
-    required AppController appController,
+    required AppServices services,
     required OssClient ossClient,
     GalleryDatabase? database,
     MediaBridge? mediaBridge,
     ClipboardBridge? clipboardBridge,
-  })  : _app = appController,
+  })  : _services = services,
         _ossClient = ossClient,
         _database = database ?? GalleryDatabase(),
         _mediaBridge = mediaBridge ?? MediaBridge(),
@@ -44,13 +45,16 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
     _cacheStore = OriginalCacheStore(_database);
   }
 
-  final AppController _app;
+  final AppServices _services;
   final OssClient _ossClient;
   final GalleryDatabase _database;
   final MediaBridge _mediaBridge;
   final ClipboardBridge _clipboard;
   late final PhotoIndexRepository _repository;
   late final OriginalCacheStore _cacheStore;
+
+  /// 会话状态只读访问：按域取自聚合层的会话控制器。
+  UserSession? get _session => _services.sessionController.session;
 
   /// 复制成功的瞬时反馈：按钮与 ⌘C 共用，2 秒后自动复位。
   final ValueNotifier<bool> clipboardCopiedListenable =
@@ -93,7 +97,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   bool get isDesktop => !Platform.isAndroid && !Platform.isIOS;
 
   /// 传输任务只读快照（查看器判断原图下载状态用）。
-  List<TransferTask> get appTasks => _app.tasks;
+  List<TransferTask> get appTasks => _services.transferQueue.tasks;
 
   bool isCached(String key) => cachedKeysListenable.value.contains(key);
 
@@ -107,7 +111,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   /// 进入相册页时的索引装载入口。
   Future<void> load() async {
     if (_phase == GalleryPhase.scanning) return;
-    final session = _app.session;
+    final session = _session;
     if (session == null || !session.isRemote) {
       _phase = GalleryPhase.error;
       _errorMessage = '请先登录';
@@ -115,7 +119,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
       return;
     }
     try {
-      await _app.ensureSessionReady();
+      await _services.sessionController.ensureSessionReady();
     } catch (error) {
       debugPrint('[gallery] 会话校验失败: $error');
       _phase = GalleryPhase.error;
@@ -123,7 +127,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
       notifyListeners();
       return;
     }
-    final current = _app.session;
+    final current = _session;
     if (current == null) {
       _phase = GalleryPhase.error;
       _errorMessage = '请先登录';
@@ -190,7 +194,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   /// 旧版本上传未增量入索引的照片。
   Future<void> rebuildIndex() async {
     if (_phase == GalleryPhase.scanning) return;
-    final session = _app.session;
+    final session = _session;
     if (session == null || !session.isRemote) {
       _phase = GalleryPhase.error;
       _errorMessage = '请先登录';
@@ -356,7 +360,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
 
   // ---------- 缩略图加载 ----------
 
-  String get _cacheNamespace => _app.thumbnailCacheNamespace;
+  String get _cacheNamespace => _services.workspaceController.thumbnailCacheNamespace;
 
   String _gridCacheKey(PhotoEntry entry) => DiskImageCache.cacheKey(
         namespace: _cacheNamespace,
@@ -374,7 +378,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
       _gridCacheKey(entry),
     );
     if (cached != null) return cached;
-    final session = _app.session;
+    final session = _session;
     if (session == null) return null;
     try {
       final List<int> bytes;
@@ -416,7 +420,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
       cacheKey,
     );
     if (cached != null) return cached;
-    final session = _app.session;
+    final session = _session;
     if (session == null) return null;
     try {
       final bytes = await _ossClient.download(thumbKey, session);
@@ -445,7 +449,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
       cacheKey,
     );
     if (cached != null) return cached;
-    final session = _app.session;
+    final session = _session;
     if (session == null) return null;
     // 超大图 OSS 图片处理不支持（ImageTooLarge），直接用本地生成的
     // 缩略图对象放大展示。
@@ -526,7 +530,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   Future<String> downloadOriginal(PhotoEntry entry) async {
     await _cleanOverCapacityQuietly();
     final target = await _cacheStore.fileFor(entry.key);
-    return _app.enqueueOriginalDownload(
+    return _services.transferController.enqueueOriginalDownload(
       path: entry.key,
       name: entry.name,
       totalBytes: entry.size,
@@ -548,7 +552,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
   /// 为视频条目生成 OSS GetObject 预签名 URL（流式播放用）。
   /// URL 仅内存返回，不缓存、不落盘；失败返回 null，由界面提示重试。
   Future<String?> presignVideoUrl(PhotoEntry entry) async {
-    final session = _app.session;
+    final session = _session;
     if (session == null || !session.isRemote) return null;
     try {
       return await _ossClient.presignGetObjectUrl(entry.key, session);
@@ -574,8 +578,8 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
             ))
         .toList();
     try {
-      final preview = await _app.prepareBatchDelete(items);
-      final summary = await _app.deleteBatch(preview);
+      final preview = await _services.recycleBinController.prepareBatchDelete(items);
+      final summary = await _services.recycleBinController.deleteBatch(preview);
       return summary;
     } finally {
       clearSelection();
@@ -644,7 +648,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
         '${DateTime.now().microsecondsSinceEpoch}.${image.extension}',
       );
       await file.writeAsBytes(image.bytes, flush: true);
-      await _app.uploadFile(
+      await _services.transferController.uploadFile(
         fileName: file.uri.pathSegments.last,
         localPath: file.path,
         fileSize: image.bytes.length,
@@ -679,7 +683,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
     final existing = await _cacheStore.readOriginal(entry.key);
     if (existing != null) return existing;
     await _cleanOverCapacityQuietly();
-    final session = _app.session;
+    final session = _session;
     if (session == null || !session.isRemote) {
       throw StateError('请先登录');
     }
@@ -760,7 +764,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
     required String localPath,
     String? thumbLocalPath,
   }) async {
-    final session = _app.session;
+    final session = _session;
     if (session == null || !session.isRemote) return;
     final entry = await _repository.addUploadedMedia(
       session,
@@ -776,7 +780,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
 
   @override
   Future<void> onObjectsDeleted(Set<String> objectKeys) async {
-    final session = _app.session;
+    final session = _session;
     if (session == null || !session.isRemote) return;
     if (_scanInProgress) {
       _scanPendingDeletes
@@ -791,7 +795,7 @@ class GalleryController extends ChangeNotifier implements GalleryIndexHooks {
 
   @override
   Future<void> onObjectsRestored(Set<String> objectKeys) async {
-    final session = _app.session;
+    final session = _session;
     if (session == null || !session.isRemote) return;
     if (_scanInProgress) {
       _scanPendingUpserts

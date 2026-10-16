@@ -187,7 +187,7 @@ typedef _ShareStack = ({
 });
 
 /// 直测夹层：按生产装配顺序构建 Session → Workspace → Queue →
-/// TransferController → ShareImportController，不经过 AppController 门面。
+/// TransferController → ShareImportController，不经过 AppServices 门面。
 Future<_ShareStack> _shareStack({_FakeOssClient? oss}) async {
   SharedPreferences.setMockInitialValues(<String, Object>{});
   final client = oss ?? _FakeOssClient();

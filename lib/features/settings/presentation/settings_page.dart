@@ -155,7 +155,7 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final controller = AppScope.of(context);
-    final session = controller.session;
+    final session = controller.sessionController.session;
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final desktop =
@@ -303,10 +303,10 @@ class _SettingsPageState extends State<SettingsPage> {
                       title: const Text('启动时自动检查更新'),
                       subtitle: Text(_autoCheckSubtitle),
                       value:
-                          controller.autoCheckUpdates && !_devUpdateCheckLocked,
+                          controller.settingsController.autoCheckUpdates && !_devUpdateCheckLocked,
                       onChanged: _devUpdateCheckLocked
                           ? null
-                          : (value) => controller.setAutoCheckUpdates(value),
+                          : (value) => controller.settingsController.setAutoCheckUpdates(value),
                     ),
                   ],
                 ],
@@ -326,14 +326,14 @@ class _SettingsPageState extends State<SettingsPage> {
                     contentPadding: _mobileTilePadding(desktop),
                     minVerticalPadding: _mobileTileVerticalPadding(desktop),
                     leading: _SettingsLeadingIcon(
-                      icon: controller.themeMode == ThemeMode.light
+                      icon: controller.settingsController.themeMode == ThemeMode.light
                           ? Icons.light_mode_outlined
                           : Icons.dark_mode_outlined,
                       desktop: desktop,
                     ),
                     title: const Text('外观模式'),
                     subtitle: Text(
-                      controller.themeMode == ThemeMode.dark ? '深色模式' : '浅色模式',
+                      controller.settingsController.themeMode == ThemeMode.dark ? '深色模式' : '浅色模式',
                     ),
                   ),
                   const Divider(height: 1),
@@ -364,9 +364,9 @@ class _SettingsPageState extends State<SettingsPage> {
                             label: Text('深色模式'),
                           ),
                         ],
-                        selected: <ThemeMode>{controller.themeMode},
+                        selected: <ThemeMode>{controller.settingsController.themeMode},
                         onSelectionChanged: (modes) =>
-                            controller.setThemeMode(modes.first),
+                            controller.settingsController.setThemeMode(modes.first),
                       ),
                     ),
                   ),
@@ -474,7 +474,7 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _logout() async {
-    await AppScope.of(context).logout();
+    await AppScope.of(context).sessionController.logout();
     if (!mounted) return;
     Navigator.of(context).pushNamedAndRemoveUntil(
       RouteNames.login,

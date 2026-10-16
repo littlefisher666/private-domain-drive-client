@@ -13,14 +13,14 @@ import 'features/settings/infrastructure/macos_sparkle_updater.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
-  final controller = await AppBootstrap.initialize();
-  runApp(PrivateDomainDriveApp(controller: controller));
+  final services = await AppBootstrap.initialize();
+  runApp(PrivateDomainDriveApp(services: services));
   // 两端统一的启动静默门禁检查：不阻塞启动、失败放行；调试开关同时关闭该检查。
-  unawaited(controller.checkForcedUpgradeGate());
+  unawaited(services.settingsController.checkForcedUpgradeGate());
   if (!kIsWeb &&
       Platform.isMacOS &&
       !AppConstants.disableStartupUpdateCheck &&
-      controller.autoCheckUpdates) {
+      services.settingsController.autoCheckUpdates) {
     unawaited(
         MacosSparkleUpdater.instance.startupCheck().catchError((Object _) {}));
   }

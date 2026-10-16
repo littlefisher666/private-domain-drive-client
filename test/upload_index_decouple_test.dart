@@ -7,7 +7,7 @@ import 'package:private_domain_drive_client/features/auth/infrastructure/session
 import 'package:private_domain_drive_client/features/transfer/domain/transfer_task.dart';
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
 import 'package:private_domain_drive_client/shared/gallery_index_hooks.dart';
-import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/shared/state/app_services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _FakeSessionRepository implements SessionRepository {
@@ -142,7 +142,7 @@ void main() {
 
   test('上传任务在 OSS 成功后立即标记成功，索引簿记不阻塞并发槽', () async {
     final hooks = _GatedHooks();
-    final controller = AppController(
+    final controller = AppServices(
       sessionRepository: _FakeSessionRepository(_remoteSession()),
       ossClient: _FastOss(),
     );
@@ -161,7 +161,7 @@ void main() {
       } catch (_) {}
     });
 
-    await controller.uploadFile(
+    await controller.transferController.uploadFile(
       fileName: 'photo.jpg',
       localPath: source.path,
       fileSize: 7,
@@ -169,7 +169,7 @@ void main() {
 
     // 索引簿记仍被 gate 挂起时，传输任务应已成功（并发槽已释放）。
     await _waitFor(
-      () async => controller.tasks.first.status == TransferTaskStatus.success,
+      () async => controller.transferQueue.tasks.first.status == TransferTaskStatus.success,
       because: 'OSS 成功后任务应立即标记成功，不等索引钩子',
     );
     expect(hooks.hookStarted, isTrue);
@@ -180,12 +180,12 @@ void main() {
       () async => hooks.hookCompleted,
       because: '索引钩子应在后台继续执行完成',
     );
-    expect(controller.tasks.first.status, TransferTaskStatus.success);
+    expect(controller.transferQueue.tasks.first.status, TransferTaskStatus.success);
   });
 
   test('索引钩子抛出异常不影响任务成功状态', () async {
     final hooks = _ThrowingHooks();
-    final controller = AppController(
+    final controller = AppServices(
       sessionRepository: _FakeSessionRepository(_remoteSession()),
       ossClient: _FastOss(),
     );
@@ -204,7 +204,7 @@ void main() {
       } catch (_) {}
     });
 
-    await controller.uploadFile(
+    await controller.transferController.uploadFile(
       fileName: 'photo.jpg',
       localPath: source.path,
       fileSize: 7,
@@ -214,7 +214,7 @@ void main() {
       () async => hooks.hookCompleted,
       because: '后台钩子应执行完毕',
     );
-    expect(controller.tasks.first.status, TransferTaskStatus.success);
+    expect(controller.transferQueue.tasks.first.status, TransferTaskStatus.success);
   });
 }
 

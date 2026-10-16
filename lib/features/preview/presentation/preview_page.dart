@@ -138,7 +138,7 @@ class _PreviewPageState extends State<PreviewPage> {
                   ),
                 ),
                 Text(
-                  controller.displayPath(
+                  controller.workspaceController.displayPath(
                     widget.arguments?.displayPaths[currentItem.path] ??
                         currentItem.path,
                   ),
@@ -149,14 +149,14 @@ class _PreviewPageState extends State<PreviewPage> {
               ],
             ),
             actions: <Widget>[
-              if (controller.capabilities.download)
+              if (controller.sessionController.capabilities.download)
                 IconButton(
                   tooltip: '下载',
                   onPressed: () async {
                     try {
                       final directory = await selectDownloadDirectory();
                       if (directory == null) return;
-                      controller.enqueueDownload(
+                      controller.transferController.enqueueDownload(
                         FileItem(
                           path: currentItem.path,
                           name: currentItem.name,
@@ -189,25 +189,25 @@ class _PreviewPageState extends State<PreviewPage> {
                 previewType: previewType,
                 fileName: currentItem.name,
                 filePath: currentItem.path,
-                imageLoader: controller.loadImagePreview,
-                thumbnailLoader: controller.loadThumbnail,
+                imageLoader: controller.workspaceController.loadImagePreview,
+                thumbnailLoader: controller.workspaceController.loadThumbnail,
                 imagePositionText: images.length > 1
                     ? '${_index + 1} / ${images.length}'
                     : null,
                 onImageSwipe: images.length > 1 ? _onSwipe : null,
                 imageTransitionOffset: _enterOffset,
-                documentLoader: controller.loadPdfDocument,
-                textLoaderFactory: controller.createTextPreviewLoader,
-                mediaUrlLoader: controller.presignMediaUrl,
+                documentLoader: controller.workspaceController.loadPdfDocument,
+                textLoaderFactory: controller.workspaceController.createTextPreviewLoader,
+                mediaUrlLoader: controller.workspaceController.presignMediaUrl,
               )
             : _PreviewBody(
                 previewType: previewType,
                 fileName: currentItem.name,
                 filePath: currentItem.path,
-                imageLoader: controller.loadImagePreview,
-                documentLoader: controller.loadPdfDocument,
-                textLoaderFactory: controller.createTextPreviewLoader,
-                mediaUrlLoader: controller.presignMediaUrl,
+                imageLoader: controller.workspaceController.loadImagePreview,
+                documentLoader: controller.workspaceController.loadPdfDocument,
+                textLoaderFactory: controller.workspaceController.createTextPreviewLoader,
+                mediaUrlLoader: controller.workspaceController.presignMediaUrl,
               ),
       ),
     );

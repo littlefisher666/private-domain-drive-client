@@ -6,7 +6,7 @@ import 'package:private_domain_drive_client/features/auth/infrastructure/session
 import 'package:private_domain_drive_client/features/workspace/domain/directory_alias.dart';
 import 'package:private_domain_drive_client/features/workspace/domain/file_item.dart';
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
-import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/shared/state/app_services.dart';
 import 'package:private_domain_oss/private_domain_oss.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -129,13 +129,13 @@ void main() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
   });
 
-  Future<AppController> login(_AliasFakeOssClient oss) async {
-    final controller = AppController(
+  Future<AppServices> login(_AliasFakeOssClient oss) async {
+    final controller = AppServices(
       sessionRepository: _FakeSessionRepository(_session()),
       ossClient: oss,
     );
     await controller.bootstrap();
-    await controller.login(account: 'test', password: '123456');
+    await controller.sessionController.login(account: 'test', password: '123456');
     return controller;
   }
 
@@ -166,7 +166,7 @@ void main() {
       ]);
     final controller = await login(oss);
 
-    final items = await controller.listDirectory('shared/家庭资料/');
+    final items = await controller.workspaceController.listDirectory('shared/家庭资料/');
 
     expect(
       items.where((item) => item.name == '医疗'),
@@ -184,7 +184,7 @@ void main() {
     final controller = await login(oss);
 
     await expectLater(
-      controller.createAlias(
+      controller.aliasController.createAlias(
         const FileItem(
           path: 'shared/家庭资料/医疗/',
           name: '医疗',
@@ -204,11 +204,11 @@ void main() {
       ]);
     final controller = await login(oss);
 
-    final items = await controller.listDirectory('shared/家庭资料/');
+    final items = await controller.workspaceController.listDirectory('shared/家庭资料/');
     final aliasItem = items.singleWhere((item) => item.name == '医疗1');
-    controller.toggleMultiSelection(aliasItem);
+    controller.workspaceController.toggleMultiSelection(aliasItem);
 
-    expect(controller.isMultiSelectionMode, isFalse);
-    expect(controller.multiSelectedPaths, isEmpty);
+    expect(controller.workspaceController.isMultiSelectionMode, isFalse);
+    expect(controller.workspaceController.multiSelectedPaths, isEmpty);
   });
 }

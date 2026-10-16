@@ -90,7 +90,7 @@ class _ForcedUpgradePageState extends State<ForcedUpgradePage>
       await _startSparkleUpgrade();
       return;
     }
-    final update = controller.forcedUpgradeResult?.availableUpdate;
+    final update = controller.settingsController.forcedUpgradeResult?.availableUpdate;
     if (update == null) {
       _fail('暂未找到适用于当前设备的更新包，请使用「手动下载」升级');
       return;
@@ -101,7 +101,7 @@ class _ForcedUpgradePageState extends State<ForcedUpgradePage>
     });
     try {
       await for (final progress
-          in controller.updateService.downloadAndroid(update)) {
+          in controller.settingsController.updateService.downloadAndroid(update)) {
         if (!mounted) return;
         setState(() => _downloadProgress = progress.fraction);
       }
@@ -151,7 +151,7 @@ class _ForcedUpgradePageState extends State<ForcedUpgradePage>
       _downloadProgress = null;
       _sparkleChecking = false;
     });
-    await controller.checkForcedUpgradeGate();
+    await controller.settingsController.checkForcedUpgradeGate();
   }
 
   Future<void> _openReleasesPage() async {
@@ -186,7 +186,7 @@ class _ForcedUpgradePageState extends State<ForcedUpgradePage>
   @override
   Widget build(BuildContext context) {
     final controller = AppScope.of(context);
-    final result = controller.forcedUpgradeResult;
+    final result = controller.settingsController.forcedUpgradeResult;
     if (result == null) {
       return const SizedBox.shrink();
     }

@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:private_domain_drive_client/features/share_import/infrastructure/android_share_import_bridge.dart';
-import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/features/share_import/domain/share_import_models.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

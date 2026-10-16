@@ -10,7 +10,7 @@ import 'package:private_domain_drive_client/features/auth/infrastructure/session
 import 'package:private_domain_drive_client/features/transfer/domain/transfer_task.dart';
 import 'package:private_domain_drive_client/features/transfer/infrastructure/upload_staging.dart';
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
-import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/shared/state/app_services.dart';
 
 const _uploadPendingKey = 'upload_pending:v1';
 
@@ -208,11 +208,11 @@ void main() {
     });
   });
 
-  group('AppController 上传任务持久化', () {
+  group('AppServices 上传任务持久化', () {
     test('入队即写入 upload_pending，缓存源文件迁移到 staging', () async {
       final fixture = _buildStagingFixture();
       SharedPreferences.setMockInitialValues(<String, Object>{});
-      final controller = AppController(
+      final controller = AppServices(
         sessionRepository: MemorySessionRepository(),
         uploadStaging: fixture.staging,
       );
@@ -222,13 +222,13 @@ void main() {
       final source = File('${fixture.cache.path}/shared-import/a.jpg');
       await source.parent.create(recursive: true);
       await source.writeAsString('hello');
-      await controller.uploadFile(
+      await controller.transferController.uploadFile(
         fileName: 'a.jpg',
         localPath: source.path,
         fileSize: 5,
       );
       await _waitFor(
-        () async => controller.tasks.first.status ==
+        () async => controller.transferQueue.tasks.first.status ==
             TransferTaskStatus.failed,
         because: '无会话时任务应快速失败',
       );
@@ -250,7 +250,7 @@ void main() {
     test('任务成功后记录清空且 staging 文件被清理', () async {
       final fixture = _buildStagingFixture();
       SharedPreferences.setMockInitialValues(<String, Object>{});
-      final controller = AppController(
+      final controller = AppServices(
         sessionRepository: _FakeSessionRepository(_remoteSession()),
         ossClient: _FakeOssClient(),
         uploadStaging: fixture.staging,
@@ -261,20 +261,20 @@ void main() {
       final source = File('${fixture.cache.path}/shared-import/b.jpg');
       await source.parent.create(recursive: true);
       await source.writeAsString('payload');
-      await controller.uploadFile(
+      await controller.transferController.uploadFile(
         fileName: 'b.jpg',
         localPath: source.path,
         fileSize: 7,
       );
       await _waitFor(
-        () async => controller.tasks.first.status ==
+        () async => controller.transferQueue.tasks.first.status ==
             TransferTaskStatus.success,
         because: '假 OSS 客户端应立即成功',
       );
 
       final raw = (await _prefs()).getString(_uploadPendingKey);
       expect(raw, '[]');
-      final recordSource = controller.tasks.first.sourcePath!;
+      final recordSource = controller.transferQueue.tasks.first.sourcePath!;
       expect(await File(recordSource).exists(), isFalse);
     });
 
@@ -282,7 +282,7 @@ void main() {
       final fixture = _buildStagingFixture();
       SharedPreferences.setMockInitialValues(<String, Object>{});
       final gate = Completer<void>();
-      final controller = AppController(
+      final controller = AppServices(
         sessionRepository: _FakeSessionRepository(_remoteSession()),
         ossClient: _FakeOssClient(gate: gate),
         uploadStaging: fixture.staging,
@@ -293,13 +293,13 @@ void main() {
       final source = File('${fixture.cache.path}/shared-import/c.jpg');
       await source.parent.create(recursive: true);
       await source.writeAsString('payload');
-      await controller.uploadFile(
+      await controller.transferController.uploadFile(
         fileName: 'c.jpg',
         localPath: source.path,
         fileSize: 7,
       );
       await _waitFor(
-        () async => controller.tasks.first.status ==
+        () async => controller.transferQueue.tasks.first.status ==
             TransferTaskStatus.running,
         because: '上传应被 gate 挂起在 running 状态',
       );
@@ -310,9 +310,9 @@ void main() {
                 .length,
         1,
       );
-      controller.cancelTask(controller.tasks.first.id);
+      controller.transferController.cancelTask(controller.transferQueue.tasks.first.id);
       await _waitFor(
-        () async => controller.tasks.first.status ==
+        () async => controller.transferQueue.tasks.first.status ==
             TransferTaskStatus.canceled,
       );
       gate.complete();
@@ -334,7 +334,7 @@ void main() {
       SharedPreferences.setMockInitialValues(<String, Object>{
         _uploadPendingKey: jsonEncode([task.toJson()]),
       });
-      final controller = AppController(
+      final controller = AppServices(
         sessionRepository: MemorySessionRepository(),
         uploadStaging: fixture.staging,
       );
@@ -342,7 +342,7 @@ void main() {
 
       await controller.bootstrap();
 
-      final restored = controller.tasks.first;
+      final restored = controller.transferQueue.tasks.first;
       expect(restored.status, TransferTaskStatus.interrupted);
       expect(restored.message, '已中断');
       expect(restored.targetDir, 'shared/');
@@ -362,7 +362,7 @@ void main() {
       SharedPreferences.setMockInitialValues(<String, Object>{
         _uploadPendingKey: jsonEncode([task.toJson()]),
       });
-      final controller = AppController(
+      final controller = AppServices(
         sessionRepository: MemorySessionRepository(),
         uploadStaging: fixture.staging,
       );
@@ -370,7 +370,7 @@ void main() {
 
       await controller.bootstrap();
 
-      final restored = controller.tasks.first;
+      final restored = controller.transferQueue.tasks.first;
       expect(restored.status, TransferTaskStatus.failed);
       expect(restored.error, '源文件已丢失');
       await _waitFor(
@@ -390,18 +390,18 @@ void main() {
       SharedPreferences.setMockInitialValues(<String, Object>{
         _uploadPendingKey: jsonEncode([task.toJson()]),
       });
-      final controller = AppController(
+      final controller = AppServices(
         sessionRepository: MemorySessionRepository(),
         uploadStaging: fixture.staging,
       );
       addTearDown(controller.dispose);
       await controller.bootstrap();
-      expect(controller.tasks.first.status, TransferTaskStatus.interrupted);
+      expect(controller.transferQueue.tasks.first.status, TransferTaskStatus.interrupted);
 
       // 放弃：转已取消并清理 staging 文件，记录移除。
-      controller.abandonInterruptedUpload('upload-11');
+      controller.transferController.abandonInterruptedUpload('upload-11');
       await _waitFor(
-        () async => controller.tasks.first.status ==
+        () async => controller.transferQueue.tasks.first.status ==
             TransferTaskStatus.canceled,
       );
       await _waitFor(() async => !await source.exists(),
@@ -423,22 +423,22 @@ void main() {
       SharedPreferences.setMockInitialValues(<String, Object>{
         _uploadPendingKey: jsonEncode([task.toJson()]),
       });
-      final controller = AppController(
+      final controller = AppServices(
         sessionRepository: MemorySessionRepository(),
         uploadStaging: fixture.staging,
       );
       addTearDown(controller.dispose);
       await controller.bootstrap();
-      expect(controller.tasks.first.status, TransferTaskStatus.interrupted);
+      expect(controller.transferQueue.tasks.first.status, TransferTaskStatus.interrupted);
 
       // 继续上传：重新入队后因无会话而失败，但记录保留（targetDir 不变）。
-      controller.resumeInterruptedUpload('upload-12');
+      controller.transferController.resumeInterruptedUpload('upload-12');
       await _waitFor(
-        () async => controller.tasks.first.status ==
+        () async => controller.transferQueue.tasks.first.status ==
             TransferTaskStatus.failed,
         because: '无会话时继续上传应重新入队并快速失败',
       );
-      expect(controller.tasks.first.error, contains('请先登录'));
+      expect(controller.transferQueue.tasks.first.error, contains('请先登录'));
       expect(await source.exists(), isTrue);
       final raw = (await _prefs()).getString(_uploadPendingKey);
       expect(jsonDecode(raw!) as List, hasLength(1));
@@ -468,17 +468,17 @@ void main() {
             ).toJson(),
         ]),
       });
-      final controller = AppController(
+      final controller = AppServices(
         sessionRepository: MemorySessionRepository(),
         uploadStaging: fixture.staging,
       );
       addTearDown(controller.dispose);
       await controller.bootstrap();
-      expect(controller.tasks.length, 3);
+      expect(controller.transferQueue.tasks.length, 3);
 
-      controller.abandonAllInterruptedUploads();
+      controller.transferController.abandonAllInterruptedUploads();
       await _waitFor(
-        () async => controller
+        () async => controller.transferQueue
             .tasks
             .every((task) => task.status == TransferTaskStatus.canceled),
       );
@@ -486,7 +486,7 @@ void main() {
         await _waitFor(() async => !await sources[index].exists(),
             because: '第 $index 个 staging 文件应被清理');
       }
-      expect(controller.interruptedUploadTaskIds, isEmpty);
+      expect(controller.transferController.interruptedUploadTaskIds, isEmpty);
       await _waitFor(
         () async => (await _prefs()).getString(_uploadPendingKey) == '[]',
       );

@@ -24,9 +24,9 @@ class _SplashPageState extends State<SplashPage> {
     if (!mounted) {
       return;
     }
-    final next = !controller.isLoggedIn
+    final next = !controller.sessionController.isLoggedIn
         ? RouteNames.login
-        : controller.session?.mustResetPassword == true
+        : controller.sessionController.session?.mustResetPassword == true
             ? RouteNames.changePassword
             : RouteNames.home;
     // 分享导入的目录选择弹窗可能已压在启动页之上；pushReplacementNamed

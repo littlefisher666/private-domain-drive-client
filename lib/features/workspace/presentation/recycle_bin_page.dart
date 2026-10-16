@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../../app/router/route_names.dart';
-import '../../../shared/state/app_controller.dart';
+import '../../../shared/state/app_services.dart';
+import '../../../shared/path_utils.dart' as path_utils;
+import '../application/workspace_controller.dart';
 import '../../../shared/state/app_scope.dart';
 import '../../../shared/widgets/app_feedback.dart';
 import '../../../shared/widgets/file_icon.dart';
@@ -55,7 +57,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
   }
 
   Future<List<RecycleBinEntry>> _load() async {
-    final entries = await AppScope.of(context).listRecycleBin();
+    final entries = await AppScope.of(context).recycleBinController.listRecycleBin();
     if (mounted) setState(() {});
     return entries;
   }
@@ -70,9 +72,9 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
 
   String _folder(String path) => path.endsWith('/') ? path : '$path/';
 
-  static final String _rootDir = _staticFolder(AppController.rootPrefix);
+  static final String _rootDir = _staticFolder(path_utils.rootPrefix);
   static final String _trashPrefix =
-      _staticFolder('${AppController.rootPrefix}.trash');
+      _staticFolder('${path_utils.rootPrefix}.trash');
 
   static String _staticFolder(String path) =>
       path.endsWith('/') ? path : '$path/';
@@ -117,7 +119,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
     final result = <String, FileItem>{};
     final owners = <String, RecycleBinEntry>{};
     final controller = AppScope.of(context);
-    final current = _folder(controller.recycleBinPath);
+    final current = _folder(controller.recycleBinController.recycleBinPath);
 
     void add(String path, String name, bool directory, RecycleBinEntry entry) {
       final canonical = directory ? _folder(path) : path;
@@ -161,12 +163,12 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       }
     }
     _itemEntries = owners;
-    return sortFileItems(result.values, controller.fileSortOption);
+    return sortFileItems(result.values, controller.workspaceController.fileSortOption);
   }
 
   void _open(FileItem item) {
     if (item.isDirectory) {
-      AppScope.of(context).setRecycleBinPath(_folder(item.path));
+      AppScope.of(context).recycleBinController.setRecycleBinPath(_folder(item.path));
       _selected.value = null;
       return;
     }
@@ -271,9 +273,9 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
 
   void _goUp() {
     final controller = AppScope.of(context);
-    final up = controller.recycleBinUpPath();
-    if (up == controller.recycleBinPath) return;
-    controller.setRecycleBinPath(up);
+    final up = controller.recycleBinController.recycleBinUpPath();
+    if (up == controller.recycleBinController.recycleBinPath) return;
+    controller.recycleBinController.setRecycleBinPath(up);
     _selected.value = null;
   }
 
@@ -289,7 +291,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
     );
     if (!confirmed) return;
     try {
-      await controller.restoreRecycleBinEntry(entry);
+      await controller.recycleBinController.restoreRecycleBinEntry(entry);
       await _reload();
       if (mounted) AppFeedback.showSnack(context, '已恢复 ${entry.name}');
     } catch (error) {
@@ -309,7 +311,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
     );
     if (!confirmed) return;
     try {
-      await controller.purgeRecycleBinEntry(entry);
+      await controller.recycleBinController.purgeRecycleBinEntry(entry);
       _selected.value = null;
       await _reload();
       if (mounted) AppFeedback.showSnack(context, '已永久删除 ${entry.name}');
@@ -359,20 +361,20 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       ? '—'
       : _date(_itemEntries[item.path]!.deletedAt);
 
-  Widget _itemsArea(List<FileItem> items, AppController controller) {
+  Widget _itemsArea(List<FileItem> items, AppServices controller) {
     if (items.isEmpty) return const Center(child: Text('回收站为空'));
     _visibleItems = items;
     final common = <String, Object?>{
       'selectedPath': _selected.value?.path,
     };
-    if (controller.browseMode == BrowseMode.grid) {
+    if (controller.workspaceController.browseMode == BrowseMode.grid) {
       return WorkspaceGridView(
         items: items,
         selectedPath: common['selectedPath'] as String?,
         selectedPaths: const <String>{},
         multiSelecting: false,
         desktop: _desktop,
-        thumbnailSize: controller.thumbnailSize,
+        thumbnailSize: controller.workspaceController.thumbnailSize,
         subtitleBuilder: _subtitle,
         thumbnailLoader: (_) async => <int>[],
         thumbnailCacheNamespace: 'recycle-bin',
@@ -444,7 +446,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
               const SizedBox(height: 12),
               Text('类型：${item.typeLabel}'),
               Text(
-                  '原位置：${AppScope.of(context).displayPath(_sourceKeyFor(item, entry))}'),
+                  '原位置：${AppScope.of(context).workspaceController.displayPath(_sourceKeyFor(item, entry))}'),
               Text('删除于：${_date(entry.deletedAt)}'),
               Text('永久删除：${_date(entry.expiresAt)}'),
               Text(_remaining(entry.expiresAt)),
@@ -477,19 +479,19 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
             return Center(child: Text('回收站加载失败：${snapshot.error}'));
           }
           final items = _itemsFor(snapshot.data ?? const <RecycleBinEntry>[]);
-          final recycleBinPath = controller.recycleBinPath;
+          final recycleBinPath = controller.recycleBinController.recycleBinPath;
           final pathLabel =
               _pathLabel(recycleBinPath, snapshot.data ?? const []);
           if (desktop) {
             return WorkspaceDesktopBody(
               path: pathLabel,
-              canGoUp: recycleBinPath != AppController.rootPrefix,
+              canGoUp: recycleBinPath != path_utils.rootPrefix,
               canUpload: false,
               canDelete: false,
               canDownload: false,
-              browseMode: controller.browseMode,
-              thumbnailSize: controller.thumbnailSize,
-              sortOption: controller.fileSortOption,
+              browseMode: controller.workspaceController.browseMode,
+              thumbnailSize: controller.workspaceController.thumbnailSize,
+              sortOption: controller.workspaceController.fileSortOption,
               selectedListenable: _selected,
               directorySizeStatesListenable: _directorySizes,
               listArea: _itemsArea(items, controller),
@@ -498,9 +500,9 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
               onCreateFolder: () {},
               onUpload: () {},
               onUploadDirectory: () {},
-              onBrowseModeChanged: controller.setBrowseMode,
-              onThumbnailSizeChanged: controller.setThumbnailSize,
-              onSortChanged: controller.setFileSortOption,
+              onBrowseModeChanged: controller.workspaceController.setBrowseMode,
+              onThumbnailSizeChanged: controller.workspaceController.setThumbnailSize,
+              onSortChanged: controller.workspaceController.setFileSortOption,
               onOpen: _open,
               onPreview: _openPreview,
               onDownload: (_) {},
@@ -517,17 +519,17 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
                 WorkspaceMobileHeader(
                   title: '回收站',
                   path: pathLabel,
-                  roleLabel: controller.session?.displayName ?? '成员',
-                  canGoUp: recycleBinPath != AppController.rootPrefix,
-                  browseMode: controller.browseMode,
-                  sortOption: controller.fileSortOption,
+                  roleLabel: controller.sessionController.session?.displayName ?? '成员',
+                  canGoUp: recycleBinPath != path_utils.rootPrefix,
+                  browseMode: controller.workspaceController.browseMode,
+                  sortOption: controller.workspaceController.fileSortOption,
                   onGoUp: _goUp,
                   onRefresh: _reload,
-                  onBrowseModeChanged: controller.setBrowseMode,
+                  onBrowseModeChanged: controller.workspaceController.setBrowseMode,
                   onChooseSort: () => showFileSortSheet(
                     context,
-                    current: controller.fileSortOption,
-                    onSelected: controller.setFileSortOption,
+                    current: controller.workspaceController.fileSortOption,
+                    onSelected: controller.workspaceController.setFileSortOption,
                   ),
                 ),
                 const SizedBox(height: 12),

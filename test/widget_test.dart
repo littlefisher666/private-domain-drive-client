@@ -7,19 +7,19 @@ import 'package:private_domain_drive_client/features/auth/presentation/login_pag
 import 'package:private_domain_drive_client/features/auth/presentation/change_password_page.dart';
 import 'package:private_domain_drive_client/features/auth/infrastructure/saved_credentials_store.dart';
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
-import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/shared/state/app_services.dart';
 import 'package:private_domain_drive_client/shared/state/app_scope.dart';
 
 void main() {
-  AppController controllerWithMemoryStore() => AppController(
+  AppServices controllerWithMemoryStore() => AppServices(
         sessionRepository: MemorySessionRepository(),
         savedCredentialsStore:
             SavedCredentialsStore(storage: InMemoryCredentialsStorage()),
       );
 
-  Future<AppController> loggedInController() async {
+  Future<AppServices> loggedInController() async {
     final controller = controllerWithMemoryStore();
-    await controller.login(account: 'admin', password: '123456');
+    await controller.sessionController.login(account: 'admin', password: '123456');
     return controller;
   }
 
@@ -28,7 +28,7 @@ void main() {
 
     await tester.pumpWidget(
       AppScope(
-        controller: controller,
+        services: controller,
         child: const MaterialApp(
           home: LoginPage(),
         ),
@@ -41,7 +41,7 @@ void main() {
   });
 
   testWidgets('登录页预填最近一次成功登录的凭据', (tester) async {
-    final controller = AppController(
+    final controller = AppServices(
       sessionRepository: MemorySessionRepository(),
       savedCredentialsStore: SavedCredentialsStore(
         storage: InMemoryCredentialsStorage(initialValues: <String, String>{
@@ -55,7 +55,7 @@ void main() {
 
     await tester.pumpWidget(
       AppScope(
-        controller: controller,
+        services: controller,
         child: const MaterialApp(
           home: LoginPage(),
         ),
@@ -75,7 +75,7 @@ void main() {
     final controller = await loggedInController();
     await tester.pumpWidget(
       AppScope(
-        controller: controller,
+        services: controller,
         child: const MaterialApp(home: ChangePasswordPage()),
       ),
     );
@@ -93,7 +93,7 @@ void main() {
     final controller = await loggedInController();
     await tester.pumpWidget(
       AppScope(
-        controller: controller,
+        services: controller,
         child: const MaterialApp(home: ChangePasswordPage(forced: false)),
       ),
     );
@@ -111,7 +111,7 @@ void main() {
     final controller = await loggedInController();
     await tester.pumpWidget(
       AppScope(
-        controller: controller,
+        services: controller,
         child: const MaterialApp(home: ChangePasswordPage(forced: false)),
       ),
     );
@@ -130,7 +130,7 @@ void main() {
     final controller = await loggedInController();
     await tester.pumpWidget(
       AppScope(
-        controller: controller,
+        services: controller,
         child: MaterialApp(
           routes: {
             RouteNames.changePassword: (_) =>
@@ -167,6 +167,6 @@ void main() {
 
     expect(find.text('设置页'), findsOneWidget);
     expect(find.byType(ChangePasswordPage), findsNothing);
-    expect(controller.session?.mustResetPassword, isFalse);
+    expect(controller.sessionController.session?.mustResetPassword, isFalse);
   });
 }

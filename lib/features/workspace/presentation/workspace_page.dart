@@ -11,7 +11,11 @@ import '../../../app/router/route_names.dart';
 import '../../../app/theme/cupertino_desktop.dart';
 import '../../../core/utils/download_directory.dart';
 import '../../../core/utils/file_size_formatter.dart';
-import '../../../shared/state/app_controller.dart';
+import '../../../shared/state/app_services.dart';
+import '../../../shared/path_utils.dart' as path_utils;
+import '../domain/move_models.dart';
+import '../domain/delete_models.dart';
+import '../application/workspace_controller.dart';
 import '../../../shared/state/app_scope.dart';
 import '../../../shared/widgets/app_feedback.dart';
 import '../../../shared/widgets/file_icon.dart';
@@ -41,7 +45,7 @@ Future<void> pickAndUploadFile(
   bool fromAlbum = false,
 }) async {
   final controller = AppScope.read(context);
-  if (!controller.capabilities.upload) {
+  if (!controller.sessionController.capabilities.upload) {
     AppFeedback.showSnack(context, '当前身份没有上传权限');
     return;
   }
@@ -60,7 +64,7 @@ Future<void> pickAndUploadFile(
       if (localPath == null || localPath.isEmpty) {
         throw StateError('无法获取所选文件路径');
       }
-      await controller.uploadFile(
+      await controller.transferController.uploadFile(
         fileName: file.name,
         localPath: localPath,
         fileSize: (await file.length()) ?? 0,
@@ -83,7 +87,7 @@ Future<void> pickAndUploadFile(
 /// 选择本地文件夹，将其中内容按原有层级上传到当前目录。
 Future<void> pickAndUploadDirectory(BuildContext context) async {
   final controller = AppScope.read(context);
-  if (!controller.capabilities.upload) {
+  if (!controller.sessionController.capabilities.upload) {
     AppFeedback.showSnack(context, '当前身份没有上传权限');
     return;
   }
@@ -103,7 +107,7 @@ Future<void> pickAndUploadDirectory(BuildContext context) async {
           '',
         );
     final folderName = rootPath.split('/').last;
-    final uploadRoot = controller.currentPath;
+    final uploadRoot = controller.workspaceController.currentPath;
     if (folderName.isEmpty) throw StateError('无法获取文件夹名称');
 
     final entities =
@@ -124,7 +128,7 @@ Future<void> pickAndUploadDirectory(BuildContext context) async {
     for (final relativePath in folders) {
       final name =
           relativePath.isEmpty ? folderName : '$folderName/$relativePath';
-      await controller.createFolder(name, targetPath: uploadRoot);
+      await controller.workspaceController.createFolder(name, targetPath: uploadRoot);
     }
     // 整个文件夹作为一次提交归属同一批次。
     final batchId = files.length > 1
@@ -138,7 +142,7 @@ Future<void> pickAndUploadDirectory(BuildContext context) async {
       final fileName = segments.removeLast();
       final parent =
           segments.isEmpty ? folderName : '$folderName/${segments.join('/')}';
-      await controller.uploadFile(
+      await controller.transferController.uploadFile(
         fileName: fileName,
         localPath: file.path,
         fileSize: await file.length(),
@@ -197,15 +201,15 @@ class _WorkspacePageState extends State<WorkspacePage> {
   bool get _desktop =>
       widget.desktopChrome || MediaQuery.sizeOf(context).width >= 960;
 
-  void _syncDirectoryBinding(AppController controller, {bool force = false}) {
+  void _syncDirectoryBinding(AppServices controller, {bool force = false}) {
     if (!force &&
-        _boundPath == controller.currentPath &&
-        _boundTreeRevision == controller.treeRevision) {
+        _boundPath == controller.workspaceController.currentPath &&
+        _boundTreeRevision == controller.workspaceController.treeRevision) {
       return;
     }
-    _boundPath = controller.currentPath;
-    _boundTreeRevision = controller.treeRevision;
-    _itemsFuture = controller.listDirectory(controller.currentPath);
+    _boundPath = controller.workspaceController.currentPath;
+    _boundTreeRevision = controller.workspaceController.treeRevision;
+    _itemsFuture = controller.workspaceController.listDirectory(controller.workspaceController.currentPath);
     _resetSummaryFill();
   }
 
@@ -229,11 +233,11 @@ class _WorkspacePageState extends State<WorkspacePage> {
 
   Future<void> _reload() async {
     final controller = AppScope.of(context);
-    final future = controller.listDirectory(controller.currentPath);
+    final future = controller.workspaceController.listDirectory(controller.workspaceController.currentPath);
     setState(() {
       _itemsFuture = future;
-      _boundPath = controller.currentPath;
-      _boundTreeRevision = controller.treeRevision;
+      _boundPath = controller.workspaceController.currentPath;
+      _boundTreeRevision = controller.workspaceController.treeRevision;
       _resetSummaryFill();
     });
     await future;
@@ -250,7 +254,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
     if (dirPaths.isEmpty) return;
     final generation = _summaryGeneration;
     unawaited(() async {
-      final cached = await controller.cachedDirectorySummaries(dirPaths);
+      final cached = await controller.workspaceController.cachedDirectorySummaries(dirPaths);
       if (!mounted || generation != _summaryGeneration) return;
       if (cached.isNotEmpty) {
         setState(() {
@@ -260,7 +264,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
           };
         });
       }
-      await controller.refreshDirectorySummaries(
+      await controller.workspaceController.refreshDirectorySummaries(
         dirPaths,
         onResult: (path, summary) {
           if (!mounted || generation != _summaryGeneration) return;
@@ -277,14 +281,14 @@ class _WorkspacePageState extends State<WorkspacePage> {
 
   Future<void> _setSortOption(FileSortOption option) async {
     final controller = AppScope.of(context);
-    await controller.setFileSortOption(option);
+    await controller.workspaceController.setFileSortOption(option);
     if (mounted) await _reload();
   }
 
   void _showSortSheet() {
     showFileSortSheet(
       context,
-      current: AppScope.read(context).fileSortOption,
+      current: AppScope.read(context).workspaceController.fileSortOption,
       onSelected: _setSortOption,
     );
   }
@@ -294,7 +298,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
       return;
     }
     final controller = AppScope.read(context);
-    final selected = controller.selectedItem;
+    final selected = controller.workspaceController.selectedItem;
     final stillVisible =
         selected != null && items.any((item) => item.path == selected.path);
     if (stillVisible) {
@@ -304,17 +308,17 @@ class _WorkspacePageState extends State<WorkspacePage> {
       if (!mounted) {
         return;
       }
-      final current = AppScope.read(context).selectedItem;
+      final current = AppScope.read(context).workspaceController.selectedItem;
       final missing =
           current == null || !items.any((item) => item.path == current.path);
       if (missing) {
-        AppScope.read(context).selectItem(items.first);
+        AppScope.read(context).workspaceController.selectItem(items.first);
       }
     });
   }
 
   Widget _buildItemsArea({
-    required AppController controller,
+    required AppServices controller,
     required bool desktop,
     required bool canUpload,
   }) {
@@ -419,13 +423,13 @@ class _WorkspacePageState extends State<WorkspacePage> {
             onKeyEvent: (node, event) {
               if (desktop && event is KeyDownEvent) {
                 if (event.logicalKey == LogicalKeyboardKey.escape &&
-                    controller.isMultiSelectionMode) {
-                  controller.clearMultiSelection();
+                    controller.workspaceController.isMultiSelectionMode) {
+                  controller.workspaceController.clearMultiSelection();
                   return KeyEventResult.handled;
                 }
                 if (HardwareKeyboard.instance.isMetaPressed &&
                     event.logicalKey == LogicalKeyboardKey.keyA) {
-                  controller.selectAllItems(items);
+                  controller.workspaceController.selectAllItems(items);
                   return KeyEventResult.handled;
                 }
                 if (HardwareKeyboard.instance.isMetaPressed) {
@@ -434,7 +438,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                     return KeyEventResult.handled;
                   }
                   if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-                    final selected = controller.selectedItem;
+                    final selected = controller.workspaceController.selectedItem;
                     if (selected != null) {
                       unawaited(_handleOpen(selected));
                     }
@@ -455,20 +459,20 @@ class _WorkspacePageState extends State<WorkspacePage> {
                     _ => KeyEventResult.ignored,
                   };
                 }
-                final isGrid = controller.browseMode == BrowseMode.grid;
+                final isGrid = controller.workspaceController.browseMode == BrowseMode.grid;
                 final offset = switch (event.logicalKey) {
                   LogicalKeyboardKey.arrowUp => isGrid
                       ? -_gridColumnCount(
                           node,
                           items.length,
-                          controller.thumbnailSize,
+                          controller.workspaceController.thumbnailSize,
                         )
                       : -1,
                   LogicalKeyboardKey.arrowDown => isGrid
                       ? _gridColumnCount(
                           node,
                           items.length,
-                          controller.thumbnailSize,
+                          controller.workspaceController.thumbnailSize,
                         )
                       : 1,
                   LogicalKeyboardKey.arrowLeft => isGrid ? -1 : 0,
@@ -476,7 +480,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                   _ => 0,
                 };
                 if (offset != 0 &&
-                    controller.moveSelection(
+                    controller.workspaceController.moveSelection(
                       items,
                       offset: offset,
                     )) {
@@ -490,19 +494,19 @@ class _WorkspacePageState extends State<WorkspacePage> {
               return KeyEventResult.ignored;
             },
             child: ValueListenableBuilder<Set<String>>(
-              valueListenable: controller.multiSelectedPathsListenable,
+              valueListenable: controller.workspaceController.multiSelectedPathsListenable,
               builder: (context, selectedPaths, _) {
                 final selectedItems = items
                     .where((item) => selectedPaths.contains(item.path))
                     .toList(growable: false);
                 final showBatchBar = desktop ||
                     selectedItems.isNotEmpty ||
-                    controller.isMultiSelectionMode;
+                    controller.workspaceController.isMultiSelectionMode;
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
                     ValueListenableBuilder<MoveProgress?>(
-                      valueListenable: controller.moveStateListenable,
+                      valueListenable: controller.moveController.moveStateListenable,
                       builder: (context, moveProgress, _) =>
                           moveProgress == null
                               ? const SizedBox.shrink()
@@ -513,7 +517,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                                 ),
                     ),
                     ValueListenableBuilder<DeleteProgress?>(
-                      valueListenable: controller.deleteStateListenable,
+                      valueListenable: controller.recycleBinController.deleteStateListenable,
                       builder: (context, deleteProgress, _) =>
                           deleteProgress == null
                               ? const SizedBox.shrink()
@@ -528,16 +532,16 @@ class _WorkspacePageState extends State<WorkspacePage> {
                         selectedCount: selectedItems.length,
                         allSelected: selectedItems.length == items.length,
                         itemCount: items.length,
-                        canDownload: controller.capabilities.download,
-                        canMove: controller.capabilities.upload &&
-                            controller.capabilities.delete &&
-                            !controller.isMoving,
-                        canDelete: controller.capabilities.delete,
+                        canDownload: controller.sessionController.capabilities.download,
+                        canMove: controller.sessionController.capabilities.upload &&
+                            controller.sessionController.capabilities.delete &&
+                            !controller.moveController.isMoving,
+                        canDelete: controller.sessionController.capabilities.delete,
                         onSelectAll: () {
                           if (selectedItems.length == items.length) {
-                            controller.clearMultiSelection();
+                            controller.workspaceController.clearMultiSelection();
                           } else {
-                            controller.selectAllItems(items);
+                            controller.workspaceController.selectAllItems(items);
                           }
                         },
                         onDownload: selectedItems.isEmpty
@@ -554,12 +558,12 @@ class _WorkspacePageState extends State<WorkspacePage> {
                     ],
                     Expanded(
                       child: ValueListenableBuilder<FileItem?>(
-                        valueListenable: controller.selectedItemListenable,
+                        valueListenable: controller.workspaceController.selectedItemListenable,
                         builder: (context, selected, _) {
                           final selectedPath = selected?.path;
-                          final selecting = controller.isMultiSelectionMode;
+                          final selecting = controller.workspaceController.isMultiSelectionMode;
                           final isMultiSelectionMode =
-                              controller.isMultiSelectionMode;
+                              controller.workspaceController.isMultiSelectionMode;
                           void onSelect(FileItem item) {
                             if (desktop) {
                               _itemsFocusNode.requestFocus();
@@ -571,30 +575,30 @@ class _WorkspacePageState extends State<WorkspacePage> {
                             }
                           }
 
-                          if (controller.browseMode == BrowseMode.grid) {
+                          if (controller.workspaceController.browseMode == BrowseMode.grid) {
                             return WorkspaceGridView(
                               items: items,
                               selectedPath: selectedPath,
                               selectedPaths: selectedPaths,
                               multiSelecting: selecting,
                               desktop: desktop,
-                              thumbnailSize: controller.thumbnailSize,
+                              thumbnailSize: controller.workspaceController.thumbnailSize,
                               subtitleBuilder: _subtitle,
-                              thumbnailLoader: controller.loadThumbnail,
+                              thumbnailLoader: controller.workspaceController.loadThumbnail,
                               thumbnailCacheNamespace:
-                                  controller.thumbnailCacheNamespace,
+                                  controller.workspaceController.thumbnailCacheNamespace,
                               onOpen: _handleOpen,
                               onMore: desktop ? (_) {} : _showItemActions,
                               onSelect: onSelect,
                               onToggle: (item) =>
                                   _toggleMultiSelection(item, items),
                               onMarqueeSelectionChanged:
-                                  controller.replaceMultiSelection,
+                                  controller.workspaceController.replaceMultiSelection,
                               canUpload: canUpload,
-                              canDelete: controller.capabilities.delete,
-                              canDownload: controller.capabilities.download,
-                              canMove: controller.capabilities.upload &&
-                                  controller.capabilities.delete,
+                              canDelete: controller.sessionController.capabilities.delete,
+                              canDownload: controller.sessionController.capabilities.download,
+                              canMove: controller.sessionController.capabilities.upload &&
+                                  controller.sessionController.capabilities.delete,
                               onDownload: _download,
                               onMove: (item) =>
                                   _moveItems(<FileItem>[item]),
@@ -615,17 +619,17 @@ class _WorkspacePageState extends State<WorkspacePage> {
                             subtitleBuilder: _subtitle,
                             metaTimeBuilder: _metaTime,
                             canUpload: canUpload,
-                            canDelete: controller.capabilities.delete,
-                            canDownload: controller.capabilities.download,
-                            canMove: controller.capabilities.upload &&
-                                controller.capabilities.delete,
+                            canDelete: controller.sessionController.capabilities.delete,
+                            canDownload: controller.sessionController.capabilities.download,
+                            canMove: controller.sessionController.capabilities.upload &&
+                                controller.sessionController.capabilities.delete,
                             onOpen: _handleOpen,
                             onMore: desktop ? (_) {} : _showItemActions,
                             onSelect: onSelect,
                             onToggle: (item) =>
                                 _toggleMultiSelection(item, items),
                             onMarqueeSelectionChanged:
-                                controller.replaceMultiSelection,
+                                controller.workspaceController.replaceMultiSelection,
                             onPreview: _openPreview,
                             onDownload: _download,
                             onMove: (item) => _moveItems(<FileItem>[item]),
@@ -669,7 +673,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
 
   Future<void> _openDirectory(String path) async {
     final controller = AppScope.of(context);
-    controller.setCurrentPath(path);
+    controller.workspaceController.setCurrentPath(path);
     await _reload();
     if (mounted && _desktop) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -684,7 +688,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
   Future<void> _openAlias(FileItem item) async {
     final controller = AppScope.of(context);
     try {
-      await controller.openAlias(item);
+      await controller.aliasController.openAlias(item);
     } catch (error) {
       if (mounted) {
         AppFeedback.showSnack(
@@ -699,7 +703,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
 
   Future<void> _goUp() async {
     final controller = AppScope.of(context);
-    final target = controller.backNavigationPath();
+    final target = controller.workspaceController.backNavigationPath();
     if (target == null) {
       return;
     }
@@ -724,7 +728,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
 
   Future<void> _handleOpen(FileItem item) async {
     final controller = AppScope.of(context);
-    controller.selectItem(item);
+    controller.workspaceController.selectItem(item);
     if (item.isAlias) {
       await _openAlias(item);
       return;
@@ -737,11 +741,11 @@ class _WorkspacePageState extends State<WorkspacePage> {
   }
 
   void _handleSelect(FileItem item) {
-    AppScope.read(context).selectItem(item);
+    AppScope.read(context).workspaceController.selectItem(item);
   }
 
   void _toggleMultiSelection(FileItem item, List<FileItem> items) {
-    AppScope.read(context).toggleMultiSelection(
+    AppScope.read(context).workspaceController.toggleMultiSelection(
       item,
       visibleItems: items,
       range: HardwareKeyboard.instance.isShiftPressed,
@@ -750,7 +754,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
 
   Future<void> _createFolder() async {
     final controller = AppScope.of(context);
-    if (!controller.capabilities.upload) {
+    if (!controller.sessionController.capabilities.upload) {
       AppFeedback.showSnack(context, '当前身份没有新建权限');
       return;
     }
@@ -764,7 +768,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
       return;
     }
     try {
-      await controller.createFolder(name);
+      await controller.workspaceController.createFolder(name);
       await _reload();
       if (mounted) {
         AppFeedback.showSnack(context, '已创建 $name');
@@ -782,8 +786,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
   void _rename(FileItem item) {
     final controller = AppScope.of(context);
     final allowed = item.isAlias
-        ? controller.capabilities.upload
-        : controller.capabilities.upload || controller.capabilities.delete;
+        ? controller.sessionController.capabilities.upload
+        : controller.sessionController.capabilities.upload || controller.sessionController.capabilities.delete;
     if (!allowed) {
       AppFeedback.showSnack(context, '当前身份没有重命名权限');
       return;
@@ -811,9 +815,9 @@ class _WorkspacePageState extends State<WorkspacePage> {
     final controller = AppScope.of(context);
     try {
       if (item.isAlias) {
-        await controller.renameAlias(item, trimmedName);
+        await controller.aliasController.renameAlias(item, trimmedName);
       } else {
-        await controller.renameItem(item, trimmedName);
+        await controller.workspaceController.renameItem(item, trimmedName);
       }
       _cancelRename();
       await _reload();
@@ -842,7 +846,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
       return;
     }
     final controller = AppScope.of(context);
-    if (!controller.capabilities.delete) {
+    if (!controller.sessionController.capabilities.delete) {
       AppFeedback.showSnack(context, '当前身份没有删除权限');
       return;
     }
@@ -858,7 +862,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
     }
     _deleteBusy = true;
     try {
-      await controller.deleteItem(item);
+      await controller.recycleBinController.deleteItem(item);
       await _reload();
       if (mounted) {
         AppFeedback.showSnack(context, '已移入回收站：${item.name}');
@@ -878,7 +882,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
   /// 为真实文件夹条目创建链接；名称与挂载层级在同一个对话框内完成。
   Future<void> _createLink(FileItem folder) async {
     final controller = AppScope.of(context);
-    if (!controller.capabilities.upload) {
+    if (!controller.sessionController.capabilities.upload) {
       AppFeedback.showSnack(context, '当前身份没有创建链接权限');
       return;
     }
@@ -898,7 +902,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
   /// 删除链接：仅移除别名条目，目标目录内容不受影响。
   Future<void> _deleteLink(FileItem item) async {
     final controller = AppScope.of(context);
-    if (!controller.capabilities.delete) {
+    if (!controller.sessionController.capabilities.delete) {
       AppFeedback.showSnack(context, '当前身份没有删除权限');
       return;
     }
@@ -913,7 +917,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
       return;
     }
     try {
-      await controller.deleteAlias(item);
+      await controller.aliasController.deleteAlias(item);
       await _reload();
       if (mounted) {
         AppFeedback.showSnack(context, '已删除链接：${item.name}');
@@ -940,7 +944,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
       if (directory == null) {
         return;
       }
-      controller.enqueueDownload(item, targetDirectory: directory);
+      controller.transferController.enqueueDownload(item, targetDirectory: directory);
       if (mounted) {
         AppFeedback.showSnack(
           context,
@@ -986,11 +990,11 @@ class _WorkspacePageState extends State<WorkspacePage> {
       if (directoryCount > 0) {
         AppFeedback.showSnack(context, '正在展开 $directoryCount 个文件夹…');
       }
-      final result = await controller.enqueueDownloadsRecursively(
+      final result = await controller.transferController.enqueueDownloadsRecursively(
         items,
         targetDirectory: directory,
       );
-      controller.clearMultiSelection();
+      controller.workspaceController.clearMultiSelection();
       if (!mounted) return;
       AppFeedback.showSnack(
         context,
@@ -1025,7 +1029,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
     AppFeedback.showSnack(context, '正在统计待删除对象…');
     _deleteBusy = true;
     try {
-      final preview = await controller.prepareBatchDelete(realItems);
+      final preview = await controller.recycleBinController.prepareBatchDelete(realItems);
       if (!mounted) return;
       final confirmed = await AppFeedback.confirm(
         context,
@@ -1038,8 +1042,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
       );
       if (!confirmed) return;
       // 立即清空多选，避免删除进行中同一批条目被再次提交。
-      controller.clearMultiSelection();
-      var result = await controller.deleteBatch(preview);
+      controller.workspaceController.clearMultiSelection();
+      var result = await controller.recycleBinController.deleteBatch(preview);
       if (result.failedPaths.isNotEmpty && mounted) {
         final retry = await AppFeedback.confirm(
           context,
@@ -1049,7 +1053,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
           confirmLabel: '重试失败项',
         );
         if (retry) {
-          final retried = await controller.retryBatchDelete(result.failedPaths);
+          final retried = await controller.recycleBinController.retryBatchDelete(result.failedPaths);
           result = BatchDeleteSummary(
             deletedPaths: <String>[
               ...result.deletedPaths,
@@ -1086,11 +1090,11 @@ class _WorkspacePageState extends State<WorkspacePage> {
   /// 单条目与批量移动共用入口：能力检查 → 目录选择 → 执行与反馈。
   Future<void> _moveItems(List<FileItem> items) async {
     final controller = AppScope.of(context);
-    if (!controller.capabilities.upload || !controller.capabilities.delete) {
+    if (!controller.sessionController.capabilities.upload || !controller.sessionController.capabilities.delete) {
       AppFeedback.showSnack(context, '当前身份没有移动权限');
       return;
     }
-    if (controller.isMoving) {
+    if (controller.moveController.isMoving) {
       AppFeedback.showSnack(context, '已有移动任务进行中，请等待完成');
       return;
     }
@@ -1107,7 +1111,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
         item.path,
     };
     final invalidPaths = <String>{
-      if (realItems.isNotEmpty) controller.parentPath(realItems.first.path),
+      if (realItems.isNotEmpty) path_utils.parentPathOf(realItems.first.path),
     };
     final target = await showDirectoryPickerDialog(
       context,
@@ -1119,7 +1123,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
       return;
     }
     try {
-      final summary = await controller.moveItems(realItems, target);
+      final summary = await controller.moveController.moveItems(realItems, target);
       if (!mounted) {
         return;
       }
@@ -1132,7 +1136,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
         summary.hasFailures
             ? '已移动 ${summary.movedCount} 个对象，${summary.failedKeys.length} 个失败，'
                 '重新启动后可继续或撤销'
-            : '已移动 ${realItems.length} 项到「${controller.displayPath(target)}」',
+            : '已移动 ${realItems.length} 项到「${controller.workspaceController.displayPath(target)}」',
       );
     } catch (error) {
       if (mounted) {
@@ -1147,11 +1151,11 @@ class _WorkspacePageState extends State<WorkspacePage> {
   /// 冷启动（或重新登录）后检测残留移动任务，逐个提示继续或撤销。
   Future<void> _checkPendingMoves() async {
     final controller = AppScope.read(context);
-    if (!controller.isLoggedIn) {
+    if (!controller.sessionController.isLoggedIn) {
       return;
     }
     try {
-      final pending = await controller.listPendingMoves();
+      final pending = await controller.moveController.listPendingMoves();
       for (final entry in pending) {
         if (!mounted) {
           return;
@@ -1162,8 +1166,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
         }
         try {
           final summary = resume
-              ? await controller.resumePendingMove(entry)
-              : await controller.undoPendingMove(entry);
+              ? await controller.moveController.resumePendingMove(entry)
+              : await controller.moveController.undoPendingMove(entry);
           if (!mounted) {
             return;
           }
@@ -1205,7 +1209,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
       context: context,
       builder: (dialogContext) {
         final sources = entry.sourcePrefixes
-            .map((prefix) => '「${controller.displayPath(prefix)}」')
+            .map((prefix) => '「${controller.workspaceController.displayPath(prefix)}」')
             .toList();
         final sourceText = sources.length == 1
             ? sources.first
@@ -1214,9 +1218,9 @@ class _WorkspacePageState extends State<WorkspacePage> {
           title: const Text('存在未完成的移动任务'),
           content: Text(
             '一次移动在 $mm-$dd $hh:$mi 中断：原计划把 $sourceText '
-            '移动到「${controller.displayPath(entry.targetPrefix)}」。\n\n'
+            '移动到「${controller.workspaceController.displayPath(entry.targetPrefix)}」。\n\n'
             '「继续移动」会接着完成这次搬运；「撤销移动」会把已经搬到'
-            '「${controller.displayPath(entry.targetPrefix)}」的内容搬回原位置。',
+            '「${controller.workspaceController.displayPath(entry.targetPrefix)}」的内容搬回原位置。',
           ),
           actions: <Widget>[
             TextButton(
@@ -1244,7 +1248,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
 
   Future<void> _showUploadSheet() async {
     final controller = AppScope.of(context);
-    if (!controller.capabilities.upload) {
+    if (!controller.sessionController.capabilities.upload) {
       AppFeedback.showSnack(context, '当前身份没有上传权限');
       return;
     }
@@ -1327,7 +1331,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     subtitle: Text(
-                      controller.displayPath(item.path),
+                      controller.workspaceController.displayPath(item.path),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -1345,7 +1349,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                       _handleOpen(item);
                     },
                   ),
-                  if (!item.isAlias && controller.capabilities.download)
+                  if (!item.isAlias && controller.sessionController.capabilities.download)
                     ListTile(
                       dense: true,
                       leading: const Icon(Icons.download_outlined, size: 22),
@@ -1356,8 +1360,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
                       },
                     ),
                   if (!item.isAlias &&
-                      controller.capabilities.upload &&
-                      controller.capabilities.delete)
+                      controller.sessionController.capabilities.upload &&
+                      controller.sessionController.capabilities.delete)
                     ListTile(
                       dense: true,
                       leading: const Icon(Icons.drive_file_move_outlined,
@@ -1370,7 +1374,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                     ),
                   if (!item.isAlias &&
                       item.isDirectory &&
-                      controller.capabilities.upload)
+                      controller.sessionController.capabilities.upload)
                     ListTile(
                       dense: true,
                       leading: const Icon(Icons.add_link, size: 22),
@@ -1381,9 +1385,9 @@ class _WorkspacePageState extends State<WorkspacePage> {
                       },
                     ),
                   if (item.isAlias
-                      ? controller.capabilities.upload
-                      : controller.capabilities.upload ||
-                          controller.capabilities.delete)
+                      ? controller.sessionController.capabilities.upload
+                      : controller.sessionController.capabilities.upload ||
+                          controller.sessionController.capabilities.delete)
                     ListTile(
                       dense: true,
                       leading: const Icon(Icons.edit_outlined, size: 22),
@@ -1393,7 +1397,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                         _rename(item);
                       },
                     ),
-                  if (item.isAlias && controller.capabilities.delete)
+                  if (item.isAlias && controller.sessionController.capabilities.delete)
                     ListTile(
                       dense: true,
                       leading: Icon(
@@ -1411,7 +1415,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
                         _deleteLink(item);
                       },
                     ),
-                  if (!item.isAlias && controller.capabilities.delete)
+                  if (!item.isAlias && controller.sessionController.capabilities.delete)
                     ListTile(
                       dense: true,
                       leading: Icon(
@@ -1478,9 +1482,9 @@ class _WorkspacePageState extends State<WorkspacePage> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final desktop = _desktop;
-    final canUpload = controller.capabilities.upload;
-    final canDelete = controller.capabilities.delete;
-    final canDownload = controller.capabilities.download;
+    final canUpload = controller.sessionController.capabilities.upload;
+    final canDelete = controller.sessionController.capabilities.delete;
+    final canDownload = controller.sessionController.capabilities.download;
 
     // 移动端系统后退键由 HomeShell 统一拦截：非「文件」tab 先切回「文件」，
     // 「文件」tab 内非根目录返回上级，根目录才允许退出应用。
@@ -1496,17 +1500,17 @@ class _WorkspacePageState extends State<WorkspacePage> {
         top: !desktop,
         child: desktop
             ? WorkspaceDesktopBody(
-                path: controller.currentTitle,
-                canGoUp: controller.backNavigationPath() != null,
+                path: controller.workspaceController.currentTitle,
+                canGoUp: controller.workspaceController.backNavigationPath() != null,
                 canUpload: canUpload,
                 canDelete: canDelete,
                 canDownload: canDownload,
-                browseMode: controller.browseMode,
-                thumbnailSize: controller.thumbnailSize,
-                sortOption: controller.fileSortOption,
-                selectedListenable: controller.selectedItemListenable,
+                browseMode: controller.workspaceController.browseMode,
+                thumbnailSize: controller.workspaceController.thumbnailSize,
+                sortOption: controller.workspaceController.fileSortOption,
+                selectedListenable: controller.workspaceController.selectedItemListenable,
                 directorySizeStatesListenable:
-                    controller.directorySizeStatesListenable,
+                    controller.workspaceController.directorySizeStatesListenable,
                 listArea: _buildItemsArea(
                   controller: controller,
                   desktop: true,
@@ -1517,8 +1521,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
                 onCreateFolder: _createFolder,
                 onUpload: () => _pickUpload(fromAlbum: false),
                 onUploadDirectory: _pickUploadDirectory,
-                onBrowseModeChanged: controller.setBrowseMode,
-                onThumbnailSizeChanged: controller.setThumbnailSize,
+                onBrowseModeChanged: controller.workspaceController.setBrowseMode,
+                onThumbnailSizeChanged: controller.workspaceController.setThumbnailSize,
                 onSortChanged: _setSortOption,
                 onOpen: _handleOpen,
                 onPreview: _openPreview,
@@ -1531,14 +1535,14 @@ class _WorkspacePageState extends State<WorkspacePage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
                     WorkspaceMobileHeader(
-                      path: controller.currentTitle,
-                      roleLabel: controller.session?.displayName ?? '成员',
-                      canGoUp: controller.backNavigationPath() != null,
-                      browseMode: controller.browseMode,
-                      sortOption: controller.fileSortOption,
+                      path: controller.workspaceController.currentTitle,
+                      roleLabel: controller.sessionController.session?.displayName ?? '成员',
+                      canGoUp: controller.workspaceController.backNavigationPath() != null,
+                      browseMode: controller.workspaceController.browseMode,
+                      sortOption: controller.workspaceController.fileSortOption,
                       onGoUp: _goUp,
                       onRefresh: _reload,
-                      onBrowseModeChanged: controller.setBrowseMode,
+                      onBrowseModeChanged: controller.workspaceController.setBrowseMode,
                       onChooseSort: _showSortSheet,
                     ),
                     const SizedBox(height: 12),
@@ -3045,7 +3049,7 @@ class _DetailPanel extends StatelessWidget {
                             ? _directorySizeLabel(directorySize)
                             : FileSizeFormatter.format(item!.size ?? 0),
                       ),
-                      _kv(context, '路径', controller.displayPath(item!.path)),
+                      _kv(context, '路径', controller.workspaceController.displayPath(item!.path)),
                       if (item!.isAlias)
                         _kv(context, '创建者', item!.createdBy ?? ''),
                       _kv(

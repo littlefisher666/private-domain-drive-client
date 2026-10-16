@@ -569,7 +569,7 @@ typedef _TransferStack = ({
 });
 
 /// 直测夹层：按生产装配顺序构建 Session → Workspace → Queue →
-/// TransferController，不经过 AppController 门面。
+/// TransferController，不经过 AppServices 门面。
 Future<_TransferStack> _transferStack({
   _FakeOssClient? oss,
   TransferKeepaliveService? keepalive,

@@ -16,19 +16,19 @@ import 'package:private_domain_drive_client/features/gallery/application/gallery
 import 'package:private_domain_drive_client/features/settings/application/update_service.dart';
 import 'package:private_domain_drive_client/features/settings/infrastructure/github_release_client.dart';
 import 'package:private_domain_drive_client/features/settings/presentation/forced_upgrade_page.dart';
-import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/shared/state/app_services.dart';
 
 void main() {
   setUpAll(() {
     // 应用外壳构建时经 AppBootstrap.galleryController 注入相册控制器；
     // 这里为整组测试提供一次性的最小实例（门禁路径不读取相册状态）。
-    final bootstrapController = AppController(
+    final bootstrapController = AppServices(
       sessionRepository: MemorySessionRepository(),
       savedCredentialsStore:
           SavedCredentialsStore(storage: InMemoryCredentialsStorage()),
     );
     AppBootstrap.galleryController = GalleryController(
-      appController: bootstrapController,
+      services: bootstrapController,
       ossClient: bootstrapController.ossClient,
     );
   });
@@ -39,10 +39,10 @@ void main() {
     final controller = await _pumpApp(tester, harness);
     expect(find.byType(SplashPage), findsOneWidget);
 
-    await controller.checkForcedUpgradeGate();
+    await controller.settingsController.checkForcedUpgradeGate();
     await tester.pump();
 
-    expect(controller.forcedUpgradeActive, isTrue);
+    expect(controller.settingsController.forcedUpgradeActive, isTrue);
     expect(find.byType(ForcedUpgradePage), findsOneWidget);
     // 整棵导航树被替换：启动页、登录页等常规界面不再展示。
     expect(find.byType(SplashPage), findsNothing);
@@ -62,7 +62,7 @@ void main() {
     final harness =
         _GateHarness(currentVersion: '1.0.0', minSupportedVersion: '2.0.0');
     final controller = await _pumpApp(tester, harness);
-    await controller.checkForcedUpgradeGate();
+    await controller.settingsController.checkForcedUpgradeGate();
     await tester.pump();
     expect(find.byType(ForcedUpgradePage), findsOneWidget);
 
@@ -72,7 +72,7 @@ void main() {
     // pumpAndSettle 持续走帧直到分流完成。
     await tester.pumpAndSettle();
 
-    expect(controller.forcedUpgradeActive, isFalse);
+    expect(controller.settingsController.forcedUpgradeActive, isFalse);
     expect(find.byType(ForcedUpgradePage), findsNothing);
     expect(find.byType(LoginPage), findsOneWidget);
   });
@@ -84,7 +84,7 @@ void main() {
     final controller = await _pumpApp(tester, harness);
     // 模拟 Android 前台生命周期：框架仅在前台向系统同步返回处理状态。
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await controller.checkForcedUpgradeGate();
+    await controller.settingsController.checkForcedUpgradeGate();
     await tester.pump();
     await tester.pump();
     expect(find.byType(ForcedUpgradePage), findsOneWidget);
@@ -118,7 +118,7 @@ void main() {
       androidDigest: null,
     );
     final controller = await _pumpApp(tester, harness);
-    await controller.checkForcedUpgradeGate();
+    await controller.settingsController.checkForcedUpgradeGate();
     await tester.pump();
     expect(find.byType(ForcedUpgradePage), findsOneWidget);
 
@@ -143,7 +143,7 @@ void main() {
     final harness =
         _GateHarness(currentVersion: '1.0.0', minSupportedVersion: '2.0.0');
     final controller = await _pumpApp(tester, harness);
-    await controller.checkForcedUpgradeGate();
+    await controller.settingsController.checkForcedUpgradeGate();
     await tester.pump();
     expect(find.byType(ForcedUpgradePage), findsOneWidget);
 
@@ -157,8 +157,8 @@ void main() {
   });
 }
 
-Future<AppController> _pumpApp(WidgetTester tester, _GateHarness harness) async {
-  final controller = AppController(
+Future<AppServices> _pumpApp(WidgetTester tester, _GateHarness harness) async {
+  final controller = AppServices(
     sessionRepository: MemorySessionRepository(),
     savedCredentialsStore:
         SavedCredentialsStore(storage: InMemoryCredentialsStorage()),
@@ -166,7 +166,7 @@ Future<AppController> _pumpApp(WidgetTester tester, _GateHarness harness) async 
     disableStartupUpdateCheck: false,
   );
   addTearDown(controller.dispose);
-  await tester.pumpWidget(PrivateDomainDriveApp(controller: controller));
+  await tester.pumpWidget(PrivateDomainDriveApp(services: controller));
   return controller;
 }
 

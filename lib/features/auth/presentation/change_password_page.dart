@@ -44,7 +44,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
       _loading = true;
       _error = null;
     });
-    final error = await AppScope.read(context).changePassword(
+    final error = await AppScope.read(context).sessionController.changePassword(
           currentPassword: _current.text,
           newPassword: next,
         );

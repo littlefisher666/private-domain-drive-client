@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../shared/path_utils.dart' as pathu;
 import '../../../shared/state/app_scope.dart';
 import '../../../shared/widgets/app_feedback.dart';
 import '../../workspace/domain/file_item.dart';
@@ -37,7 +38,7 @@ class _ShareTargetDialogState extends State<ShareTargetDialog> {
     });
     final controller = AppScope.read(context);
     try {
-      final items = await controller.listDirectory(_currentPath);
+      final items = await controller.workspaceController.listDirectory(_currentPath);
       if (!mounted) return;
       setState(() {
         _directories = items.where((item) => item.isDirectory).toList(
@@ -55,8 +56,7 @@ class _ShareTargetDialogState extends State<ShareTargetDialog> {
   }
 
   bool get _canGoUp {
-    final controller = AppScope.read(context);
-    return controller.parentPath(_currentPath) != _currentPath;
+    return pathu.parentPathOf(_currentPath) != _currentPath;
   }
 
   void _enterDirectory(FileItem directory) {
@@ -67,14 +67,14 @@ class _ShareTargetDialogState extends State<ShareTargetDialog> {
   void _goUp() {
     if (!_canGoUp) return;
     setState(
-      () => _currentPath = AppScope.read(context).parentPath(_currentPath),
+      () => _currentPath = pathu.parentPathOf(_currentPath),
     );
     _loadDirectories();
   }
 
   Future<void> _createFolder() async {
     final controller = AppScope.read(context);
-    if (!controller.capabilities.upload) {
+    if (!controller.sessionController.capabilities.upload) {
       AppFeedback.showSnack(context, '当前身份没有新建权限');
       return;
     }
@@ -88,7 +88,7 @@ class _ShareTargetDialogState extends State<ShareTargetDialog> {
       return;
     }
     try {
-      await controller.createFolder(name.trim(), targetPath: _currentPath);
+      await controller.workspaceController.createFolder(name.trim(), targetPath: _currentPath);
       if (!mounted) return;
       AppFeedback.showSnack(context, '已创建 ${name.trim()}');
       await _loadDirectories();
@@ -109,13 +109,13 @@ class _ShareTargetDialogState extends State<ShareTargetDialog> {
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
-        final batch = controller.activeShareBatch;
+        final batch = controller.shareImportController.activeShareBatch;
         final importing = batch != null && !batch.finished;
         final failedCount =
             batch?.finished == true ? batch!.failedCount : 0;
         // 批次复制完成且有待上传内容才允许确认上传。
         final canConfirm =
-            !importing && controller.pendingShareItems.isNotEmpty;
+            !importing && controller.shareImportController.pendingShareItems.isNotEmpty;
         return AlertDialog(
           title: const Text('选择上传目录'),
           content: SizedBox(
@@ -133,7 +133,7 @@ class _ShareTargetDialogState extends State<ShareTargetDialog> {
                     ),
                     Expanded(
                       child: Text(
-                        controller.displayPath(_currentPath),
+                        controller.workspaceController.displayPath(_currentPath),
                         style: theme.textTheme.titleSmall,
                         overflow: TextOverflow.ellipsis,
                       ),

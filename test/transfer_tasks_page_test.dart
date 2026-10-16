@@ -3,20 +3,20 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
 import 'package:private_domain_drive_client/features/transfer/domain/transfer_task.dart';
 import 'package:private_domain_drive_client/features/transfer/presentation/transfer_tasks_page.dart';
-import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/shared/state/app_services.dart';
 import 'package:private_domain_drive_client/shared/state/app_scope.dart';
 
 void main() {
-  Future<AppController> pumpTasks(
+  Future<AppServices> pumpTasks(
     WidgetTester tester,
     List<TransferTask> tasks,
   ) async {
     final controller =
-        AppController(sessionRepository: MemorySessionRepository());
-    controller.tasksListenable.value = tasks;
+        AppServices(sessionRepository: MemorySessionRepository());
+    controller.transferQueue.tasksListenable.value = tasks;
     await tester.pumpWidget(
       AppScope(
-        controller: controller,
+        services: controller,
         child: const MaterialApp(
           home: Scaffold(
             body: TransferTasksPage(embedded: true, desktopChrome: true),
@@ -27,16 +27,16 @@ void main() {
     return controller;
   }
 
-  Future<AppController> pumpMobileTasks(
+  Future<AppServices> pumpMobileTasks(
     WidgetTester tester,
     List<TransferTask> tasks,
   ) async {
     final controller =
-        AppController(sessionRepository: MemorySessionRepository());
-    controller.tasksListenable.value = tasks;
+        AppServices(sessionRepository: MemorySessionRepository());
+    controller.transferQueue.tasksListenable.value = tasks;
     await tester.pumpWidget(
       AppScope(
-        controller: controller,
+        services: controller,
         child: const MaterialApp(
           home: Scaffold(
             body: TransferTasksPage(embedded: true),
@@ -102,11 +102,11 @@ void main() {
     expect(find.text('失败'), findsOneWidget);
     await tester.tap(find.text('重试'));
     await tester.pump();
-    expect(controller.tasks.single.status, TransferTaskStatus.running);
+    expect(controller.transferQueue.tasks.single.status, TransferTaskStatus.running);
 
     await tester.tap(find.text('取消'));
     await tester.pump();
-    expect(controller.tasks.single.status, TransferTaskStatus.canceled);
+    expect(controller.transferQueue.tasks.single.status, TransferTaskStatus.canceled);
     expect(find.text('已取消'), findsWidgets);
   });
 
@@ -143,7 +143,7 @@ void main() {
     await tester.tap(find.text('批量重试 (2)'));
     await tester.pump();
     expect(
-      controller.tasks
+      controller.transferQueue.tasks
           .where((task) => task.id != 'pending-1')
           .every((task) => task.status == TransferTaskStatus.running),
       isTrue,
@@ -154,7 +154,7 @@ void main() {
     await tester.tap(find.text('批量取消 (3)'));
     await tester.pump();
     expect(
-      controller.tasks
+      controller.transferQueue.tasks
           .every((task) => task.status == TransferTaskStatus.canceled),
       isTrue,
     );
@@ -406,13 +406,13 @@ void main() {
 
     await tester.tap(find.text('暂停全部'));
     await tester.pump();
-    expect(controller.transferQueuePaused, isTrue);
+    expect(controller.transferQueue.transferQueuePaused, isTrue);
     expect(find.text('继续全部'), findsOneWidget);
     expect(find.textContaining('已暂停'), findsWidgets);
 
     await tester.tap(find.text('继续全部'));
     await tester.pump();
-    expect(controller.transferQueuePaused, isFalse);
+    expect(controller.transferQueue.transferQueuePaused, isFalse);
     expect(find.text('暂停全部'), findsOneWidget);
   });
 
@@ -448,7 +448,7 @@ void main() {
     await tester.pump();
 
     expect(
-      controller.tasks
+      controller.transferQueue.tasks
           .where((task) =>
               task.status == TransferTaskStatus.running ||
               task.status == TransferTaskStatus.pending)
@@ -456,12 +456,12 @@ void main() {
       isEmpty,
     );
     expect(
-      controller.tasks
+      controller.transferQueue.tasks
           .firstWhere((task) => task.id == 'done-1')
           .status,
       TransferTaskStatus.success,
     );
-    expect(controller.transferQueuePaused, isFalse);
+    expect(controller.transferQueue.transferQueuePaused, isFalse);
   });
 
   testWidgets('移动端菜单可暂停并继续全部任务', (tester) async {
@@ -482,7 +482,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('暂停全部任务'));
     await tester.pumpAndSettle();
-    expect(controller.transferQueuePaused, isTrue);
+    expect(controller.transferQueue.transferQueuePaused, isTrue);
     expect(find.textContaining('已暂停'), findsWidgets);
 
     await tester.tap(find.byType(PopupMenuButton<String>));
@@ -490,6 +490,6 @@ void main() {
     expect(find.text('继续全部任务'), findsOneWidget);
     await tester.tap(find.text('继续全部任务'));
     await tester.pumpAndSettle();
-    expect(controller.transferQueuePaused, isFalse);
+    expect(controller.transferQueue.transferQueuePaused, isFalse);
   });
 }

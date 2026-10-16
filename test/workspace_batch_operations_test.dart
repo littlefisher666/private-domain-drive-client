@@ -13,7 +13,8 @@ import 'package:private_domain_drive_client/features/workspace/domain/file_item.
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
 import 'package:private_domain_oss/private_domain_oss.dart';
 import 'package:private_domain_drive_client/features/workspace/presentation/workspace_page.dart';
-import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/shared/state/app_services.dart';
+import 'package:private_domain_drive_client/shared/path_utils.dart' as path_utils;
 import 'package:private_domain_drive_client/shared/state/app_scope.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -51,7 +52,7 @@ void main() {
 
     await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
-    expect(controller.multiSelectedPaths, <String>{
+    expect(controller.workspaceController.multiSelectedPaths, <String>{
       'shared/a.txt',
       'shared/b.txt',
       'shared/c.txt',
@@ -61,7 +62,7 @@ void main() {
 
     await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
-    expect(controller.isMultiSelectionMode, isFalse);
+    expect(controller.workspaceController.isMultiSelectionMode, isFalse);
     expect(find.text('已全部加载，共 3 项'), findsOneWidget);
   });
 
@@ -81,13 +82,13 @@ void main() {
     await tester.sendKeyUpEvent(LogicalKeyboardKey.keyA);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
-    expect(controller.multiSelectedPaths.length, 3);
+    expect(controller.workspaceController.multiSelectedPaths.length, 3);
     expect(find.text('已选 3 项'), findsOneWidget);
 
     // 表头维持全选状态，点击后清空。
     await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
-    expect(controller.multiSelectedPaths, isEmpty);
+    expect(controller.workspaceController.multiSelectedPaths, isEmpty);
   });
 
   testWidgets('桌面批量勾选后按 Esc 清空选择', (tester) async {
@@ -98,13 +99,13 @@ void main() {
         )
         .focusNode!
         .requestFocus();
-    controller.selectAllItems(items);
+    controller.workspaceController.selectAllItems(items);
     await tester.pumpAndSettle();
 
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
-    expect(controller.isMultiSelectionMode, isFalse);
-    expect(controller.multiSelectedPaths, isEmpty);
+    expect(controller.workspaceController.isMultiSelectionMode, isFalse);
+    expect(controller.workspaceController.multiSelectedPaths, isEmpty);
     expect(find.byType(Checkbox), findsOneWidget);
   });
 
@@ -113,7 +114,7 @@ void main() {
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
-    expect(controller.multiSelectedPaths, isEmpty);
+    expect(controller.workspaceController.multiSelectedPaths, isEmpty);
 
     tester
         .widget<Focus>(
@@ -124,15 +125,15 @@ void main() {
     await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
-    expect(controller.selectedItem?.path, 'shared/b.txt');
-    expect(controller.multiSelectedPaths, isEmpty);
+    expect(controller.workspaceController.selectedItem?.path, 'shared/b.txt');
+    expect(controller.workspaceController.multiSelectedPaths, isEmpty);
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
     await tester.pumpAndSettle();
-    expect(controller.selectedItem?.path, 'shared/b.txt');
-    expect(controller.multiSelectedPaths, isEmpty);
+    expect(controller.workspaceController.selectedItem?.path, 'shared/b.txt');
+    expect(controller.workspaceController.multiSelectedPaths, isEmpty);
   });
 
   testWidgets('桌面主内容区支持 Cmd 加方向键进入和返回目录', (tester) async {
@@ -160,18 +161,18 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
-    expect(controller.currentPath, 'shared/资料/');
+    expect(controller.workspaceController.currentPath, 'shared/资料/');
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
-    expect(controller.currentPath, AppController.rootPrefix);
+    expect(controller.workspaceController.currentPath, path_utils.rootPrefix);
   });
 
   testWidgets('桌面缩略图模式支持左右方向键切换条目', (tester) async {
     final controller = await _pumpWorkspace(tester, items);
-    controller.setBrowseMode(BrowseMode.grid);
+    controller.workspaceController.setBrowseMode(BrowseMode.grid);
     await tester.pumpAndSettle();
     tester
         .widget<Focus>(
@@ -183,13 +184,13 @@ void main() {
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pumpAndSettle();
-    expect(controller.selectedItem?.path, 'shared/b.txt');
-    expect(controller.multiSelectedPaths, isEmpty);
+    expect(controller.workspaceController.selectedItem?.path, 'shared/b.txt');
+    expect(controller.workspaceController.multiSelectedPaths, isEmpty);
   });
 
   testWidgets('桌面缩略图模式可切换大小，列表模式隐藏大小选择', (tester) async {
     final controller = await _pumpWorkspace(tester, items);
-    controller.setBrowseMode(BrowseMode.grid);
+    controller.workspaceController.setBrowseMode(BrowseMode.grid);
     await tester.pumpAndSettle();
 
     expect(find.text('小'), findsOneWidget);
@@ -198,15 +199,15 @@ void main() {
 
     await tester.tap(find.text('大'));
     await tester.pumpAndSettle();
-    expect(controller.thumbnailSize, ThumbnailSize.large);
+    expect(controller.workspaceController.thumbnailSize, ThumbnailSize.large);
 
-    controller.setBrowseMode(BrowseMode.list);
+    controller.workspaceController.setBrowseMode(BrowseMode.list);
     await tester.pumpAndSettle();
     expect(find.text('小'), findsNothing);
     expect(find.text('中'), findsNothing);
     expect(find.text('大'), findsNothing);
 
-    await controller.setThumbnailSize(ThumbnailSize.medium);
+    await controller.workspaceController.setThumbnailSize(ThumbnailSize.medium);
   });
 
   testWidgets('桌面列表支持拖拽框选多个条目', (tester) async {
@@ -224,7 +225,7 @@ void main() {
     await gesture.removePointer();
     await tester.pumpAndSettle();
 
-    expect(controller.multiSelectedPaths,
+    expect(controller.workspaceController.multiSelectedPaths,
         <String>{'shared/a.txt', 'shared/b.txt', 'shared/c.txt'});
 
     final clearGesture =
@@ -236,7 +237,7 @@ void main() {
     await clearGesture.removePointer();
     await tester.pumpAndSettle();
 
-    expect(controller.multiSelectedPaths, isEmpty);
+    expect(controller.workspaceController.multiSelectedPaths, isEmpty);
     debugDefaultTargetPlatformOverride = null;
   });
 
@@ -248,7 +249,7 @@ void main() {
       FileItem(path: 'shared/c/', name: 'c', isDirectory: true),
     ];
     final controller = await _pumpWorkspace(tester, folders);
-    controller.setBrowseMode(BrowseMode.grid);
+    controller.workspaceController.setBrowseMode(BrowseMode.grid);
     await tester.pumpAndSettle();
 
     final start = tester.getCenter(find.text('a').first);
@@ -262,7 +263,7 @@ void main() {
     await gesture.removePointer();
     await tester.pumpAndSettle();
 
-    expect(controller.multiSelectedPaths,
+    expect(controller.workspaceController.multiSelectedPaths,
         <String>{'shared/a/', 'shared/b/', 'shared/c/'});
     debugDefaultTargetPlatformOverride = null;
   });
@@ -288,7 +289,7 @@ void main() {
     await tester.tap(itemName);
     await tester.pumpAndSettle();
 
-    expect(controller.currentPath, 'shared/资料/');
+    expect(controller.workspaceController.currentPath, 'shared/资料/');
   });
 
   testWidgets('移动端长按列表可进入多选并支持点击切换', (tester) async {
@@ -301,13 +302,13 @@ void main() {
     // 长按列表项进入多选，并选中该项。
     await tester.longPress(find.text('a.txt'));
     await tester.pumpAndSettle();
-    expect(controller.isMultiSelectionMode, isTrue);
-    expect(controller.multiSelectedPaths, <String>{'shared/a.txt'});
+    expect(controller.workspaceController.isMultiSelectionMode, isTrue);
+    expect(controller.workspaceController.multiSelectedPaths, <String>{'shared/a.txt'});
 
     // 多选模式下点击切换选中。
     await tester.tap(find.text('b.txt'));
     await tester.pumpAndSettle();
-    expect(controller.multiSelectedPaths,
+    expect(controller.workspaceController.multiSelectedPaths,
         <String>{'shared/a.txt', 'shared/b.txt'});
 
     await tester.tap(find.byType(Checkbox).first);
@@ -316,7 +317,7 @@ void main() {
 
     await tester.tap(find.byType(Checkbox).first);
     await tester.pumpAndSettle();
-    expect(controller.isMultiSelectionMode, isFalse);
+    expect(controller.workspaceController.isMultiSelectionMode, isFalse);
   });
 
   testWidgets('批量下载展开文件夹入队并提示保留结构', (tester) async {
@@ -351,8 +352,8 @@ void main() {
 
     // 提示已展开文件夹并保留结构，且多选状态被清理；批次仅作内部分组。
     expect(find.text('已加入 3 个下载任务，已保留文件夹结构'), findsOneWidget);
-    expect(controller.isMultiSelectionMode, isFalse);
-    final batchTasks = controller.tasks
+    expect(controller.workspaceController.isMultiSelectionMode, isFalse);
+    final batchTasks = controller.transferQueue.tasks
         .where((task) => task.batchId != null)
         .toList(growable: false);
     expect(batchTasks, hasLength(3));
@@ -384,7 +385,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('所选文件夹为空，没有可下载文件'), findsOneWidget);
-    expect(controller.tasks.where((task) => task.batchId != null), isEmpty);
+    expect(controller.transferQueue.tasks.where((task) => task.batchId != null), isEmpty);
   });
 
   testWidgets('批量删除前展示不可恢复确认并展示对象数，取消则不删除', (tester) async {
@@ -482,17 +483,17 @@ void main() {
 
     expect(oss.deleteManyCalls, 2);
     expect(find.text('已移入回收站 3 项'), findsOneWidget);
-    expect(controller.isMultiSelectionMode, isFalse);
+    expect(controller.workspaceController.isMultiSelectionMode, isFalse);
   });
 }
 
-Future<AppController> _pumpWorkspace(
+Future<AppServices> _pumpWorkspace(
   WidgetTester tester,
   List<FileItem> files, {
   bool desktop = true,
   _FakeOssClient? oss,
 }) async {
-  final controller = AppController(
+  final controller = AppServices(
     sessionRepository: _FakeSessionRepository(_session()),
     ossClient: oss ?? _FakeOssClient()
       ..itemsByPath['shared/'] = files,
@@ -500,7 +501,7 @@ Future<AppController> _pumpWorkspace(
   await controller.bootstrap();
   await tester.pumpWidget(
     AppScope(
-      controller: controller,
+      services: controller,
       child: MaterialApp(
         home: WorkspacePage(desktopChrome: desktop),
       ),

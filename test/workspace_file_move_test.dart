@@ -7,7 +7,7 @@ import 'package:private_domain_drive_client/features/auth/infrastructure/session
 import 'package:private_domain_drive_client/features/workspace/domain/file_item.dart';
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
 import 'package:private_domain_drive_client/features/workspace/presentation/workspace_page.dart';
-import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/shared/state/app_services.dart';
 import 'package:private_domain_drive_client/shared/state/app_scope.dart';
 import 'package:private_domain_oss/private_domain_oss.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -34,14 +34,14 @@ String _fileName(String path) {
 }
 
 Future<void> _pumpWorkspace(WidgetTester tester, _FakeOssClient oss) async {
-  final controller = AppController(
+  final controller = AppServices(
     sessionRepository: _FakeSessionRepository(_session()),
     ossClient: oss,
   );
   await controller.bootstrap();
   await tester.pumpWidget(
     AppScope(
-      controller: controller,
+      services: controller,
       child: const MaterialApp(home: WorkspacePage(desktopChrome: true)),
     ),
   );

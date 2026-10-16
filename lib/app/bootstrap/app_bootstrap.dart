@@ -4,16 +4,15 @@ import '../../features/auth/infrastructure/saved_credentials_store.dart';
 import '../../features/auth/infrastructure/secure_session_store.dart';
 import '../../features/auth/infrastructure/session_repository.dart';
 import '../../features/gallery/application/gallery_controller.dart';
-import '../../shared/state/app_controller.dart';
 import '../../shared/state/app_services.dart';
 
 class AppBootstrap {
   AppBootstrap._();
 
-  static late final AppController controller;
+  static late final AppServices services;
   static late final GalleryController galleryController;
 
-  static Future<AppController> initialize({
+  static Future<AppServices> initialize({
     SessionRepository? sessionRepository,
   }) async {
     final version = await PackageAppVersionReader().read();
@@ -30,13 +29,13 @@ class AppBootstrap {
       sessionRepository: repository,
       savedCredentialsStore: SavedCredentialsStore(),
     );
-    controller = AppController.fromServices(services);
+    AppBootstrap.services = services;
     galleryController = GalleryController(
-      appController: controller,
+      services: services,
       ossClient: services.ossClient,
     );
-    controller.setGalleryHooks(galleryController);
-    await controller.bootstrap();
-    return controller;
+    services.setGalleryHooks(galleryController);
+    await services.bootstrap();
+    return services;
   }
 }

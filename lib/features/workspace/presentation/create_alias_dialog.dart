@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 
-import '../../../../shared/state/app_controller.dart';
+import '../../../../shared/state/app_services.dart';
+import '../../../../shared/path_utils.dart' as path_utils;
 import '../domain/file_item.dart';
 
 /// 创建链接对话框：名称输入与挂载层级选择合并在同一弹窗内完成，
 /// 校验失败时就地提示并保持弹窗打开。
 Future<bool> showCreateAliasDialog(
   BuildContext context, {
-  required AppController controller,
+  required AppServices controller,
   required FileItem folder,
 }) {
   return showDialog<bool>(
@@ -25,7 +26,7 @@ class _CreateAliasDialog extends StatefulWidget {
     required this.folder,
   });
 
-  final AppController controller;
+  final AppServices controller;
   final FileItem folder;
 
   @override
@@ -35,7 +36,7 @@ class _CreateAliasDialog extends StatefulWidget {
 class _CreateAliasDialogState extends State<_CreateAliasDialog> {
   late final TextEditingController _nameController =
       TextEditingController(text: widget.folder.name);
-  late String _path = widget.controller.currentPath;
+  late String _path = widget.controller.workspaceController.currentPath;
   late Future<List<_DirectoryOption>> _future = _load(_path);
   String? _error;
   bool _submitting = false;
@@ -48,7 +49,7 @@ class _CreateAliasDialogState extends State<_CreateAliasDialog> {
 
   Future<List<_DirectoryOption>> _load(String path) async {
     // 与目录选择器一致：只做轻量前缀列举，避免逐目录统计拖慢导航。
-    final directories = await widget.controller.listPickerDirectories(path);
+    final directories = await widget.controller.workspaceController.listPickerDirectories(path);
     return directories
         .map((item) => _DirectoryOption(
               path: item.path,
@@ -67,16 +68,16 @@ class _CreateAliasDialogState extends State<_CreateAliasDialog> {
   }
 
   void _goUp() {
-    _enter(widget.controller.parentPath(_path));
+    _enter(path_utils.parentPathOf(_path));
   }
 
   bool get _canConfirm =>
       !_submitting && _nameController.text.trim().isNotEmpty;
 
   List<(String, String)> get _breadcrumbs {
-    final root = widget.controller.workspaceRoot;
+    final root = widget.controller.workspaceController.workspaceRoot;
     final segments = <(String, String)>[
-      (widget.controller.displayPath(root), root),
+      (widget.controller.workspaceController.displayPath(root), root),
     ];
     if (_path.length > root.length) {
       final relative = _path.substring(root.length);
@@ -100,7 +101,7 @@ class _CreateAliasDialogState extends State<_CreateAliasDialog> {
       _error = null;
     });
     try {
-      await widget.controller.createAlias(
+      await widget.controller.aliasController.createAlias(
         widget.folder,
         name,
         parentPrefix: _path,
@@ -181,7 +182,7 @@ class _CreateAliasDialogState extends State<_CreateAliasDialog> {
                 ],
               ],
             ),
-            if (_path != widget.controller.workspaceRoot)
+            if (_path != widget.controller.workspaceController.workspaceRoot)
               Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton.icon(

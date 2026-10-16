@@ -15,25 +15,26 @@ import 'package:private_domain_drive_client/features/auth/infrastructure/saved_c
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
 import 'package:private_domain_drive_client/features/workspace/domain/file_item.dart';
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
-import 'package:private_domain_drive_client/shared/state/app_controller.dart';
+import 'package:private_domain_drive_client/shared/state/app_services.dart';
+import 'package:private_domain_drive_client/shared/path_utils.dart' as path_utils;
 
 void main() {
-  group('AppController', () {
+  group('AppServices', () {
     test('启动后恢复显示模式，并保存新的选择', () async {
       SharedPreferences.setMockInitialValues(<String, Object>{
         'theme_mode': 'dark',
       });
       final controller =
-          AppController(
+          AppServices(
             sessionRepository: MemorySessionRepository(),
             savedCredentialsStore:
                 SavedCredentialsStore(storage: InMemoryCredentialsStorage()),
           );
 
       await controller.bootstrap();
-      expect(controller.themeMode, ThemeMode.dark);
+      expect(controller.settingsController.themeMode, ThemeMode.dark);
 
-      await controller.setThemeMode(ThemeMode.light);
+      await controller.settingsController.setThemeMode(ThemeMode.light);
       expect(
         (await SharedPreferences.getInstance()).getString('theme_mode'),
         'light',
@@ -46,16 +47,16 @@ void main() {
         'thumbnail_size': 'large',
       });
       final controller =
-          AppController(
+          AppServices(
             sessionRepository: MemorySessionRepository(),
             savedCredentialsStore:
                 SavedCredentialsStore(storage: InMemoryCredentialsStorage()),
           );
 
       await controller.bootstrap();
-      expect(controller.thumbnailSize, ThumbnailSize.large);
+      expect(controller.workspaceController.thumbnailSize, ThumbnailSize.large);
 
-      await controller.setThumbnailSize(ThumbnailSize.small);
+      await controller.workspaceController.setThumbnailSize(ThumbnailSize.small);
       expect(
         (await SharedPreferences.getInstance()).getString('thumbnail_size'),
         'small',
@@ -68,7 +69,7 @@ void main() {
         'thumbnail_size': 'extra-large',
       });
       final controller =
-          AppController(
+          AppServices(
             sessionRepository: MemorySessionRepository(),
             savedCredentialsStore:
                 SavedCredentialsStore(storage: InMemoryCredentialsStorage()),
@@ -76,7 +77,7 @@ void main() {
 
       await controller.bootstrap();
 
-      expect(controller.thumbnailSize, ThumbnailSize.medium);
+      expect(controller.workspaceController.thumbnailSize, ThumbnailSize.medium);
       controller.dispose();
     });
 
@@ -87,12 +88,12 @@ void main() {
         ];
       final controller = await _controller(oss: oss);
 
-      final items = await controller.listDirectory();
-      controller.setCurrentPath('shared/相册');
+      final items = await controller.workspaceController.listDirectory();
+      controller.workspaceController.setCurrentPath('shared/相册');
 
       expect(items.single.name, '相册');
-      expect(controller.sidebarDirectories, <String>['shared/相册/']);
-      expect(controller.parentPath(controller.currentPath), 'shared/');
+      expect(controller.workspaceController.sidebarDirectories, <String>['shared/相册/']);
+      expect(path_utils.parentPathOf(controller.workspaceController.currentPath), 'shared/');
     });
 
     test('首次加载根目录会通知侧栏刷新', () async {
@@ -104,10 +105,10 @@ void main() {
       var notifications = 0;
       controller.addListener(() => notifications++);
 
-      await controller.listDirectory();
+      await controller.workspaceController.listDirectory();
 
       expect(notifications, 1);
-      expect(controller.sidebarDirectories, <String>['shared/相册/']);
+      expect(controller.workspaceController.sidebarDirectories, <String>['shared/相册/']);
     });
 
     test('新建文件夹会校验空名称并使用当前目录', () async {
@@ -115,11 +116,11 @@ void main() {
       final controller = await _controller(oss: oss);
 
       await expectLater(
-          controller.createFolder('  '), throwsA(isA<StateError>()));
-      await controller.createFolder('资料');
+          controller.workspaceController.createFolder('  '), throwsA(isA<StateError>()));
+      await controller.workspaceController.createFolder('资料');
 
       expect(oss.createdFolders, <String>['shared/资料/']);
-      expect(controller.treeRevision, 1);
+      expect(controller.workspaceController.treeRevision, 1);
     });
 
     test('重命名通过复制后删除完成，并刷新树版本', () async {
@@ -128,12 +129,12 @@ void main() {
       const item =
           FileItem(path: 'shared/旧名.txt', name: '旧名.txt', isDirectory: false);
 
-      await controller.renameItem(item, '新名.txt');
+      await controller.workspaceController.renameItem(item, '新名.txt');
 
       expect(
           oss.copies, <(String, String)>[('shared/旧名.txt', 'shared/新名.txt')]);
       expect(oss.deleted, <String>['shared/旧名.txt']);
-      expect(controller.treeRevision, 1);
+      expect(controller.workspaceController.treeRevision, 1);
     });
 
     test('选中文件夹后会异步统计大小，并复用本次会话缓存', () async {
@@ -145,17 +146,17 @@ void main() {
         isDirectory: true,
       );
 
-      controller.selectItem(folder);
+      controller.workspaceController.selectItem(folder);
       await Future<void>.delayed(Duration.zero);
 
       expect(
-        controller.directorySizeStatesListenable.value[folder.path]?.size,
+        controller.workspaceController.directorySizeStatesListenable.value[folder.path]?.size,
         3072,
       );
       expect(oss.directorySizeCalls, 1);
 
-      controller.selectItem(null);
-      controller.selectItem(folder);
+      controller.workspaceController.selectItem(null);
+      controller.workspaceController.selectItem(folder);
       await Future<void>.delayed(Duration.zero);
       expect(oss.directorySizeCalls, 1);
     });
@@ -168,18 +169,18 @@ void main() {
         FileItem(path: 'shared/c.txt', name: 'c.txt', isDirectory: false),
       ];
 
-      controller.enterMultiSelection(items.first);
-      controller.toggleMultiSelection(items.last,
+      controller.workspaceController.enterMultiSelection(items.first);
+      controller.workspaceController.toggleMultiSelection(items.last,
           visibleItems: items, range: true);
-      expect(controller.multiSelectedPaths, <String>{
+      expect(controller.workspaceController.multiSelectedPaths, <String>{
         'shared/a.txt',
         'shared/b.txt',
         'shared/c.txt',
       });
 
-      controller.clearMultiSelection();
-      expect(controller.isMultiSelectionMode, isFalse);
-      expect(controller.multiSelectedPaths, isEmpty);
+      controller.workspaceController.clearMultiSelection();
+      expect(controller.workspaceController.isMultiSelectionMode, isFalse);
+      expect(controller.workspaceController.multiSelectedPaths, isEmpty);
     });
 
     test('键盘方向选择按目录排序移动单个选中项', () async {
@@ -190,30 +191,30 @@ void main() {
         FileItem(path: 'shared/c.txt', name: 'c.txt', isDirectory: false),
       ];
 
-      controller.selectItem(items.first);
+      controller.workspaceController.selectItem(items.first);
       expect(
-        controller.moveSelection(items, offset: 1),
+        controller.workspaceController.moveSelection(items, offset: 1),
         isTrue,
       );
-      expect(controller.selectedItem?.path, 'shared/b.txt');
-      expect(controller.multiSelectedPaths, isEmpty);
+      expect(controller.workspaceController.selectedItem?.path, 'shared/b.txt');
+      expect(controller.workspaceController.multiSelectedPaths, isEmpty);
 
-      controller.moveSelection(items, offset: 1);
-      expect(controller.selectedItem?.path, 'shared/c.txt');
-      expect(controller.multiSelectedPaths, isEmpty);
+      controller.workspaceController.moveSelection(items, offset: 1);
+      expect(controller.workspaceController.selectedItem?.path, 'shared/c.txt');
+      expect(controller.workspaceController.multiSelectedPaths, isEmpty);
 
-      controller.moveSelection(items, offset: -1);
-      expect(controller.selectedItem?.path, 'shared/b.txt');
-      expect(controller.multiSelectedPaths, isEmpty);
+      controller.workspaceController.moveSelection(items, offset: -1);
+      expect(controller.workspaceController.selectedItem?.path, 'shared/b.txt');
+      expect(controller.workspaceController.multiSelectedPaths, isEmpty);
     });
   });
 
   group('强制升级门禁', () {
-    AppController controllerWithGate(
+    AppServices controllerWithGate(
       _GateHarness harness, {
       bool disableStartupUpdateCheck = false,
     }) {
-      final controller = AppController(
+      final controller = AppServices(
         sessionRepository: MemorySessionRepository(),
         savedCredentialsStore:
             SavedCredentialsStore(storage: InMemoryCredentialsStorage()),
@@ -227,51 +228,51 @@ void main() {
     test('当前版本低于最低支持版本时门禁生效', () async {
       final harness = _GateHarness(currentVersion: '1.1.4');
       final controller = controllerWithGate(harness);
-      expect(controller.forcedUpgradeActive, isFalse);
+      expect(controller.settingsController.forcedUpgradeActive, isFalse);
 
-      await controller.checkForcedUpgradeGate();
+      await controller.settingsController.checkForcedUpgradeGate();
 
-      expect(controller.forcedUpgradeActive, isTrue);
-      expect(controller.forcedUpgradeResult!.minSupportedVersion, '1.2.0');
-      expect(controller.forcedUpgradeResult!.availableUpdate, isNotNull);
+      expect(controller.settingsController.forcedUpgradeActive, isTrue);
+      expect(controller.settingsController.forcedUpgradeResult!.minSupportedVersion, '1.2.0');
+      expect(controller.settingsController.forcedUpgradeResult!.availableUpdate, isNotNull);
     });
 
     test('不低于最低支持版本时放行', () async {
       final harness = _GateHarness(currentVersion: '1.2.0');
       final controller = controllerWithGate(harness);
 
-      await controller.checkForcedUpgradeGate();
+      await controller.settingsController.checkForcedUpgradeGate();
 
-      expect(controller.forcedUpgradeActive, isFalse);
-      expect(controller.forcedUpgradeResult, isNull);
+      expect(controller.settingsController.forcedUpgradeActive, isFalse);
+      expect(controller.settingsController.forcedUpgradeResult, isNull);
     });
 
     test('检查失败静默放行且不缓存结论，下次检查重新判定', () async {
       final harness = _GateHarness(currentVersion: '1.1.4')..offline = true;
       final controller = controllerWithGate(harness);
 
-      await controller.checkForcedUpgradeGate();
-      expect(controller.forcedUpgradeActive, isFalse);
+      await controller.settingsController.checkForcedUpgradeGate();
+      expect(controller.settingsController.forcedUpgradeActive, isFalse);
 
       harness.offline = false;
-      await controller.checkForcedUpgradeGate();
-      expect(controller.forcedUpgradeActive, isTrue);
+      await controller.settingsController.checkForcedUpgradeGate();
+      expect(controller.settingsController.forcedUpgradeActive, isTrue);
     });
 
     test('拦截期间重试失败保持拦截，门槛解除后重试放行', () async {
       final harness = _GateHarness(currentVersion: '1.1.4');
       final controller = controllerWithGate(harness);
-      await controller.checkForcedUpgradeGate();
-      expect(controller.forcedUpgradeActive, isTrue);
+      await controller.settingsController.checkForcedUpgradeGate();
+      expect(controller.settingsController.forcedUpgradeActive, isTrue);
 
       harness.offline = true;
-      await controller.checkForcedUpgradeGate();
-      expect(controller.forcedUpgradeActive, isTrue);
+      await controller.settingsController.checkForcedUpgradeGate();
+      expect(controller.settingsController.forcedUpgradeActive, isTrue);
 
       harness.offline = false;
       harness.minSupportedVersion = '1.0.0';
-      await controller.checkForcedUpgradeGate();
-      expect(controller.forcedUpgradeActive, isFalse);
+      await controller.settingsController.checkForcedUpgradeGate();
+      expect(controller.settingsController.forcedUpgradeActive, isFalse);
     });
 
     test('调试开关跳过启动检查也不拦截', () async {
@@ -279,10 +280,10 @@ void main() {
       final controller =
           controllerWithGate(harness, disableStartupUpdateCheck: true);
 
-      await controller.checkForcedUpgradeGate();
+      await controller.settingsController.checkForcedUpgradeGate();
 
       expect(harness.requests, 0);
-      expect(controller.forcedUpgradeActive, isFalse);
+      expect(controller.settingsController.forcedUpgradeActive, isFalse);
     });
   });
 }
@@ -353,9 +354,9 @@ http.Response _jsonResponse(Object body) => http.Response.bytes(
       headers: {'content-type': 'application/json'},
     );
 
-Future<AppController> _controller({_FakeOssClient? oss}) async {
+Future<AppServices> _controller({_FakeOssClient? oss}) async {
   SharedPreferences.setMockInitialValues(<String, Object>{});
-  final controller = AppController(
+  final controller = AppServices(
     sessionRepository: _FakeSessionRepository(_remoteSession()),
     ossClient: oss ?? _FakeOssClient(),
   );
