@@ -6,6 +6,16 @@
     <description>私域网盘 macOS 客户端 Sparkle 更新清单</description>
     <language>zh-cn</language>
     <item>
+      <title>私域网盘 macOS v1.0.17</title>
+      <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.17</link>
+      <sparkle:version>94</sparkle:version>
+      <sparkle:shortVersionString>1.0.17</sparkle:shortVersionString>
+      <pubDate>Fri, 16 Oct 2026 04:00:29 +0000</pubDate>
+      <description sparkle:format="markdown">### 新功能
+- 支持可配置强制升级门禁与应用内升级拦截页（update）</description>
+      <enclosure url="https://private-domain-drive.oss-cn-hangzhou.aliyuncs.com/releases/macos/1.0.17/private-domain-drive-macos-v1.0.17.zip" length="24619854" type="application/zip" sparkle:edSignature="jLBNAONZA14aM1iSUA9NudijASS46F0vjAlze6l4CaYlnuSMuJUz8/itLhDb4GCwxSjuuBmdqnYPwyj13A77Bw==" />
+    </item>
+    <item>
       <title>私域网盘 macOS v1.0.16</title>
       <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.16</link>
       <sparkle:version>93</sparkle:version>
