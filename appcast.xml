@@ -6,6 +6,37 @@
     <description>私域网盘 macOS 客户端 Sparkle 更新清单</description>
     <language>zh-cn</language>
     <item>
+      <title>私域网盘 macOS v1.0.19</title>
+      <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.19</link>
+      <sparkle:version>97</sparkle:version>
+      <sparkle:shortVersionString>1.0.19</sparkle:shortVersionString>
+      <pubDate>Fri, 16 Oct 2026 09:38:06 +0000</pubDate>
+      <description sparkle:format="markdown">### 优化
+- transfer_controller 按职责切分为两个 part（transfer）
+- workspace_controller 按职责切分为三个 part（workspace）
+- 清理存量 analyzer 提示达成 0 issue（workspace）
+- GalleryIndexHooks 实现切出 gallery_controller_hooks part（gallery）
+- 抽取 PhotoScanner 承载全量扫描与缩略图回填（gallery）
+- oss_client 按职责切分为 listing/media/transfer part（workspace）
+- 拆分 gallery_page 为独立组件（gallery）
+- 拆分 transfer_tasks_page 为独立组件与 part 文件（transfer）
+- 拆分 gallery_viewer_page 为独立组件（gallery）
+- 拆分 workspace_page 为独立组件与 part 文件（workspace）
+- AppScope 切换 AppServices 并删除 AppController 门面（state）
+- 抽取 AppServices 聚合各域控制器并重写装配层（state）
+- 抽取 SettingsController 承载偏好与强制升级门禁（settings）
+- 抽取 AliasController 承载目录别名域（workspace）
+- 抽取 RecycleBinController 承载删除与回收站域（workspace）
+- 抽取 MoveController 承载移动编排与冲突处置（move）
+- 抽取 ShareImportController 承载分享导入状态与上传编排（share-import）
+- 抽取 TransferController 承载传输任务操作（transfer）
+- 抽取 TransferQueue 承载传输队列状态与调度（transfer）
+- 抽取 WorkspaceController 承载工作区域状态（state）
+- 抽取 SessionController 承载会话与认证域（state）
+- 路径工具与相册索引挂钩下沉 shared 共享库（state）</description>
+      <enclosure url="https://private-domain-drive.oss-cn-hangzhou.aliyuncs.com/releases/macos/1.0.19/private-domain-drive-macos-v1.0.19.zip" length="24631616" type="application/zip" sparkle:edSignature="IQoj/o0sOj0T8wAhtoCpRK/aj3Qt3pHtj9zWyTMclJbn9HYj8Zh0RSIxJeCUc3cA1OrrEoe3dba1StV5iwRcAA==" />
+    </item>
+    <item>
       <title>私域网盘 macOS v1.0.18</title>
       <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.18</link>
       <sparkle:version>95</sparkle:version>
