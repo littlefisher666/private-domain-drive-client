@@ -480,7 +480,9 @@ jobs:
   release:
     name: 创建 GitHub Release
     needs: [prepare, android, macos]
-    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.android.result != 'failure' && needs.macos.result != 'failure' }}
+    # test 失败时 android/macos 构建会被跳过（result 为 skipped 而非 failure），
+    # 必须显式要求 test 成功，否则发布流程会因构建产物缺失而失败。
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.test.result == 'success' && needs.android.result != 'failure' && needs.macos.result != 'failure' }}
     runs-on: ubuntu-24.04
 
     steps:
