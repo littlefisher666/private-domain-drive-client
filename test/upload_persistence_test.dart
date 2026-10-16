@@ -272,10 +272,16 @@ void main() {
         because: '假 OSS 客户端应立即成功',
       );
 
-      final raw = (await _prefs()).getString(_uploadPendingKey);
-      expect(raw, '[]');
+      // 记录清空与 staging 清理均为异步收尾，轮询等待避免竞态。
+      await _waitFor(
+        () async => (await _prefs()).getString(_uploadPendingKey) == '[]',
+        because: '成功后未完成记录应清空',
+      );
       final recordSource = controller.transferQueue.tasks.first.sourcePath!;
-      expect(await File(recordSource).exists(), isFalse);
+      await _waitFor(
+        () async => !await File(recordSource).exists(),
+        because: '成功后 staging 源文件应被清理',
+      );
     });
 
     test('取消后记录移除', () async {
