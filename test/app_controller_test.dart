@@ -873,6 +873,9 @@ void main() {
       final task = controller.tasks.single;
       expect(task.status, TransferTaskStatus.canceled);
       expect(oss.canceledTaskIds, contains(task.id));
+      // cancelTask 同步标记取消状态，part 清理发生在下载流程退出之后，
+      // 仅等待状态到达取消会与清理产生竞态，需单独等待目录清空。
+      await _waitForDirectoryEmpty(directory);
       expect(await directory.list().toList(), isEmpty);
     });
 
@@ -961,6 +964,16 @@ Future<void> _waitForTaskStatus(
   while (!reached()) {
     if (DateTime.now().isAfter(deadline)) {
       throw TimeoutException('传输任务未在限定时间内全部进入 $status 状态');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+}
+
+Future<void> _waitForDirectoryEmpty(Directory directory) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 5));
+  while ((await directory.list().toList()).isNotEmpty) {
+    if (DateTime.now().isAfter(deadline)) {
+      throw TimeoutException('目录未在限定时间内清空：${directory.path}');
     }
     await Future<void>.delayed(const Duration(milliseconds: 10));
   }
