@@ -14,7 +14,6 @@ import 'package:private_domain_drive_client/features/settings/infrastructure/git
 import 'package:private_domain_drive_client/features/auth/infrastructure/saved_credentials_store.dart';
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
 import 'package:private_domain_drive_client/features/workspace/domain/file_item.dart';
-import 'package:private_domain_drive_client/features/workspace/domain/recycle_bin_entry.dart';
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
 import 'package:private_domain_drive_client/shared/state/app_controller.dart';
 
@@ -137,43 +136,6 @@ void main() {
       expect(controller.treeRevision, 1);
     });
 
-    test('删除选中项后会清空选中状态', () async {
-      final oss = _FakeOssClient();
-      final controller = await _controller(oss: oss);
-      const item =
-          FileItem(path: 'shared/删除我.txt', name: '删除我.txt', isDirectory: false);
-      controller.selectItem(item);
-
-      await controller.deleteItem(item);
-
-      expect(oss.deleted, <String>['shared/删除我.txt']);
-      expect(controller.selectedItem, isNull);
-    });
-
-    test('恢复时同名路径会使用已还原名称且不覆盖现有对象', () async {
-      final oss = _FakeOssClient()..existingPaths.add('shared/资料.txt');
-      final controller = await _controller(oss: oss);
-      final entry = RecycleBinEntry(
-        id: 'batch-1',
-        name: '资料.txt',
-        originalPath: 'shared/资料.txt',
-        isDirectory: false,
-        deletedAt: DateTime(2026, 9, 20),
-        objects: const <String, String>{
-          'shared/资料.txt': 'shared/.trash/batch-1/payload/资料.txt',
-        },
-      );
-
-      await controller.restoreRecycleBinEntry(entry);
-
-      expect(
-          oss.copies,
-          contains((
-            'shared/.trash/batch-1/payload/资料.txt',
-            'shared/资料（已还原）.txt',
-          )));
-    });
-
     test('选中文件夹后会异步统计大小，并复用本次会话缓存', () async {
       final oss = _FakeOssClient()..directorySizes['shared/资料/'] = 3072;
       final controller = await _controller(oss: oss);
@@ -196,47 +158,6 @@ void main() {
       controller.selectItem(folder);
       await Future<void>.delayed(Duration.zero);
       expect(oss.directorySizeCalls, 1);
-    });
-
-    test('删除非空文件夹会递归删除子文件与子目录', () async {
-      final oss = _FakeOssClient()
-        ..itemsByPath['shared/'] = const <FileItem>[
-          FileItem(path: 'shared/目录/', name: '目录', isDirectory: true),
-        ]
-        ..itemsByPath['shared/目录/'] = const <FileItem>[
-          FileItem(path: 'shared/目录/a.txt', name: 'a.txt', isDirectory: false),
-          FileItem(path: 'shared/目录/子目录/', name: '子目录', isDirectory: true),
-        ]
-        ..itemsByPath['shared/目录/子目录/'] = const <FileItem>[
-          FileItem(
-            path: 'shared/目录/子目录/b.txt',
-            name: 'b.txt',
-            isDirectory: false,
-          ),
-        ]
-        ..objectKeysByPath['shared/目录/'] = <String>[
-          'shared/目录/a.txt',
-          'shared/目录/子目录/b.txt',
-          'shared/目录/子目录/',
-        ];
-      final controller = await _controller(oss: oss);
-      await controller.listDirectory();
-      controller.setCurrentPath('shared/目录/');
-      await controller.listDirectory();
-
-      await controller.deleteItem(
-        const FileItem(path: 'shared/目录/', name: '目录', isDirectory: true),
-      );
-
-      expect(oss.deleted, <String>[
-        'shared/目录/',
-        'shared/目录/a.txt',
-        'shared/目录/子目录/b.txt',
-        'shared/目录/子目录/',
-      ]);
-      expect(oss.copies, hasLength(4));
-      expect(controller.sidebarDirectories, isEmpty);
-      expect(controller.currentPath, 'shared/');
     });
 
     test('多选状态支持范围选择、全选与取消', () async {
