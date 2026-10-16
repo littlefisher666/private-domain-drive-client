@@ -26,6 +26,8 @@ concurrency:
 
 env:
   RELEASE_BASE_URL: https://github.com/littlefisher666/private-domain-drive-client
+  # OSS 发布镜像直链前缀（releases/ 前缀公开读）；镜像不可用时回退 RELEASE_BASE_URL
+  OSS_MIRROR_BASE_URL: https://private-domain-drive.oss-cn-hangzhou.aliyuncs.com
 
 jobs:
   prepare:
@@ -537,6 +539,85 @@ jobs:
             fi
           done
 
+      - name: 安装 ossutil（发布镜像）
+        # 镜像链路仅作加速：安装失败时上传步骤会检测并回退 GitHub 下载地址，不阻塞发布。
+        continue-on-error: true
+        env:
+          RELEASE_OSS_ACCESS_KEY_ID: ${{ secrets.PDD_RELEASE_OSS_ACCESS_KEY_ID }}
+          RELEASE_OSS_ACCESS_KEY_SECRET: ${{ secrets.PDD_RELEASE_OSS_ACCESS_KEY_SECRET }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RELEASE_OSS_ACCESS_KEY_ID" || -z "$RELEASE_OSS_ACCESS_KEY_SECRET" ]]; then
+            echo "未配置 PDD_RELEASE_OSS_* secrets，跳过 ossutil 安装"
+            exit 0
+          fi
+          curl -sSfL -o "$RUNNER_TEMP/ossutil.zip" \
+            "https://gosspublic.alicdn.com/ossutil/1.7.18/ossutil-v1.7.18-linux-amd64.zip"
+          unzip -q -o "$RUNNER_TEMP/ossutil.zip" -d "$RUNNER_TEMP/ossutil"
+          ossutil_bin="$RUNNER_TEMP/ossutil/ossutil-v1.7.18-linux-amd64/ossutil64"
+          chmod +x "$ossutil_bin"
+          "$ossutil_bin" config </dev/null \
+            -e oss-cn-hangzhou.aliyuncs.com \
+            -i "$RELEASE_OSS_ACCESS_KEY_ID" \
+            -k "$RELEASE_OSS_ACCESS_KEY_SECRET" \
+            -c "$RUNNER_TEMP/.ossutilconfig"
+          echo "OSSUTIL_BIN=$ossutil_bin" >> "$GITHUB_ENV"
+          echo "ossutil 已安装：$ossutil_bin"
+
+      - name: 上传 OSS 镜像
+        # 镜像仅作加速手段：任一资产上传失败只记录回退标记（保持 false），不标记流水线失败。
+        continue-on-error: true
+        env:
+          PUBLISH_ANDROID: ${{ needs.prepare.outputs.publish_android }}
+          PUBLISH_MACOS: ${{ needs.prepare.outputs.publish_macos }}
+          ANDROID_VERSION: ${{ needs.prepare.outputs.android_version_name }}
+          MACOS_VERSION: ${{ needs.prepare.outputs.macos_version_name }}
+        run: |
+          set -uo pipefail
+
+          ossutil_bin="${OSSUTIL_BIN:-}"
+          if [[ -z "$ossutil_bin" || ! -x "$ossutil_bin" ]]; then
+            echo "ossutil 不可用（凭证缺失或安装失败），本次回退 GitHub 下载地址"
+            {
+              echo "OSS_MIRROR_ANDROID_OK=false"
+              echo "OSS_MIRROR_MACOS_OK=false"
+            } >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          ossutil_config="$RUNNER_TEMP/.ossutilconfig"
+          upload_asset() {
+            local asset="$1" platform="$2" version="$3"
+            echo "上传 $asset -> oss://private-domain-drive/releases/${platform}/${version}/"
+            "$ossutil_bin" cp "$asset" "oss://private-domain-drive/releases/${platform}/${version}/" \
+              -c "$ossutil_config" --acl public-read --bigfile-threshold=10 --jobs=4 --force
+          }
+
+          android_mirror_ok=false
+          if [[ "$PUBLISH_ANDROID" == "true" ]]; then
+            if upload_asset "dist/private-domain-drive-android-v${ANDROID_VERSION}.apk" android "$ANDROID_VERSION"; then
+              android_mirror_ok=true
+            else
+              echo "Android 资产上传 OSS 失败，本次回退 GitHub 下载地址" >&2
+            fi
+          fi
+
+          macos_mirror_ok=false
+          if [[ "$PUBLISH_MACOS" == "true" ]]; then
+            macos_mirror_ok=true
+            upload_asset "dist/private-domain-drive-macos-v${MACOS_VERSION}.dmg" macos "$MACOS_VERSION" || macos_mirror_ok=false
+            if [[ "${sparkle_enabled:-false}" == "true" ]]; then
+              upload_asset "dist/private-domain-drive-macos-v${MACOS_VERSION}.zip" macos "$MACOS_VERSION" || macos_mirror_ok=false
+            fi
+            if [[ "$macos_mirror_ok" != "true" ]]; then
+              echo "macOS 资产上传 OSS 失败，本次回退 GitHub 下载地址" >&2
+            fi
+          fi
+
+          echo "OSS_MIRROR_ANDROID_OK=$android_mirror_ok" >> "$GITHUB_ENV"
+          echo "OSS_MIRROR_MACOS_OK=$macos_mirror_ok" >> "$GITHUB_ENV"
+          echo "OSS 镜像结果：Android=${android_mirror_ok}，macOS=${macos_mirror_ok}"
+
       - name: 生成平台更新清单
         env:
           PUBLISH_ANDROID: ${{ needs.prepare.outputs.publish_android }}
@@ -548,9 +629,14 @@ jobs:
         run: |
           set -euo pipefail
           # 每个平台 Release 附带自己的清单，assets 仅含该平台字段；清单版本与平台 tag 版本一致。
+          # 资产下载地址优先 OSS 镜像直链（该平台镜像成功时），否则回退 GitHub Release 下载地址。
           if [[ "$PUBLISH_ANDROID" == "true" ]]; then
             mkdir -p dist/android
-            android_url="${RELEASE_BASE_URL}/releases/download/${ANDROID_TAG_NAME}/${android_name}"
+            android_base_url="${RELEASE_BASE_URL}/releases/download/${ANDROID_TAG_NAME}"
+            if [[ "${OSS_MIRROR_ANDROID_OK:-false}" == "true" ]]; then
+              android_base_url="${OSS_MIRROR_BASE_URL}/releases/android/${ANDROID_VERSION}"
+            fi
+            android_url="${android_base_url}/${android_name}"
             jq -n \
               --arg version "$ANDROID_VERSION" \
               --rawfile notes release_notes_plain_android.txt \
@@ -560,7 +646,11 @@ jobs:
           fi
           if [[ "$PUBLISH_MACOS" == "true" ]]; then
             mkdir -p dist/macos
-            macos_url="${RELEASE_BASE_URL}/releases/download/${MACOS_TAG_NAME}/${macos_name}"
+            macos_base_url="${RELEASE_BASE_URL}/releases/download/${MACOS_TAG_NAME}"
+            if [[ "${OSS_MIRROR_MACOS_OK:-false}" == "true" ]]; then
+              macos_base_url="${OSS_MIRROR_BASE_URL}/releases/macos/${MACOS_VERSION}"
+            fi
+            macos_url="${macos_base_url}/${macos_name}"
             jq -n \
               --arg version "$MACOS_VERSION" \
               --rawfile notes release_notes_plain_macos.txt \
@@ -639,6 +729,8 @@ jobs:
           signature = os.environ["SPARKLE_SIGNATURE"]
           length = os.environ["SPARKLE_LENGTH"]
           base_url = os.environ["RELEASE_BASE_URL"]
+          mirror_base = os.environ.get("OSS_MIRROR_BASE_URL", "")
+          mirror_ok = os.environ.get("OSS_MIRROR_MACOS_OK", "false") == "true"
 
           notes = "例行发布，无用户可感知的变更。"
           notes_path = os.environ.get("MACOS_NOTES_FILE")
@@ -692,7 +784,13 @@ jobs:
           description.set(qualified("format"), "markdown")
           description.text = notes
           enclosure = ET.SubElement(new_item, "enclosure")
-          enclosure.set("url", base_url + "/releases/download/" + tag + "/" + zip_name)
+          # 下载地址优先 OSS 镜像直链（镜像成功时），否则回退 GitHub Release 下载地址；
+          # item 的 link 保持 GitHub Release 页面，用于展示更新说明。
+          if mirror_ok and mirror_base:
+              enclosure_url = mirror_base + "/releases/macos/" + version + "/" + zip_name
+          else:
+              enclosure_url = base_url + "/releases/download/" + tag + "/" + zip_name
+          enclosure.set("url", enclosure_url)
           enclosure.set("length", length)
           enclosure.set("type", "application/zip")
           enclosure.set(qualified("edSignature"), signature)
