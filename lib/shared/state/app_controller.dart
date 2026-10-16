@@ -3,8 +3,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../core/constants/app_constants.dart';
-import '../../core/version/app_version.dart';
 import '../../features/auth/application/session_controller.dart';
 import '../../features/auth/domain/login_result.dart';
 import '../../features/auth/domain/user_session.dart';
@@ -16,8 +14,8 @@ import '../../features/transfer/domain/transfer_enqueue.dart';
 import '../../features/transfer/domain/transfer_task.dart';
 import '../../features/transfer/infrastructure/upload_staging.dart';
 import '../../features/preview/infrastructure/text_preview_loader.dart';
+import '../../features/settings/application/settings_controller.dart';
 import '../../features/settings/application/update_service.dart';
-import '../../features/settings/infrastructure/github_release_client.dart';
 import '../../features/share_import/application/share_import_controller.dart';
 import '../../features/share_import/domain/share_import_models.dart';
 import '../../features/workspace/application/alias_controller.dart';
@@ -71,14 +69,7 @@ class AppController extends ChangeNotifier {
       TransferKeepaliveService? transferKeepalive,
       UpdateService? updateService,
       bool? disableStartupUpdateCheck})
-      : _ossClient = ossClient ?? OssClient(),
-        _updateService = updateService ??
-            UpdateService(
-              versionReader: PackageAppVersionReader(),
-              releaseClient: GithubReleaseClient(),
-            ),
-        _disableStartupUpdateCheck = disableStartupUpdateCheck ??
-            AppConstants.disableStartupUpdateCheck {
+      : _ossClient = ossClient ?? OssClient() {
     _sessionController = SessionController(
       sessionRepository: sessionRepository,
       ossClient: _ossClient,
@@ -123,6 +114,10 @@ class AppController extends ChangeNotifier {
       aliasRepository: AliasRepository(ossClient: _ossClient),
       ossClient: _ossClient,
     )..addListener(notifyListeners);
+    _settingsController = SettingsController(
+      updateService: updateService,
+      disableStartupUpdateCheck: disableStartupUpdateCheck,
+    )..addListener(notifyListeners);
   }
 
   late final SessionController _sessionController;
@@ -147,15 +142,16 @@ class AppController extends ChangeNotifier {
 
   /// 别名编排由 [AliasController] 持有；迁移期经门面继续暴露原 API。
   late final AliasController _aliasController;
+
+  /// 设置域状态由 [SettingsController] 持有；迁移期经门面继续暴露原 API。
+  late final SettingsController _settingsController;
   final OssClient _ossClient;
 
   /// 相册等模块与主控制器共用同一个 OSS 客户端（凭证配置状态共享）。
   OssClient get ossClient => _ossClient;
 
   /// 更新服务与设置页、强制升级拦截页共享同一实例（检查结果口径一致）。
-  UpdateService get updateService => _updateService;
-  final UpdateService _updateService;
-  final bool _disableStartupUpdateCheck;
+  UpdateService get updateService => _settingsController.updateService;
 
   /// 注入相册索引挂钩（上传增量更新、删除清理、还原恢复）。
   void setGalleryHooks(GalleryIndexHooks? hooks) {
@@ -171,8 +167,6 @@ class AppController extends ChangeNotifier {
   }
 
   static const rootPrefix = path_utils.rootPrefix;
-  static const _themeModeKey = 'theme_mode';
-  static const _autoCheckUpdatesKey = 'auto_check_updates';
 
   /// 选择与目录大小的细粒度监听器由 [WorkspaceController] 持有，
   /// 门面返回同一实例，界面监听行为不变。
@@ -214,15 +208,6 @@ class AppController extends ChangeNotifier {
 
   /// 会话状态由 [SessionController] 持有，此处保留只读引用供内部消费。
   UserSession? get _session => _sessionController.session;
-
-  ThemeMode _themeMode = ThemeMode.light;
-  bool _autoCheckUpdates = true;
-
-  /// 强制升级门禁检查结果；非空表示当前版本低于最低支持版本、拦截生效。
-  UpdateCheckResult? _forcedUpgradeResult;
-  bool _forcedUpgradeChecking = false;
-
-  SharedPreferences? _preferences;
 
   UserSession? get session => _sessionController.session;
   bool get isLoggedIn => _sessionController.isLoggedIn;
@@ -279,58 +264,28 @@ class AppController extends ChangeNotifier {
   int get multiSelectedCount => _workspaceController.multiSelectedCount;
   Set<String> get multiSelectedPaths => _workspaceController.multiSelectedPaths;
   bool get bootstrapped => _sessionController.bootstrapped;
-  ThemeMode get themeMode => _themeMode;
+
+  /// 主题模式由 [SettingsController] 持有，门面继续暴露原 API。
+  ThemeMode get themeMode => _settingsController.themeMode;
 
   /// 是否在启动时自动检查更新（仅 macOS Sparkle 路径消费）。
-  bool get autoCheckUpdates => _autoCheckUpdates;
+  bool get autoCheckUpdates => _settingsController.autoCheckUpdates;
 
   /// 更新启动自动检查偏好；写入失败时保留本次会话的选择。
-  Future<void> setAutoCheckUpdates(bool value) async {
-    if (_autoCheckUpdates == value) {
-      return;
-    }
-    _autoCheckUpdates = value;
-    notifyListeners();
-    try {
-      final preferences = _preferences ?? await SharedPreferences.getInstance();
-      _preferences = preferences;
-      await preferences.setBool(_autoCheckUpdatesKey, value);
-    } catch (_) {
-      // 偏好写入失败时仍保留本次会话的选择。
-    }
-  }
+  Future<void> setAutoCheckUpdates(bool value) =>
+      _settingsController.setAutoCheckUpdates(value);
 
   /// 强制升级拦截是否生效；生效时应用外壳以强制升级页替换整棵界面。
-  bool get forcedUpgradeActive => _forcedUpgradeResult != null;
+  bool get forcedUpgradeActive => _settingsController.forcedUpgradeActive;
 
   /// 拦截生效时的检查结果（当前版本、最低支持版本与可用升级资产）。
-  UpdateCheckResult? get forcedUpgradeResult => _forcedUpgradeResult;
+  UpdateCheckResult? get forcedUpgradeResult =>
+      _settingsController.forcedUpgradeResult;
 
-  /// 启动静默检查与拦截页「重试」共用的门禁检查：成功后按结果更新门禁
-  /// 状态；失败（离线、超时、响应异常）静默放行且不缓存结论，下一次启动
-  /// 或重试时重新检查。不受 macOS「启动时自动检查更新」开关约束，
-  /// 仅受编译期调试开关 `DISABLE_STARTUP_UPDATE_CHECK` 约束。
-  Future<void> checkForcedUpgradeGate() async {
-    if (_disableStartupUpdateCheck || _forcedUpgradeChecking) return;
-    _forcedUpgradeChecking = true;
-    try {
-      final result = await _updateService.checkLatest();
-      final forced = result.requiresForcedUpgrade;
-      _forcedUpgradeResult = forced ? result : null;
-      debugPrint(forced
-          ? '[强制升级] 当前版本 ${result.currentVersion} 低于最低支持版本 '
-              '${result.minSupportedVersion}，进入拦截'
-          : '[强制升级] 门禁检查通过，当前版本 ${result.currentVersion}');
-    } catch (error, stackTrace) {
-      debugPrint('[强制升级] 门禁检查失败，放行：$error');
-      debugPrintStack(stackTrace: stackTrace, label: '[强制升级] 门禁检查异常堆栈');
-      // 失败不改变门禁状态：启动阶段保持放行，拦截期间保持拦截。
-      return;
-    } finally {
-      _forcedUpgradeChecking = false;
-      notifyListeners();
-    }
-  }
+  /// 启动静默检查与拦截页「重试」共用的门禁检查，由 [SettingsController]
+  /// 编排：成功后按结果更新门禁状态，失败静默放行且不缓存结论。
+  Future<void> checkForcedUpgradeGate() =>
+      _settingsController.checkForcedUpgradeGate();
 
   int get treeRevision => _workspaceController.treeRevision;
   Capabilities get capabilities =>
@@ -339,11 +294,9 @@ class AppController extends ChangeNotifier {
   Future<void> bootstrap() async {
     try {
       final preferences = await SharedPreferences.getInstance();
-      _preferences = preferences;
       _workspaceController.restorePreferences(preferences);
       await _transferQueue.restore(preferences);
-      _restoreThemeMode(preferences);
-      _restoreAutoCheckUpdates(preferences);
+      _settingsController.restorePreferences(preferences);
     } catch (_) {
       // 偏好读取失败不应阻断会话恢复。
     }
@@ -351,20 +304,8 @@ class AppController extends ChangeNotifier {
   }
 
   /// 更新显示模式；偏好会在下次启动时恢复。
-  Future<void> setThemeMode(ThemeMode mode) async {
-    if (_themeMode == mode) {
-      return;
-    }
-    _themeMode = mode;
-    notifyListeners();
-    try {
-      final preferences = _preferences ?? await SharedPreferences.getInstance();
-      _preferences = preferences;
-      await preferences.setString(_themeModeKey, mode.name);
-    } catch (_) {
-      // 偏好写入失败时仍保留本次会话的选择。
-    }
-  }
+  Future<void> setThemeMode(ThemeMode mode) =>
+      _settingsController.setThemeMode(mode);
 
   Future<LoginResult> login({
     required String account,
@@ -502,17 +443,6 @@ class AppController extends ChangeNotifier {
 
   Future<void> setFileSortOption(FileSortOption option) =>
       _workspaceController.setFileSortOption(option);
-
-  void _restoreThemeMode(SharedPreferences preferences) {
-    _themeMode = switch (preferences.getString(_themeModeKey)) {
-      'dark' => ThemeMode.dark,
-      _ => ThemeMode.light,
-    };
-  }
-
-  void _restoreAutoCheckUpdates(SharedPreferences preferences) {
-    _autoCheckUpdates = preferences.getBool(_autoCheckUpdatesKey) ?? true;
-  }
 
   void selectItem(FileItem? item) => _workspaceController.selectItem(item);
 
@@ -754,6 +684,7 @@ class AppController extends ChangeNotifier {
     _transferController.dispose();
     _transferQueue.dispose();
     _sessionController.dispose();
+    _settingsController.dispose();
     super.dispose();
   }
 }
