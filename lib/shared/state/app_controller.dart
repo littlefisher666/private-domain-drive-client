@@ -22,6 +22,8 @@ import '../../features/transfer/infrastructure/upload_staging.dart';
 import '../../features/preview/infrastructure/text_preview_loader.dart';
 import '../../features/settings/application/update_service.dart';
 import '../../features/settings/infrastructure/github_release_client.dart';
+import '../../features/share_import/application/share_import_controller.dart';
+import '../../features/share_import/domain/share_import_models.dart';
 import '../../features/workspace/application/workspace_controller.dart';
 import '../../features/workspace/domain/file_item.dart';
 import '../../features/workspace/domain/directory_alias.dart';
@@ -42,58 +44,10 @@ export '../../features/workspace/application/workspace_controller.dart'
 export '../../features/transfer/domain/transfer_enqueue.dart'
     show BatchDownloadEnqueueResult, UploadConflictResolution;
 
-class ShareImportItem {
-  const ShareImportItem({
-    required this.id,
-    required this.name,
-    required this.size,
-    required this.localPath,
-  });
-
-  final String id;
-  final String name;
-  final int size;
-
-  /// Android 系统分享时复制到应用缓存目录的本地文件路径。
-  final String localPath;
-}
-
-/// 已完整复制的分享批次（冷启动兜底路径一次性到达）。
-class ShareImportCompleteBatch {
-  const ShareImportCompleteBatch({
-    required this.batchId,
-    required this.items,
-    required this.succeeded,
-    required this.failed,
-  });
-
-  final String batchId;
-  final List<ShareImportItem> items;
-  final int succeeded;
-  final int failed;
-}
-
-/// 分享导入批次的渐进接收进度；弹窗据此展示「正在导入 x/n」并控制
-/// 确认按钮的启用时机（批次完成前禁用）。
-class ShareImportBatchState {
-  const ShareImportBatchState({
-    required this.batchId,
-    required this.total,
-    required this.received,
-    required this.finished,
-    required this.failedCount,
-  });
-
-  final String batchId;
-
-  /// 原生端解析出的分享文件总数。
-  final int total;
-
-  /// 已成功导入（复制完成）的文件数。
-  final int received;
-  final bool finished;
-  final int failedCount;
-}
+// 迁移期兼容：分享导入模型改由 share_import 域定义，
+// 经本文件继续对外可见，避免调用方在拆除门面前感知类型移动。
+export '../../features/share_import/domain/share_import_models.dart'
+    show ShareImportItem, ShareImportCompleteBatch, ShareImportBatchState;
 
 class BatchDeletePreview {
   const BatchDeletePreview({
@@ -223,6 +177,11 @@ class AppController extends ChangeNotifier {
       ossClient: _ossClient,
       uploadStaging: uploadStaging,
     )..addListener(notifyListeners);
+    _shareImportController = ShareImportController(
+      sessionController: _sessionController,
+      workspaceController: _workspaceController,
+      transferController: _transferController,
+    )..addListener(notifyListeners);
   }
 
   late final SessionController _sessionController;
@@ -235,6 +194,9 @@ class AppController extends ChangeNotifier {
 
   /// 传输任务操作由 [TransferController] 持有；迁移期经门面继续暴露原 API。
   late final TransferController _transferController;
+
+  /// 分享导入状态由 [ShareImportController] 持有；迁移期经门面继续暴露原 API。
+  late final ShareImportController _shareImportController;
   final OssClient _ossClient;
 
   /// 相册等模块与主控制器共用同一个 OSS 客户端（凭证配置状态共享）。
@@ -306,17 +268,6 @@ class AppController extends ChangeNotifier {
   /// 会话状态由 [SessionController] 持有，此处保留只读引用供内部消费。
   UserSession? get _session => _sessionController.session;
 
-  List<ShareImportItem> _pendingShareItems = const <ShareImportItem>[];
-  String _shareTargetPath = rootPrefix;
-
-  /// 渐进接收中的分享批次状态；null 表示当前没有进行中/刚完成的批次。
-  ShareImportBatchState? _activeShareBatch;
-
-  /// 当前批次内已到达但尚未并入 [_pendingShareItems] 的暂存项。
-  final List<ShareImportItem> _stagedShareItems = <ShareImportItem>[];
-
-  /// 待弹目录选择弹窗的批次 id 列表（防重入签名来源）。
-  final List<String> _shareBatchIds = <String>[];
   ThemeMode _themeMode = ThemeMode.light;
   bool _autoCheckUpdates = true;
 
@@ -378,16 +329,17 @@ class AppController extends ChangeNotifier {
   bool get isMoving => _isMoving;
 
   List<ShareImportItem> get pendingShareItems =>
-      List<ShareImportItem>.unmodifiable(_pendingShareItems);
-  String get shareTargetPath => _shareTargetPath;
+      _shareImportController.pendingShareItems;
+  String get shareTargetPath => _shareImportController.shareTargetPath;
 
   /// 当前渐进接收中的分享批次进度；批次完成后保留 finished 状态供
   /// 弹窗展示失败计数，直到确认/取消/新批次到来时清除。
-  ShareImportBatchState? get activeShareBatch => _activeShareBatch;
+  ShareImportBatchState? get activeShareBatch =>
+      _shareImportController.activeShareBatch;
 
   /// 待弹目录选择弹窗的批次 id；防重入签名以批次 id 为准。
   List<String> get pendingShareBatchIds =>
-      List<String>.unmodifiable(_shareBatchIds);
+      _shareImportController.pendingShareBatchIds;
   FileItem? get selectedItem => _workspaceController.selectedItem;
   bool get isMultiSelectionMode => _workspaceController.isMultiSelectionMode;
   int get multiSelectedCount => _workspaceController.multiSelectedCount;
@@ -519,12 +471,10 @@ class AppController extends ChangeNotifier {
     _transferController.clearBatchConflictState();
   }
 
-  /// 会话变更后的跨域复位：工作区域状态委托 [WorkspaceController]，
-  /// 分享导入状态由本控制器管理。
+  /// 会话变更后的跨域复位：工作区域与分享导入状态分别委托各控制器。
   void _handleSessionChanged() {
     _workspaceController.handleSessionChanged();
-    _pendingShareItems = const <ShareImportItem>[];
-    _clearShareBatchState();
+    _shareImportController.handleSessionChanged();
   }
 
   Future<List<FileItem>> listDirectory([String? path]) =>
@@ -1923,53 +1873,19 @@ class AppController extends ChangeNotifier {
 
   /// 重置分享导入状态：清空待上传项与批次进度。取消弹窗时调用，
   /// 进行中批次的后续事件将被忽略（用户已放弃该批内容）。
-  void prepareShareImport({List<ShareImportItem>? items, String? targetPath}) {
-    _pendingShareItems = List<ShareImportItem>.unmodifiable(
-      items ?? const <ShareImportItem>[],
-    );
-    _shareTargetPath = _normalizeDir(targetPath ?? rootPrefix);
-    _clearShareBatchState();
-    notifyListeners();
-  }
+  void prepareShareImport({List<ShareImportItem>? items, String? targetPath}) =>
+      _shareImportController.prepareShareImport(
+        items: items,
+        targetPath: targetPath,
+      );
 
   /// 批次开始：记录批次进度，弹窗可先于复制完成弹出。
-  void beginShareImportBatch(String batchId, int total) {
-    if (batchId.isEmpty) return;
-    final active = _activeShareBatch;
-    if (active != null && !active.finished) {
-      // 正常串行投递下不会出现；防御性并入旧批次结果后开启新批次。
-      _finishActiveShareBatch(_stagedShareItems.length, 0);
-    }
-    _activeShareBatch = ShareImportBatchState(
-      batchId: batchId,
-      total: total,
-      received: 0,
-      finished: false,
-      failedCount: 0,
-    );
-    _stagedShareItems.clear();
-    if (!_shareBatchIds.contains(batchId)) {
-      _shareBatchIds.add(batchId);
-    }
-    notifyListeners();
-  }
+  void beginShareImportBatch(String batchId, int total) =>
+      _shareImportController.beginShareImportBatch(batchId, total);
 
   /// 批次内单个文件复制成功到达；不属于当前批次的到达项忽略。
-  void addShareImportItem(String batchId, ShareImportItem item) {
-    final batch = _activeShareBatch;
-    if (batch == null || batch.finished || batch.batchId != batchId) {
-      return;
-    }
-    _stagedShareItems.add(item);
-    _activeShareBatch = ShareImportBatchState(
-      batchId: batch.batchId,
-      total: batch.total,
-      received: _stagedShareItems.length,
-      finished: false,
-      failedCount: 0,
-    );
-    notifyListeners();
-  }
+  void addShareImportItem(String batchId, ShareImportItem item) =>
+      _shareImportController.addShareImportItem(batchId, item);
 
   /// 批次完成：暂存项并入待上传清单；批次内全部失败时暂存项为空，
   /// 不进入待上传清单，仅保留失败计数供弹窗提示。
@@ -1977,88 +1893,23 @@ class AppController extends ChangeNotifier {
     String batchId, {
     required int succeeded,
     required int failed,
-  }) {
-    final batch = _activeShareBatch;
-    if (batch == null || batch.finished || batch.batchId != batchId) {
-      return;
-    }
-    _finishActiveShareBatch(succeeded, failed);
-  }
-
-  void _finishActiveShareBatch(int succeeded, int failed) {
-    final batch = _activeShareBatch;
-    if (batch == null) return;
-    _pendingShareItems = List<ShareImportItem>.unmodifiable(<ShareImportItem>[
-      ..._pendingShareItems,
-      ..._stagedShareItems,
-    ]);
-    _stagedShareItems.clear();
-    _activeShareBatch = ShareImportBatchState(
-      batchId: batch.batchId,
-      total: batch.total,
-      received: succeeded,
-      finished: true,
-      failedCount: failed,
-    );
-    notifyListeners();
-  }
+  }) =>
+      _shareImportController.finishShareImportBatch(
+        batchId,
+        succeeded: succeeded,
+        failed: failed,
+      );
 
   /// 冷启动兜底：原生缓冲中已完整的批次直接并入待上传清单，
   /// 视为「立即完成」的批次；全失败批次（无任何成功项）不弹窗。
-  void addCompletedShareBatch(ShareImportCompleteBatch batch) {
-    if (batch.items.isEmpty) return;
-    _pendingShareItems = List<ShareImportItem>.unmodifiable(<ShareImportItem>[
-      ..._pendingShareItems,
-      ...batch.items,
-    ]);
-    if (!_shareBatchIds.contains(batch.batchId)) {
-      _shareBatchIds.add(batch.batchId);
-    }
-    notifyListeners();
-  }
+  void addCompletedShareBatch(ShareImportCompleteBatch batch) =>
+      _shareImportController.addCompletedShareBatch(batch);
 
-  void _clearShareBatchState() {
-    _activeShareBatch = null;
-    _stagedShareItems.clear();
-    _shareBatchIds.clear();
-  }
+  void setShareTargetPath(String path) =>
+      _shareImportController.setShareTargetPath(path);
 
-  void setShareTargetPath(String path) {
-    _shareTargetPath = _normalizeDir(path);
-    notifyListeners();
-  }
-
-  Future<void> confirmShareUpload() async {
-    _ensureUploadCapability();
-    if (_pendingShareItems.isEmpty) {
-      throw StateError('没有待上传内容');
-    }
-    final items = _pendingShareItems;
-    for (final item in items) {
-      if (item.localPath.isEmpty || !await File(item.localPath).exists()) {
-        throw StateError('分享文件“${item.name}”已不可用，请重新分享');
-      }
-    }
-    _pendingShareItems = const <ShareImportItem>[];
-    _clearShareBatchState();
-    // 分享导入经传输队列异步完成，计数路径不可靠，失效目标目录由校准重建。
-    _workspaceController.invalidateDirectorySummary(_shareTargetPath);
-    _workspaceController.calibrateDirectorySummary(_shareTargetPath);
-    notifyListeners();
-    // 多文件分享导入归属同一批次，传输中心可展示整批上传汇总。
-    final batchId = items.length > 1
-        ? 'batch-${DateTime.now().microsecondsSinceEpoch}'
-        : null;
-    for (final item in items) {
-      await uploadFile(
-        fileName: item.name,
-        localPath: item.localPath,
-        fileSize: item.size,
-        targetPath: _shareTargetPath,
-        batchId: batchId,
-      );
-    }
-  }
+  Future<void> confirmShareUpload() =>
+      _shareImportController.confirmShareUpload();
 
   List<String> get sidebarDirectories => _workspaceController.sidebarDirectories;
 
@@ -2085,6 +1936,7 @@ class AppController extends ChangeNotifier {
     _workspaceController.dispose();
     moveStateListenable.dispose();
     deleteStateListenable.dispose();
+    _shareImportController.dispose();
     _transferController.dispose();
     _transferQueue.dispose();
     _sessionController.dispose();
