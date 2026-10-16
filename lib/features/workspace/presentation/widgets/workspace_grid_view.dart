@@ -13,6 +13,7 @@ import 'mobile_uniform_grid.dart';
 /// 拖拽框选的网格。
 class WorkspaceGridView extends StatelessWidget {
   const WorkspaceGridView({
+    super.key,
     required this.items,
     required this.selectedPath,
     required this.selectedPaths,

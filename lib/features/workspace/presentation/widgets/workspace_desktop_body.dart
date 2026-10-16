@@ -10,6 +10,7 @@ import 'thumbnail_size_segmented.dart';
 /// 桌面端工作区主体：顶部工具栏 + 左侧文件区域 + 右侧详情面板。
 class WorkspaceDesktopBody extends StatelessWidget {
   const WorkspaceDesktopBody({
+    super.key,
     required this.path,
     required this.canGoUp,
     required this.canUpload,

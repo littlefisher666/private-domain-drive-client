@@ -183,7 +183,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       return;
     }
     final entry = _itemEntries[item.path];
-    final tappedTrashPath = entry?.objects[_sourceKeyFor(item, entry!)];
+    final tappedTrashPath = entry?.objects[_sourceKeyFor(item, entry)];
     if (tappedTrashPath == null) return;
     final imageFiles = <FileItem>[];
     final displayPaths = <String, String>{};
@@ -194,7 +194,7 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       }
       final fileEntry = _itemEntries[file.path];
       final trashPath =
-          fileEntry?.objects[_sourceKeyFor(file, fileEntry!)];
+          fileEntry?.objects[_sourceKeyFor(file, fileEntry)];
       if (trashPath == null) continue;
       imageFiles.add(
         FileItem(

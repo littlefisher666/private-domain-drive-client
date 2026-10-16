@@ -5,6 +5,7 @@ import '../../domain/file_item.dart';
 /// 移动端顶部标题栏：路径、角色、返回/排序/浏览模式切换/刷新。
 class WorkspaceMobileHeader extends StatelessWidget {
   const WorkspaceMobileHeader({
+    super.key,
     required this.path,
     required this.roleLabel,
     required this.canGoUp,

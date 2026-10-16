@@ -14,6 +14,7 @@ import 'inline_rename_field.dart';
 /// 拖拽框选的行列表。
 class WorkspaceListView extends StatelessWidget {
   const WorkspaceListView({
+    super.key,
     required this.items,
     required this.desktop,
     required this.selectedPath,
