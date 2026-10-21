@@ -6,6 +6,16 @@
     <description>私域网盘 macOS 客户端 Sparkle 更新清单</description>
     <language>zh-cn</language>
     <item>
+      <title>私域网盘 macOS v1.0.21</title>
+      <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.21</link>
+      <sparkle:version>99</sparkle:version>
+      <sparkle:shortVersionString>1.0.21</sparkle:shortVersionString>
+      <pubDate>Wed, 21 Oct 2026 09:27:58 +0000</pubDate>
+      <description sparkle:format="markdown">### 优化
+- 更新应用图标为云盘一体机并补充通知栏单色图标（assets）</description>
+      <enclosure url="https://private-domain-drive.oss-cn-hangzhou.aliyuncs.com/releases/macos/1.0.21/private-domain-drive-macos-v1.0.21.zip" length="25792671" type="application/zip" sparkle:edSignature="5q9bddRH5v4AImxDU+/kSVFh1FEHyljpiUZECc4dhU2mPuXrYNZRDVQaKFY7F0Tu4RR874qvrBIbx8Ckas4nDw==" />
+    </item>
+    <item>
       <title>私域网盘 macOS v1.0.20</title>
       <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.20</link>
       <sparkle:version>98</sparkle:version>
