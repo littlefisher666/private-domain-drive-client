@@ -69,7 +69,7 @@ class TransferKeepaliveService : Service() {
                 Notification.Builder(context)
             }
             val notification = builder
-                .setSmallIcon(R.mipmap.ic_launcher)
+                .setSmallIcon(R.drawable.ic_stat_cloud_drive)
                 .setContentTitle(context.getString(R.string.notification_transfer_done_title))
                 .setContentText(context.getString(R.string.notification_transfer_done_body))
                 .setAutoCancel(true)
@@ -166,7 +166,7 @@ class TransferKeepaliveService : Service() {
             Notification.Builder(this)
         }
         builder
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_stat_cloud_drive)
             .setContentTitle(TITLE)
             .setContentText(text)
             .setOngoing(true)
