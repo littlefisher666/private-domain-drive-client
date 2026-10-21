@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../app/router/route_names.dart';
 import '../../../shared/state/app_scope.dart';
+import '../../../shared/widgets/brand_logo.dart';
 
 class SplashPage extends StatefulWidget {
   const SplashPage({super.key});
@@ -66,34 +67,7 @@ class _SplashPageState extends State<SplashPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Container(
-                width: 68,
-                height: 68,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(18),
-                  gradient: const LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: <Color>[Color(0xFF4DA3FF), Color(0xFF007AFF)],
-                  ),
-                  boxShadow: const <BoxShadow>[
-                    BoxShadow(
-                      color: Color(0x3D007AFF),
-                      blurRadius: 16,
-                      offset: Offset(0, 8),
-                    ),
-                  ],
-                ),
-                child: const Text(
-                  'PDD',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
+              const BrandLogo(size: 68),
               const SizedBox(height: 20),
               Text('私域网盘', style: theme.textTheme.headlineSmall),
               const SizedBox(height: 8),

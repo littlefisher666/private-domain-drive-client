@@ -6,6 +6,7 @@ import '../../../app/theme/cupertino_desktop.dart';
 import '../../../core/utils/window_actions.dart';
 import '../../../shared/path_utils.dart' as path_utils;
 import '../../../shared/state/app_scope.dart';
+import '../../../shared/widgets/brand_logo.dart';
 import '../../gallery/presentation/gallery_page.dart';
 import '../../settings/presentation/settings_page.dart';
 import '../../transfer/presentation/transfer_tasks_page.dart';
@@ -374,34 +375,7 @@ class _BrandHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
       child: Row(
         children: <Widget>[
-          Container(
-            width: 36,
-            height: 36,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
-              gradient: const LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: <Color>[Color(0xFF4DA3FF), Color(0xFF007AFF)],
-              ),
-              boxShadow: const <BoxShadow>[
-                BoxShadow(
-                  color: Color(0x3D007AFF),
-                  blurRadius: 16,
-                  offset: Offset(0, 8),
-                ),
-              ],
-            ),
-            child: const Text(
-              'PDD',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w800,
-                fontSize: 11,
-              ),
-            ),
-          ),
+          const BrandLogo(size: 36),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
