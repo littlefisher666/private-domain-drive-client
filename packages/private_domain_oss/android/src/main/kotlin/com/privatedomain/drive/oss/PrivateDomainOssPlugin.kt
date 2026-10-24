@@ -246,9 +246,20 @@ class PrivateDomainOssPlugin : FlutterPlugin, MethodChannel.MethodCallHandler,
                             )
                         }
                         val documentUri = directoryUri?.let {
+                            // 目录选择器回传的是 tree URI，createDocument 需要
+                            // 该目录对应的 document URI，需先经 tree 转换。
+                            val treeUri = android.net.Uri.parse(it)
+                            val parentUri = if (DocumentsContract.isTreeUri(treeUri)) {
+                                DocumentsContract.buildDocumentUriUsingTree(
+                                    treeUri,
+                                    DocumentsContract.getTreeDocumentId(treeUri),
+                                )
+                            } else {
+                                treeUri
+                            }
                             DocumentsContract.createDocument(
                                 applicationContext.contentResolver,
-                                android.net.Uri.parse(it),
+                                parentUri,
                                 MimeTypeMap.getSingleton().getMimeTypeFromExtension(
                                     (call.argument<String>("displayName") ?: "").substringAfterLast('.', "").lowercase(),
                                 ) ?: "application/octet-stream",
