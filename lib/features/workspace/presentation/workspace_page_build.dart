@@ -21,7 +21,8 @@ extension _WorkspacePageBuild on _WorkspacePageState {
     if (dirPaths.isEmpty) return;
     final generation = _summaryGeneration;
     unawaited(() async {
-      final cached = await controller.workspaceController.cachedDirectorySummaries(dirPaths);
+      final cached = await controller.workspaceController
+          .cachedDirectorySummaries(dirPaths);
       if (!mounted || generation != _summaryGeneration) return;
       if (cached.isNotEmpty) {
         _setState(() {
@@ -191,7 +192,8 @@ extension _WorkspacePageBuild on _WorkspacePageState {
                     return KeyEventResult.handled;
                   }
                   if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-                    final selected = controller.workspaceController.selectedItem;
+                    final selected =
+                        controller.workspaceController.selectedItem;
                     if (selected != null) {
                       unawaited(_handleOpen(selected));
                     }
@@ -212,7 +214,8 @@ extension _WorkspacePageBuild on _WorkspacePageState {
                     _ => KeyEventResult.ignored,
                   };
                 }
-                final isGrid = controller.workspaceController.browseMode == BrowseMode.grid;
+                final isGrid = controller.workspaceController.browseMode ==
+                    BrowseMode.grid;
                 final offset = switch (event.logicalKey) {
                   LogicalKeyboardKey.arrowUp => isGrid
                       ? -_gridColumnCount(
@@ -247,11 +250,16 @@ extension _WorkspacePageBuild on _WorkspacePageState {
               return KeyEventResult.ignored;
             },
             child: ValueListenableBuilder<Set<String>>(
-              valueListenable: controller.workspaceController.multiSelectedPathsListenable,
+              valueListenable:
+                  controller.workspaceController.multiSelectedPathsListenable,
               builder: (context, selectedPaths, _) {
                 final selectedItems = items
                     .where((item) => selectedPaths.contains(item.path))
                     .toList(growable: false);
+                final shareItems = controller.fileShareController
+                        .canShareAll(selectedItems)
+                    ? selectedItems
+                    : null;
                 final showBatchBar = desktop ||
                     selectedItems.isNotEmpty ||
                     controller.workspaceController.isMultiSelectionMode;
@@ -259,18 +267,19 @@ extension _WorkspacePageBuild on _WorkspacePageState {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
                     ValueListenableBuilder<MoveProgress?>(
-                      valueListenable: controller.moveController.moveStateListenable,
-                      builder: (context, moveProgress, _) =>
-                          moveProgress == null
-                              ? const SizedBox.shrink()
-                              : Padding(
-                                  padding: const EdgeInsets.only(bottom: 8),
-                                  child: MoveProgressBanner(
-                                      progress: moveProgress),
-                                ),
+                      valueListenable:
+                          controller.moveController.moveStateListenable,
+                      builder: (context, moveProgress, _) => moveProgress ==
+                              null
+                          ? const SizedBox.shrink()
+                          : Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: MoveProgressBanner(progress: moveProgress),
+                            ),
                     ),
                     ValueListenableBuilder<DeleteProgress?>(
-                      valueListenable: controller.recycleBinController.deleteStateListenable,
+                      valueListenable:
+                          controller.recycleBinController.deleteStateListenable,
                       builder: (context, deleteProgress, _) =>
                           deleteProgress == null
                               ? const SizedBox.shrink()
@@ -285,18 +294,26 @@ extension _WorkspacePageBuild on _WorkspacePageState {
                         selectedCount: selectedItems.length,
                         allSelected: selectedItems.length == items.length,
                         itemCount: items.length,
-                        canDownload: controller.sessionController.capabilities.download,
-                        canMove: controller.sessionController.capabilities.upload &&
+                        canDownload:
+                            controller.sessionController.capabilities.download,
+                        canMove: controller
+                                .sessionController.capabilities.upload &&
                             controller.sessionController.capabilities.delete &&
                             !controller.moveController.isMoving,
-                        canDelete: controller.sessionController.capabilities.delete,
+                        canDelete:
+                            controller.sessionController.capabilities.delete,
                         onSelectAll: () {
                           if (selectedItems.length == items.length) {
-                            controller.workspaceController.clearMultiSelection();
+                            controller.workspaceController
+                                .clearMultiSelection();
                           } else {
-                            controller.workspaceController.selectAllItems(items);
+                            controller.workspaceController
+                                .selectAllItems(items);
                           }
                         },
+                        onShare: shareItems == null
+                            ? null
+                            : () => _shareItems(shareItems),
                         onDownload: selectedItems.isEmpty
                             ? null
                             : () => _downloadSelected(selectedItems),
@@ -311,12 +328,14 @@ extension _WorkspacePageBuild on _WorkspacePageState {
                     ],
                     Expanded(
                       child: ValueListenableBuilder<FileItem?>(
-                        valueListenable: controller.workspaceController.selectedItemListenable,
+                        valueListenable: controller
+                            .workspaceController.selectedItemListenable,
                         builder: (context, selected, _) {
                           final selectedPath = selected?.path;
-                          final selecting = controller.workspaceController.isMultiSelectionMode;
-                          final isMultiSelectionMode =
-                              controller.workspaceController.isMultiSelectionMode;
+                          final selecting = controller
+                              .workspaceController.isMultiSelectionMode;
+                          final isMultiSelectionMode = controller
+                              .workspaceController.isMultiSelectionMode;
                           void onSelect(FileItem item) {
                             if (desktop) {
                               _itemsFocusNode.requestFocus();
@@ -328,33 +347,39 @@ extension _WorkspacePageBuild on _WorkspacePageState {
                             }
                           }
 
-                          if (controller.workspaceController.browseMode == BrowseMode.grid) {
+                          if (controller.workspaceController.browseMode ==
+                              BrowseMode.grid) {
                             return WorkspaceGridView(
                               items: items,
                               selectedPath: selectedPath,
                               selectedPaths: selectedPaths,
                               multiSelecting: selecting,
                               desktop: desktop,
-                              thumbnailSize: controller.workspaceController.thumbnailSize,
+                              thumbnailSize:
+                                  controller.workspaceController.thumbnailSize,
                               subtitleBuilder: _subtitle,
-                              thumbnailLoader: controller.workspaceController.loadThumbnail,
-                              thumbnailCacheNamespace:
-                                  controller.workspaceController.thumbnailCacheNamespace,
+                              thumbnailLoader:
+                                  controller.workspaceController.loadThumbnail,
+                              thumbnailCacheNamespace: controller
+                                  .workspaceController.thumbnailCacheNamespace,
                               onOpen: _handleOpen,
                               onMore: desktop ? (_) {} : _showItemActions,
                               onSelect: onSelect,
                               onToggle: (item) =>
                                   _toggleMultiSelection(item, items),
-                              onMarqueeSelectionChanged:
-                                  controller.workspaceController.replaceMultiSelection,
+                              onMarqueeSelectionChanged: controller
+                                  .workspaceController.replaceMultiSelection,
                               canUpload: canUpload,
-                              canDelete: controller.sessionController.capabilities.delete,
-                              canDownload: controller.sessionController.capabilities.download,
-                              canMove: controller.sessionController.capabilities.upload &&
-                                  controller.sessionController.capabilities.delete,
+                              canDelete: controller
+                                  .sessionController.capabilities.delete,
+                              canDownload: controller
+                                  .sessionController.capabilities.download,
+                              canMove: controller
+                                      .sessionController.capabilities.upload &&
+                                  controller
+                                      .sessionController.capabilities.delete,
                               onDownload: _download,
-                              onMove: (item) =>
-                                  _moveItems(<FileItem>[item]),
+                              onMove: (item) => _moveItems(<FileItem>[item]),
                               onRename: _rename,
                               renamingTarget: _renamingTarget,
                               onRenameSubmit: _commitRename,
@@ -372,17 +397,21 @@ extension _WorkspacePageBuild on _WorkspacePageState {
                             subtitleBuilder: _subtitle,
                             metaTimeBuilder: _metaTime,
                             canUpload: canUpload,
-                            canDelete: controller.sessionController.capabilities.delete,
-                            canDownload: controller.sessionController.capabilities.download,
-                            canMove: controller.sessionController.capabilities.upload &&
-                                controller.sessionController.capabilities.delete,
+                            canDelete: controller
+                                .sessionController.capabilities.delete,
+                            canDownload: controller
+                                .sessionController.capabilities.download,
+                            canMove: controller
+                                    .sessionController.capabilities.upload &&
+                                controller
+                                    .sessionController.capabilities.delete,
                             onOpen: _handleOpen,
                             onMore: desktop ? (_) {} : _showItemActions,
                             onSelect: onSelect,
                             onToggle: (item) =>
                                 _toggleMultiSelection(item, items),
-                            onMarqueeSelectionChanged:
-                                controller.workspaceController.replaceMultiSelection,
+                            onMarqueeSelectionChanged: controller
+                                .workspaceController.replaceMultiSelection,
                             onPreview: _openPreview,
                             onDownload: _download,
                             onMove: (item) => _moveItems(<FileItem>[item]),
@@ -483,16 +512,18 @@ extension _WorkspacePageBuild on _WorkspacePageState {
         child: desktop
             ? WorkspaceDesktopBody(
                 path: controller.workspaceController.currentTitle,
-                canGoUp: controller.workspaceController.backNavigationPath() != null,
+                canGoUp:
+                    controller.workspaceController.backNavigationPath() != null,
                 canUpload: canUpload,
                 canDelete: canDelete,
                 canDownload: canDownload,
                 browseMode: controller.workspaceController.browseMode,
                 thumbnailSize: controller.workspaceController.thumbnailSize,
                 sortOption: controller.workspaceController.fileSortOption,
-                selectedListenable: controller.workspaceController.selectedItemListenable,
-                directorySizeStatesListenable:
-                    controller.workspaceController.directorySizeStatesListenable,
+                selectedListenable:
+                    controller.workspaceController.selectedItemListenable,
+                directorySizeStatesListenable: controller
+                    .workspaceController.directorySizeStatesListenable,
                 listArea: _buildItemsArea(
                   controller: controller,
                   desktop: true,
@@ -503,8 +534,10 @@ extension _WorkspacePageBuild on _WorkspacePageState {
                 onCreateFolder: _createFolder,
                 onUpload: () => _pickUpload(fromAlbum: false),
                 onUploadDirectory: _pickUploadDirectory,
-                onBrowseModeChanged: controller.workspaceController.setBrowseMode,
-                onThumbnailSizeChanged: controller.workspaceController.setThumbnailSize,
+                onBrowseModeChanged:
+                    controller.workspaceController.setBrowseMode,
+                onThumbnailSizeChanged:
+                    controller.workspaceController.setThumbnailSize,
                 onSortChanged: _setSortOption,
                 onOpen: _handleOpen,
                 onPreview: _openPreview,
@@ -518,13 +551,18 @@ extension _WorkspacePageBuild on _WorkspacePageState {
                   children: <Widget>[
                     WorkspaceMobileHeader(
                       path: controller.workspaceController.currentTitle,
-                      roleLabel: controller.sessionController.session?.displayName ?? '成员',
-                      canGoUp: controller.workspaceController.backNavigationPath() != null,
+                      roleLabel:
+                          controller.sessionController.session?.displayName ??
+                              '成员',
+                      canGoUp:
+                          controller.workspaceController.backNavigationPath() !=
+                              null,
                       browseMode: controller.workspaceController.browseMode,
                       sortOption: controller.workspaceController.fileSortOption,
                       onGoUp: _goUp,
                       onRefresh: _reload,
-                      onBrowseModeChanged: controller.workspaceController.setBrowseMode,
+                      onBrowseModeChanged:
+                          controller.workspaceController.setBrowseMode,
                       onChooseSort: _showSortSheet,
                     ),
                     const SizedBox(height: 12),

@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../features/auth/application/session_controller.dart';
 import '../../features/auth/infrastructure/saved_credentials_store.dart';
 import '../../features/auth/infrastructure/session_repository.dart';
+import '../../features/file_share/application/file_share_controller.dart';
+import '../../features/file_share/infrastructure/share_cache_store.dart';
 import '../../features/settings/application/settings_controller.dart';
 import '../../features/settings/application/update_service.dart';
 import '../../features/share_import/application/share_import_controller.dart';
@@ -40,6 +42,8 @@ class AppServices extends ChangeNotifier {
     UploadStaging? uploadStaging,
     TransferKeepaliveService? transferKeepalive,
     UpdateService? updateService,
+    ShareCacheStore? shareCacheStore,
+    ShareFilesInvoker? shareFilesInvoker,
     bool? disableStartupUpdateCheck,
   }) : ossClient = ossClient ?? OssClient() {
     // 构造后统一使用字段（参数可能为 null，字段已兜底创建）。
@@ -92,6 +96,12 @@ class AppServices extends ChangeNotifier {
       updateService: updateService,
       disableStartupUpdateCheck: disableStartupUpdateCheck,
     )..addListener(notifyListeners);
+    fileShareController = FileShareController(
+      sessionController: sessionController,
+      ossClient: client,
+      cacheStore: shareCacheStore,
+      shareInvoker: shareFilesInvoker,
+    )..addListener(notifyListeners);
   }
 
   /// 相册等模块与主控制器共用同一个 OSS 客户端（凭证配置状态共享）。
@@ -124,6 +134,9 @@ class AppServices extends ChangeNotifier {
   /// 设置域状态（主题、自动检查更新、强制升级门禁）。
   late final SettingsController settingsController;
 
+  /// Android 单文件系统分享：本地副本准备、取消与分享结果。
+  late final FileShareController fileShareController;
+
   /// 更新服务与设置页、强制升级拦截页共享同一实例（检查结果口径一致）。
   UpdateService get updateService => settingsController.updateService;
 
@@ -143,6 +156,8 @@ class AppServices extends ChangeNotifier {
   /// 统一启动流程：偏好/传输恢复 → 会话恢复（由 SessionController
   /// 触发工作区据会话重置）。偏好读取失败不阻断会话恢复。
   Future<void> bootstrap() async {
+    // 本地缓存清理不依赖会话，异步执行且不阻塞首屏。
+    unawaited(fileShareController.cleanCache());
     try {
       final preferences = await SharedPreferences.getInstance();
       workspaceController.restorePreferences(preferences);
@@ -185,6 +200,7 @@ class AppServices extends ChangeNotifier {
     shareImportController.dispose();
     transferController.dispose();
     transferQueue.dispose();
+    fileShareController.dispose();
     sessionController.dispose();
     settingsController.dispose();
     super.dispose();

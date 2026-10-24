@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// 批量多选操作条：展示已选数量并提供下载/移动/删除入口。
+/// 批量多选操作条：展示已选数量并提供分享/下载/移动/删除入口。
 class BatchSelectionBar extends StatelessWidget {
   const BatchSelectionBar({
     super.key,
@@ -11,6 +11,7 @@ class BatchSelectionBar extends StatelessWidget {
     required this.canMove,
     required this.canDelete,
     required this.onSelectAll,
+    this.onShare,
     this.onDownload,
     this.onMove,
     this.onDelete,
@@ -23,6 +24,7 @@ class BatchSelectionBar extends StatelessWidget {
   final bool canMove;
   final bool canDelete;
   final VoidCallback onSelectAll;
+  final VoidCallback? onShare;
   final VoidCallback? onDownload;
   final VoidCallback? onMove;
   final VoidCallback? onDelete;
@@ -66,6 +68,13 @@ class BatchSelectionBar extends StatelessWidget {
             style:
                 TextStyle(fontWeight: FontWeight.w600, color: scheme.onSurface),
           ),
+          if (selectedCount > 0 && onShare != null)
+            FilledButton.icon(
+              onPressed: onShare,
+              style: compactButtonStyle,
+              icon: const Icon(Icons.share_outlined),
+              label: const Text('分享'),
+            ),
           if (selectedCount > 0 && canDownload)
             FilledButton.icon(
               onPressed: onDownload,

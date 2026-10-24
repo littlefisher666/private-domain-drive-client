@@ -53,13 +53,13 @@ extension _WorkspacePageActions on _WorkspacePageState {
     final controller = AppScope.of(context);
     final allowed = item.isAlias
         ? controller.sessionController.capabilities.upload
-        : controller.sessionController.capabilities.upload || controller.sessionController.capabilities.delete;
+        : controller.sessionController.capabilities.upload ||
+            controller.sessionController.capabilities.delete;
     if (!allowed) {
       AppFeedback.showSnack(context, '当前身份没有重命名权限');
       return;
     }
-    _setState(() =>
-        _renamingTarget = (path: item.path, isAlias: item.isAlias));
+    _setState(() => _renamingTarget = (path: item.path, isAlias: item.isAlias));
   }
 
   void _cancelRename() {
@@ -210,7 +210,8 @@ extension _WorkspacePageActions on _WorkspacePageState {
       if (directory == null) {
         return;
       }
-      controller.transferController.enqueueDownload(item, targetDirectory: directory);
+      controller.transferController
+          .enqueueDownload(item, targetDirectory: directory);
       if (mounted) {
         AppFeedback.showSnack(
           context,
@@ -256,7 +257,8 @@ extension _WorkspacePageActions on _WorkspacePageState {
       if (directoryCount > 0) {
         AppFeedback.showSnack(context, '正在展开 $directoryCount 个文件夹…');
       }
-      final result = await controller.transferController.enqueueDownloadsRecursively(
+      final result =
+          await controller.transferController.enqueueDownloadsRecursively(
         items,
         targetDirectory: directory,
       );
@@ -278,6 +280,66 @@ extension _WorkspacePageActions on _WorkspacePageState {
     }
   }
 
+  Future<void> _shareItems(List<FileItem> items) async {
+    final controller = AppScope.of(context);
+    final share = controller.fileShareController;
+    if (_sharing || !share.canShareAll(items)) {
+      return;
+    }
+    _sharing = true;
+    try {
+      final cached = await Future.wait(items.map(share.lookup));
+      if (!mounted) return;
+      late List<File> locals;
+      if (cached.every((file) => file != null)) {
+        locals = cached.cast<File>();
+        await share.cleanCache(
+          keepPaths: locals.map((file) => file.path).toSet(),
+        );
+      } else {
+        final preparing = share.prepareAll(items);
+        final dialogFuture = showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => SharePrepareDialog(
+            progress: share.progressListenable,
+            onCancel: share.cancelPreparation,
+          ),
+        );
+        List<File>? prepared;
+        Object? failure;
+        try {
+          prepared = await preparing;
+        } catch (error) {
+          failure = error;
+        }
+        // 弹窗在进度置空后自行关闭；这里等待其退场，避免分享面板与
+        // 进度弹窗同时出现。
+        await dialogFuture;
+        if (!mounted) return;
+        if (failure is FileShareCanceledException) return;
+        if (failure != null) {
+          AppFeedback.showSnack(
+            context,
+            '分享准备失败：${failure.toString().replaceFirst('Bad state: ', '')}',
+          );
+          return;
+        }
+        locals = prepared ?? const <File>[];
+        if (locals.isEmpty) return;
+      }
+      if (!mounted) return;
+      final outcome = await share.shareFiles(
+        locals.map((file) => file.path).toList(growable: false),
+      );
+      if (mounted && outcome == FileShareOutcome.failed) {
+        AppFeedback.showSnack(context, '分享失败');
+      }
+    } finally {
+      _sharing = false;
+    }
+  }
+
   Future<void> _deleteSelected(List<FileItem> items) async {
     if (_deleteBusy) {
       AppFeedback.showSnack(context, '正在删除中，请稍候…');
@@ -295,7 +357,8 @@ extension _WorkspacePageActions on _WorkspacePageState {
     AppFeedback.showSnack(context, '正在统计待删除对象…');
     _deleteBusy = true;
     try {
-      final preview = await controller.recycleBinController.prepareBatchDelete(realItems);
+      final preview =
+          await controller.recycleBinController.prepareBatchDelete(realItems);
       if (!mounted) return;
       final confirmed = await AppFeedback.confirm(
         context,
@@ -319,7 +382,8 @@ extension _WorkspacePageActions on _WorkspacePageState {
           confirmLabel: '重试失败项',
         );
         if (retry) {
-          final retried = await controller.recycleBinController.retryBatchDelete(result.failedPaths);
+          final retried = await controller.recycleBinController
+              .retryBatchDelete(result.failedPaths);
           result = BatchDeleteSummary(
             deletedPaths: <String>[
               ...result.deletedPaths,
@@ -356,7 +420,8 @@ extension _WorkspacePageActions on _WorkspacePageState {
   /// 单条目与批量移动共用入口：能力检查 → 目录选择 → 执行与反馈。
   Future<void> _moveItems(List<FileItem> items) async {
     final controller = AppScope.of(context);
-    if (!controller.sessionController.capabilities.upload || !controller.sessionController.capabilities.delete) {
+    if (!controller.sessionController.capabilities.upload ||
+        !controller.sessionController.capabilities.delete) {
       AppFeedback.showSnack(context, '当前身份没有移动权限');
       return;
     }
@@ -373,8 +438,7 @@ extension _WorkspacePageActions on _WorkspacePageState {
     }
     // 非法目标：任何源目录自身/子树（含后代全部禁用），以及源所在目录（仅禁其自身）。
     final invalidPrefixes = <String>{
-      for (final item in realItems.where((item) => item.isDirectory))
-        item.path,
+      for (final item in realItems.where((item) => item.isDirectory)) item.path,
     };
     final invalidPaths = <String>{
       if (realItems.isNotEmpty) path_utils.parentPathOf(realItems.first.path),
@@ -389,7 +453,8 @@ extension _WorkspacePageActions on _WorkspacePageState {
       return;
     }
     try {
-      final summary = await controller.moveController.moveItems(realItems, target);
+      final summary =
+          await controller.moveController.moveItems(realItems, target);
       if (!mounted) {
         return;
       }
@@ -475,7 +540,8 @@ extension _WorkspacePageActions on _WorkspacePageState {
       context: context,
       builder: (dialogContext) {
         final sources = entry.sourcePrefixes
-            .map((prefix) => '「${controller.workspaceController.displayPath(prefix)}」')
+            .map((prefix) =>
+                '「${controller.workspaceController.displayPath(prefix)}」')
             .toList();
         final sourceText = sources.length == 1
             ? sources.first
@@ -615,7 +681,8 @@ extension _WorkspacePageActions on _WorkspacePageState {
                       _handleOpen(item);
                     },
                   ),
-                  if (!item.isAlias && controller.sessionController.capabilities.download)
+                  if (!item.isAlias &&
+                      controller.sessionController.capabilities.download)
                     ListTile(
                       dense: true,
                       leading: const Icon(Icons.download_outlined, size: 22),
@@ -625,13 +692,23 @@ extension _WorkspacePageActions on _WorkspacePageState {
                         _download(item);
                       },
                     ),
+                  if (controller.fileShareController.canShare(item))
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.share_outlined, size: 22),
+                      title: const Text('分享'),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _shareItems(<FileItem>[item]);
+                      },
+                    ),
                   if (!item.isAlias &&
                       controller.sessionController.capabilities.upload &&
                       controller.sessionController.capabilities.delete)
                     ListTile(
                       dense: true,
-                      leading: const Icon(Icons.drive_file_move_outlined,
-                          size: 22),
+                      leading:
+                          const Icon(Icons.drive_file_move_outlined, size: 22),
                       title: const Text('移动到…'),
                       onTap: () {
                         Navigator.pop(context);
@@ -663,7 +740,8 @@ extension _WorkspacePageActions on _WorkspacePageState {
                         _rename(item);
                       },
                     ),
-                  if (item.isAlias && controller.sessionController.capabilities.delete)
+                  if (item.isAlias &&
+                      controller.sessionController.capabilities.delete)
                     ListTile(
                       dense: true,
                       leading: Icon(
@@ -681,7 +759,8 @@ extension _WorkspacePageActions on _WorkspacePageState {
                         _deleteLink(item);
                       },
                     ),
-                  if (!item.isAlias && controller.sessionController.capabilities.delete)
+                  if (!item.isAlias &&
+                      controller.sessionController.capabilities.delete)
                     ListTile(
                       dense: true,
                       leading: Icon(

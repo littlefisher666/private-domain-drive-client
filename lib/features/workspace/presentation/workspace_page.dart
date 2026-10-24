@@ -15,6 +15,8 @@ import '../../../shared/widgets/app_feedback.dart';
 import '../../../shared/widgets/file_sort_sheet.dart';
 import '../../preview/domain/preview_type.dart';
 import '../../preview/presentation/preview_page.dart';
+import '../../file_share/domain/file_share_models.dart';
+import '../../file_share/presentation/share_prepare_dialog.dart';
 import '../domain/delete_models.dart';
 import '../domain/directory_summary.dart';
 import '../domain/file_item.dart';
@@ -140,7 +142,8 @@ Future<void> pickAndUploadDirectory(BuildContext context) async {
     for (final relativePath in folders) {
       final name =
           relativePath.isEmpty ? folderName : '$folderName/$relativePath';
-      await controller.workspaceController.createFolder(name, targetPath: uploadRoot);
+      await controller.workspaceController
+          .createFolder(name, targetPath: uploadRoot);
     }
     // 整个文件夹作为一次提交归属同一批次。
     final batchId = files.length > 1
@@ -186,12 +189,13 @@ class _WorkspacePageState extends State<WorkspacePage> {
   // 链接条目与真实条目可能共用同一路径，重命名需按 (path, isAlias) 匹配。
   // 删除期间用模态忙碌弹窗阻塞交互，防止同一批条目被重复提交删除。
   bool _deleteBusy = false;
+  bool _sharing = false;
   ({String path, bool isAlias})? _renamingTarget;
   bool _pendingMovesChecked = false;
 
   /// 子文件夹统计的异步回填值，按目录路径覆盖列表条目。
-  Map<String, DirectorySummary> _summaryOverrides = const <String,
-      DirectorySummary>{};
+  Map<String, DirectorySummary> _summaryOverrides =
+      const <String, DirectorySummary>{};
 
   /// 目录切换/手动刷新时递增，丢弃旧目录的统计回调。
   int _summaryGeneration = 0;
@@ -224,7 +228,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
     }
     _boundPath = controller.workspaceController.currentPath;
     _boundTreeRevision = controller.workspaceController.treeRevision;
-    _itemsFuture = controller.workspaceController.listDirectory(controller.workspaceController.currentPath);
+    _itemsFuture = controller.workspaceController
+        .listDirectory(controller.workspaceController.currentPath);
     _resetSummaryFill();
   }
 
@@ -242,7 +247,8 @@ class _WorkspacePageState extends State<WorkspacePage> {
 
   Future<void> _reload() async {
     final controller = AppScope.of(context);
-    final future = controller.workspaceController.listDirectory(controller.workspaceController.currentPath);
+    final future = controller.workspaceController
+        .listDirectory(controller.workspaceController.currentPath);
     setState(() {
       _itemsFuture = future;
       _boundPath = controller.workspaceController.currentPath;
@@ -327,10 +333,10 @@ class _WorkspacePageState extends State<WorkspacePage> {
 
   void _toggleMultiSelection(FileItem item, List<FileItem> items) {
     AppScope.read(context).workspaceController.toggleMultiSelection(
-      item,
-      visibleItems: items,
-      range: HardwareKeyboard.instance.isShiftPressed,
-    );
+          item,
+          visibleItems: items,
+          range: HardwareKeyboard.instance.isShiftPressed,
+        );
   }
 
   // State.build 必须在类体内覆写，构建逻辑拆分在 workspace_page_build.dart。
