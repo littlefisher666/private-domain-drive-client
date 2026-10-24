@@ -328,6 +328,19 @@ void main() {
           codec.dispose();
         }
 
+        // 详情页大图预览与缩略图共用 OSS 图片处理链路，HEIC 必须能解码。
+        final heicItem = items
+            .singleWhere((candidate) => candidate.name == 'qa-thumbnail.heic');
+        final heicPreview =
+            await controller.workspaceController.loadImagePreview(heicItem);
+        expect(heicPreview, isNotEmpty, reason: 'HEIC 预览未返回字节');
+        final heicCodec =
+            await ui.instantiateImageCodec(Uint8List.fromList(heicPreview));
+        final heicFrame = await heicCodec.getNextFrame();
+        expect(heicFrame.image.width, greaterThan(0));
+        heicFrame.image.dispose();
+        heicCodec.dispose();
+
         // 真实用户对象键常包含中文目录、中文文件名、空格和大写扩展名；
         // 该场景必须走完整的原生 OSS 图片处理链路。
         const localizedDirectory = '相册';

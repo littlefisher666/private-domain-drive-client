@@ -65,6 +65,14 @@ void main() {
     expect(find.text('音频加载失败'), findsOneWidget);
   });
 
+  testWidgets('HEIC 图片进入图片预览而非不支持提示', (tester) async {
+    await pumpPreview(tester, fileName: 'IMG_0001.HEIC');
+    await tester.pumpAndSettle();
+
+    expect(find.text('暂不支持预览'), findsNothing);
+    expect(find.text('图片预览加载失败'), findsOneWidget);
+  });
+
   testWidgets('不支持文件提示仅可下载', (tester) async {
     await pumpPreview(tester, fileName: '归档.zip');
 

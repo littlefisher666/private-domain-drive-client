@@ -58,6 +58,17 @@ extension PreviewTypeResolver on PreviewType {
     '.gitattributes',
   ];
 
+  static const _imageExtensions = <String>[
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.webp',
+    // iPhone 默认拍摄格式；缩略图与预览均走 OSS 图片处理，
+    // 客户端 Image 可解码（macOS 经 ImageIO，Android 9+ 经 ImageDecoder）。
+    '.heic',
+    '.heif',
+  ];
+
   static const _audioExtensions = <String>[
     '.mp3',
     '.m4a',
@@ -75,10 +86,7 @@ extension PreviewTypeResolver on PreviewType {
   static PreviewType fromFileName(String fileName) {
     final normalized = fileName.toLowerCase();
 
-    if (normalized.endsWith('.png') ||
-        normalized.endsWith('.jpg') ||
-        normalized.endsWith('.jpeg') ||
-        normalized.endsWith('.webp')) {
+    if (_hasExtension(normalized, _imageExtensions)) {
       return PreviewType.image;
     }
 

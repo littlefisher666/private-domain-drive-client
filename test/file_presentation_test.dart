@@ -10,6 +10,19 @@ void main() {
       FileKind.image,
     );
     expect(
+      const FileItem(
+        path: 'shared/IMG_0001.HEIC',
+        name: 'IMG_0001.HEIC',
+        isDirectory: false,
+      ).kind,
+      FileKind.image,
+    );
+    expect(
+      const FileItem(path: 'shared/b.heif', name: 'b.heif', isDirectory: false)
+          .kind,
+      FileKind.image,
+    );
+    expect(
       const FileItem(path: 'shared/a.pdf', name: 'a.pdf', isDirectory: false)
           .kind,
       FileKind.pdf,
@@ -28,6 +41,8 @@ void main() {
 
   test('预览类型识别覆盖图片、PDF、文本与不支持文件', () {
     expect(PreviewTypeResolver.fromFileName('封面.PNG'), PreviewType.image);
+    expect(PreviewTypeResolver.fromFileName('IMG_0001.HEIC'), PreviewType.image);
+    expect(PreviewTypeResolver.fromFileName('IMG_0002.heif'), PreviewType.image);
     expect(PreviewTypeResolver.fromFileName('说明.pdf'), PreviewType.pdf);
     expect(PreviewTypeResolver.fromFileName('说明.md'), PreviewType.markdown);
     expect(PreviewTypeResolver.fromFileName('数据.csv'), PreviewType.csv);

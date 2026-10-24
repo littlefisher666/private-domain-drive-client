@@ -115,7 +115,8 @@ extension FileItemX on FileItem {
         lower.endsWith('.jpeg') ||
         lower.endsWith('.gif') ||
         lower.endsWith('.webp') ||
-        lower.endsWith('.heic')) {
+        lower.endsWith('.heic') ||
+        lower.endsWith('.heif')) {
       return FileKind.image;
     }
     if (lower.endsWith('.pdf')) {
