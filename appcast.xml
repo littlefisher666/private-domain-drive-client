@@ -6,6 +6,21 @@
     <description>私域网盘 macOS 客户端 Sparkle 更新清单</description>
     <language>zh-cn</language>
     <item>
+      <title>私域网盘 macOS v1.0.23</title>
+      <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.23</link>
+      <sparkle:version>102</sparkle:version>
+      <sparkle:shortVersionString>1.0.23</sparkle:shortVersionString>
+      <pubDate>Sat, 24 Oct 2026 15:51:22 +0000</pubDate>
+      <description sparkle:format="markdown">### 新功能
+- 支持 Android 单个与批量文件系统分享（file-share）
+
+### 修复
+- 修复 HEIC 图片大图预览误判为不支持（preview）
+- 修复下载到已选目录时目录 URI 无效（android）
+- 启动图标改为满版自适应构图（android）</description>
+      <enclosure url="https://private-domain-drive.oss-cn-hangzhou.aliyuncs.com/releases/macos/1.0.23/private-domain-drive-macos-v1.0.23.zip" length="26116378" type="application/zip" sparkle:edSignature="QndeBLZ5CY2n+P5swjHSIxBEnmSWX7yCgWobCFm0qTZ+ovZ+Q5Ko39YBnCU8YoSqbM027CjTqSl+qL7icEVeBQ==" />
+    </item>
+    <item>
       <title>私域网盘 macOS v1.0.22</title>
       <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.22</link>
       <sparkle:version>100</sparkle:version>
