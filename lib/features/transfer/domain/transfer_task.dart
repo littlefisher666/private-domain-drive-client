@@ -30,6 +30,13 @@ class TransferTask {
     this.totalBytes,
     this.bytesPerSecond,
     this.error,
+    this.queuedAt,
+    this.startedAt,
+    this.lastStartedAt,
+    this.finishedAt,
+    this.activeDurationMs = 0,
+    this.totalTransferredBytes = 0,
+    this.attemptCount = 1,
   });
 
   final String id;
@@ -50,6 +57,42 @@ class TransferTask {
   final double? bytesPerSecond;
   final String? error;
 
+  /// 首次入队时间，重试不覆盖。
+  final DateTime? queuedAt;
+
+  /// 首次开始传输时间。
+  final DateTime? startedAt;
+
+  /// 最近一次开始传输时间，每次进入传输中状态更新。
+  final DateTime? lastStartedAt;
+
+  /// 最近一次终态时间，重试重新入队时清空。
+  final DateTime? finishedAt;
+
+  /// 跨尝试累计的实际传输时长（毫秒，单调时钟统计）。
+  final int activeDurationMs;
+
+  /// 跨尝试累计的实际传输字节数。
+  final int totalTransferredBytes;
+
+  /// 尝试次数：首次入队为 1，用户重试 +1，暂停继续不增加。
+  final int attemptCount;
+
+  bool get isFinished =>
+      status == TransferTaskStatus.success ||
+      status == TransferTaskStatus.failed ||
+      status == TransferTaskStatus.canceled;
+
+  /// 入队时间：优先使用显式字段，旧记录回退到 id 内嵌的微秒时间戳。
+  DateTime? get queuedTime => queuedAt ?? queuedAtFromId(id);
+
+  /// 平均速度（字节/秒）：累计实际字节除以累计实际传输时长。
+  /// 时长为零或累计字节未知时返回 null，界面展示占位符。
+  double? get averageBytesPerSecond {
+    if (activeDurationMs <= 0 || totalTransferredBytes <= 0) return null;
+    return totalTransferredBytes / (activeDurationMs / 1000);
+  }
+
   TransferTask copyWith({
     String? id,
     String? name,
@@ -65,6 +108,14 @@ class TransferTask {
     int? totalBytes,
     double? bytesPerSecond,
     String? error,
+    DateTime? queuedAt,
+    DateTime? startedAt,
+    DateTime? lastStartedAt,
+    DateTime? finishedAt,
+    bool clearFinishedAt = false,
+    int? activeDurationMs,
+    int? totalTransferredBytes,
+    int? attemptCount,
   }) {
     return TransferTask(
       id: id ?? this.id,
@@ -81,6 +132,14 @@ class TransferTask {
       totalBytes: totalBytes ?? this.totalBytes,
       bytesPerSecond: bytesPerSecond ?? this.bytesPerSecond,
       error: error ?? this.error,
+      queuedAt: queuedAt ?? this.queuedAt,
+      startedAt: startedAt ?? this.startedAt,
+      lastStartedAt: lastStartedAt ?? this.lastStartedAt,
+      finishedAt: clearFinishedAt ? null : (finishedAt ?? this.finishedAt),
+      activeDurationMs: activeDurationMs ?? this.activeDurationMs,
+      totalTransferredBytes:
+          totalTransferredBytes ?? this.totalTransferredBytes,
+      attemptCount: attemptCount ?? this.attemptCount,
     );
   }
 
@@ -100,6 +159,13 @@ class TransferTask {
       'totalBytes': totalBytes,
       'bytesPerSecond': bytesPerSecond,
       'error': error,
+      'queuedAt': queuedAt?.toUtc().millisecondsSinceEpoch,
+      'startedAt': startedAt?.toUtc().millisecondsSinceEpoch,
+      'lastStartedAt': lastStartedAt?.toUtc().millisecondsSinceEpoch,
+      'finishedAt': finishedAt?.toUtc().millisecondsSinceEpoch,
+      'activeDurationMs': activeDurationMs,
+      'totalTransferredBytes': totalTransferredBytes,
+      'attemptCount': attemptCount,
     };
   }
 
@@ -131,7 +197,36 @@ class TransferTask {
       totalBytes: (json['totalBytes'] as num?)?.toInt(),
       bytesPerSecond: (json['bytesPerSecond'] as num?)?.toDouble(),
       error: json['error'] as String?,
+      queuedAt:
+          _dateFromEpochMs(json['queuedAt']) ?? queuedAtFromId(id),
+      startedAt: _dateFromEpochMs(json['startedAt']),
+      lastStartedAt: _dateFromEpochMs(json['lastStartedAt']),
+      finishedAt: _dateFromEpochMs(json['finishedAt']),
+      activeDurationMs: (json['activeDurationMs'] as num?)?.toInt() ?? 0,
+      totalTransferredBytes:
+          (json['totalTransferredBytes'] as num?)?.toInt() ?? 0,
+      attemptCount: (json['attemptCount'] as num?)?.toInt() ?? 1,
     );
+  }
+
+  /// 旧记录兜底：任务 id 形如 `download-<microsecondsSinceEpoch>-<n>`，
+  /// 解析失败或时间明显越界时返回 null。
+  static DateTime? queuedAtFromId(String id) {
+    for (final segment in id.split('-')) {
+      if (segment.length < 16) continue;
+      final micros = int.tryParse(segment);
+      if (micros == null) continue;
+      final value = DateTime.fromMicrosecondsSinceEpoch(micros, isUtc: true);
+      if (value.year >= 2000 && value.year <= 2100) return value;
+    }
+    return null;
+  }
+
+  static DateTime? _dateFromEpochMs(Object? value) {
+    if (value is num) {
+      return DateTime.fromMillisecondsSinceEpoch(value.toInt(), isUtc: true);
+    }
+    return null;
   }
 
   static T? _enumValue<T extends Enum>(Iterable<T> values, Object? value) {

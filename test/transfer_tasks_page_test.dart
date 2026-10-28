@@ -1,10 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
 import 'package:private_domain_drive_client/features/transfer/domain/transfer_task.dart';
+import 'package:private_domain_drive_client/features/transfer/infrastructure/transfer_history_store.dart';
 import 'package:private_domain_drive_client/features/transfer/presentation/transfer_tasks_page.dart';
 import 'package:private_domain_drive_client/shared/state/app_services.dart';
 import 'package:private_domain_drive_client/shared/state/app_scope.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'support/in_memory_transfer_history_store.dart';
 
 void main() {
   Future<AppServices> pumpTasks(
@@ -34,6 +40,29 @@ void main() {
     final controller =
         AppServices(sessionRepository: MemorySessionRepository());
     controller.transferQueue.tasksListenable.value = tasks;
+    await tester.pumpWidget(
+      AppScope(
+        services: controller,
+        child: const MaterialApp(
+          home: Scaffold(
+            body: TransferTasksPage(embedded: true),
+          ),
+        ),
+      ),
+    );
+    return controller;
+  }
+
+  Future<AppServices> pumpMobileHistory(
+    WidgetTester tester,
+    TransferHistoryStore store,
+  ) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final controller = AppServices(
+      sessionRepository: MemorySessionRepository(),
+      transferHistoryStore: store,
+    );
+    await controller.transferQueue.restore(await SharedPreferences.getInstance());
     await tester.pumpWidget(
       AppScope(
         services: controller,
@@ -178,7 +207,7 @@ void main() {
       ],
     );
 
-    expect(find.text('5.0 MB / 10.0 MB · 2.0 MB/s'), findsOneWidget);
+    expect(find.textContaining('5.0 MB / 10.0 MB · 2.0 MB/s'), findsOneWidget);
   });
 
   testWidgets('移动端统计头部固定置顶并展示字节进度与全局速度', (tester) async {
@@ -247,8 +276,8 @@ void main() {
       ],
     );
 
-    // 与状态徽章重复的「进行中」不再拼进底部文字行。
-    expect(find.text('5.0 MB / 10.0 MB · 2.0 MB/s'), findsOneWidget);
+    // 与状态徽章重复的「进行中」不再拼进底部文字行；已用时长随刷新追加。
+    expect(find.textContaining('5.0 MB / 10.0 MB · 2.0 MB/s · 已用'), findsOneWidget);
     expect(find.text('50%'), findsOneWidget);
     final progressCenter =
         tester.getCenter(find.byType(LinearProgressIndicator));
@@ -256,8 +285,10 @@ void main() {
     expect(percentCenter.dx, greaterThan(progressCenter.dx));
     expect(
         percentCenter.dx,
-        greaterThan(
-            tester.getCenter(find.text('5.0 MB / 10.0 MB · 2.0 MB/s')).dx));
+        greaterThan(tester
+            .getCenter(
+                find.textContaining('5.0 MB / 10.0 MB · 2.0 MB/s · 已用'))
+            .dx));
   });
 
   testWidgets('移动端总字节未知时仅展示已传输量', (tester) async {
@@ -276,7 +307,7 @@ void main() {
       ],
     );
 
-    expect(find.text('2.0 KB'), findsOneWidget);
+    expect(find.textContaining('2.0 KB'), findsOneWidget);
     expect(find.text('0%'), findsOneWidget);
   });
 
@@ -303,7 +334,7 @@ void main() {
       ],
     );
 
-    expect(find.text('已存在，跳过'), findsOneWidget);
+    expect(find.textContaining('已存在，跳过'), findsOneWidget);
     expect(find.text('100%'), findsNWidgets(2));
   });
 
@@ -317,40 +348,46 @@ void main() {
     await pumpMobileTasks(
       tester,
       <TransferTask>[
-        const TransferTask(
+        TransferTask(
           id: 'done-old',
           name: '最早完成.txt',
           type: TransferTaskType.upload,
           status: TransferTaskStatus.success,
           progress: 1,
+          finishedAt: DateTime.utc(2026, 10, 1, 10),
         ),
-        const TransferTask(
+        TransferTask(
           id: 'pending-old',
           name: '较早等待.txt',
           type: TransferTaskType.upload,
           status: TransferTaskStatus.pending,
           progress: 0,
+          queuedAt: DateTime.utc(2026, 10, 1, 10, 1),
         ),
-        const TransferTask(
+        TransferTask(
           id: 'running',
           name: '进行中.txt',
           type: TransferTaskType.upload,
           status: TransferTaskStatus.running,
           progress: 0.4,
+          queuedAt: DateTime.utc(2026, 10, 1, 10, 3),
+          lastStartedAt: DateTime.utc(2026, 10, 1, 10, 3),
         ),
-        const TransferTask(
+        TransferTask(
           id: 'pending-new',
           name: '最新等待.txt',
           type: TransferTaskType.upload,
           status: TransferTaskStatus.pending,
           progress: 0,
+          queuedAt: DateTime.utc(2026, 10, 1, 10, 4),
         ),
-        const TransferTask(
+        TransferTask(
           id: 'done-new',
           name: '最近完成.txt',
           type: TransferTaskType.upload,
           status: TransferTaskStatus.success,
           progress: 1,
+          finishedAt: DateTime.utc(2026, 10, 1, 10, 5),
         ),
       ],
     );
@@ -492,4 +529,347 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.transferQueue.transferQueuePaused, isFalse);
   });
+
+  group('已结束任务卡片', () {
+    testWidgets('成功、失败、取消与旧记录展示摘要与结束时间', (tester) async {
+      final yesterday = DateTime.now().subtract(const Duration(days: 1));
+      await pumpMobileTasks(
+        tester,
+        <TransferTask>[
+          TransferTask(
+            id: 'success-1',
+            name: '成功.jpg',
+            type: TransferTaskType.upload,
+            status: TransferTaskStatus.success,
+            progress: 1,
+            totalBytes: 2048,
+            transferredBytes: 2048,
+            activeDurationMs: 2000,
+            totalTransferredBytes: 2048,
+            finishedAt: yesterday,
+          ),
+          TransferTask(
+            id: 'failed-1',
+            name: '失败.jpg',
+            type: TransferTaskType.upload,
+            status: TransferTaskStatus.failed,
+            progress: 0.5,
+            totalBytes: 2048,
+            transferredBytes: 1024,
+            finishedAt: yesterday,
+          ),
+          TransferTask(
+            id: 'canceled-1',
+            name: '取消.jpg',
+            type: TransferTaskType.download,
+            status: TransferTaskStatus.canceled,
+            progress: 0,
+            message: '已取消',
+            finishedAt: yesterday,
+          ),
+          const TransferTask(
+            id: 'legacy-1',
+            name: '旧记录.jpg',
+            type: TransferTaskType.download,
+            status: TransferTaskStatus.success,
+            progress: 1,
+          ),
+        ],
+      );
+
+      expect(find.textContaining('2.0 KB · 耗时 2 秒 · 均速 1.0 KB/s'),
+          findsOneWidget);
+      expect(find.textContaining('1.0 KB · 耗时 — · 均速 —'), findsOneWidget);
+      // 取消与旧记录都缺少统计字段。
+      expect(find.textContaining('0 B · 耗时 — · 均速 —'), findsNWidgets(2));
+      expect(find.textContaining('结束于 昨天'), findsNWidgets(3));
+      expect(find.text('结束于 —'), findsOneWidget);
+      // 与状态徽章重复的「已取消」不再追加到信息行。
+      expect(find.text('已取消'), findsOneWidget);
+    });
+
+    testWidgets('详情展示完整时间线、耗时与平均速度', (tester) async {
+      final queuedAt = DateTime(2026, 10, 28, 8);
+      await pumpMobileTasks(
+        tester,
+        <TransferTask>[
+          TransferTask(
+            id: 'success-1',
+            name: '照片.jpg',
+            type: TransferTaskType.upload,
+            status: TransferTaskStatus.success,
+            progress: 1,
+            totalBytes: 2048,
+            transferredBytes: 2048,
+            queuedAt: queuedAt,
+            startedAt: queuedAt.add(const Duration(minutes: 1)),
+            lastStartedAt: queuedAt.add(const Duration(minutes: 3)),
+            finishedAt: queuedAt.add(const Duration(minutes: 10)),
+            activeDurationMs: 180000,
+            totalTransferredBytes: 2048,
+            attemptCount: 2,
+          ),
+        ],
+      );
+
+      await tester.tap(find.byType(Card));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.descendant(
+          of: find.byType(BottomSheet),
+          matching: find.text('照片.jpg'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('上传 · 已完成'), findsOneWidget);
+      for (final label in <String>[
+        '加入队列',
+        '首次开始',
+        '最近开始',
+        '结束时间',
+        '排队耗时',
+        '总耗时',
+        '传输耗时',
+        '平均速度',
+        '文件大小',
+        '尝试次数',
+      ]) {
+        expect(find.text(label), findsOneWidget);
+      }
+      expect(find.text('1 分'), findsOneWidget);
+      expect(find.text('10 分'), findsOneWidget);
+      expect(find.text('3 分'), findsOneWidget);
+      expect(find.text('11 B/s'), findsOneWidget);
+      expect(find.text('2.0 KB'), findsOneWidget);
+      expect(find.text('2 次'), findsOneWidget);
+    });
+
+    testWidgets('失败重试记录展示失败原因与尝试次数', (tester) async {
+      final queuedAt = DateTime(2026, 10, 28, 8);
+      await pumpMobileTasks(
+        tester,
+        <TransferTask>[
+          TransferTask(
+            id: 'failed-1',
+            name: '资料.pdf',
+            type: TransferTaskType.download,
+            status: TransferTaskStatus.failed,
+            progress: 0.4,
+            queuedAt: queuedAt,
+            startedAt: queuedAt,
+            finishedAt: queuedAt.add(const Duration(minutes: 2)),
+            error: '网络中断',
+            attemptCount: 3,
+          ),
+        ],
+      );
+
+      await tester.tap(find.byType(Card));
+      await tester.pumpAndSettle();
+
+      expect(find.text('下载 · 失败'), findsOneWidget);
+      expect(find.text('失败原因'), findsOneWidget);
+      expect(find.text('网络中断'), findsOneWidget);
+      expect(find.text('3 次'), findsOneWidget);
+    });
+
+    testWidgets('缺失时间字段时详情展示占位符', (tester) async {
+      await pumpMobileTasks(
+        tester,
+        const <TransferTask>[
+          TransferTask(
+            id: 'plain-1',
+            name: '未知.bin',
+            type: TransferTaskType.download,
+            status: TransferTaskStatus.failed,
+            progress: 0,
+          ),
+        ],
+      );
+
+      await tester.tap(find.byType(Card));
+      await tester.pumpAndSettle();
+
+      // 加入队列/首次开始/最近开始/结束时间/排队耗时/总耗时/传输耗时/平均速度/文件大小。
+      expect(find.text('—'), findsNWidgets(9));
+      expect(find.text('1 次'), findsOneWidget);
+      expect(find.text('失败原因'), findsNothing);
+    });
+  });
+
+  group('实时时长', () {
+    testWidgets('排队中与进行中卡片展示已等待/已用时长并随时间刷新', (tester) async {
+      final queuedAt = DateTime.now().subtract(const Duration(seconds: 5));
+      final controller = await pumpMobileTasks(
+        tester,
+        <TransferTask>[
+          TransferTask(
+            id: 'pending-1',
+            name: '等待.zip',
+            type: TransferTaskType.upload,
+            status: TransferTaskStatus.pending,
+            progress: 0,
+            queuedAt: queuedAt,
+          ),
+          TransferTask(
+            id: 'running-1',
+            name: '进行中.zip',
+            type: TransferTaskType.upload,
+            status: TransferTaskStatus.running,
+            progress: 0.5,
+            queuedAt: queuedAt,
+            startedAt: queuedAt,
+            lastStartedAt: queuedAt,
+          ),
+        ],
+      );
+
+      expect(_liveSeconds(tester, '已等待'), greaterThanOrEqualTo(5));
+      expect(_liveSeconds(tester, '已用'), greaterThanOrEqualTo(5));
+
+      final before = _liveSeconds(tester, '已等待');
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 1200)));
+      await tester.pump(const Duration(seconds: 1));
+      expect(_liveSeconds(tester, '已等待'), greaterThan(before));
+
+      // 全部任务结束后停止刷新，页面销毁时取消计时器。
+      controller.transferQueue.tasksListenable.value = <TransferTask>[
+        TransferTask(
+          id: 'done-1',
+          name: '完成.zip',
+          type: TransferTaskType.upload,
+          status: TransferTaskStatus.success,
+          progress: 1,
+          queuedAt: queuedAt,
+          finishedAt: DateTime.now(),
+        ),
+      ];
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 2));
+      expect(find.textContaining('已等待'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    });
+  });
+
+  group('历史分页与计数', () {
+    TransferTask finished(String id, DateTime at,
+        {TransferTaskType type = TransferTaskType.download}) {
+      return TransferTask(
+        id: id,
+        name: '$id.txt',
+        type: type,
+        status: TransferTaskStatus.success,
+        progress: 1,
+        finishedAt: at,
+      );
+    }
+
+    testWidgets('计数包含未加载历史，滚动到底部自动加载下一页', (tester) async {
+      // 加高视口让 300 条首页记录全部布局，滚动通知能立即到达底部。
+      tester.view.physicalSize = const Size(420, 80000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final base = DateTime.utc(2026, 10, 1);
+      final store = _GatedHistoryStore()
+        ..seed(<TransferTask>[
+          for (var index = 0; index < 301; index++)
+            finished('download-$index', base.add(Duration(minutes: index))),
+        ]);
+      final controller = await pumpMobileHistory(tester, store);
+
+      expect(find.text('全部 301'), findsOneWidget);
+      expect(controller.transferQueue.tasks, hasLength(300));
+      expect(controller.transferQueue.historyHasMore, isTrue);
+      expect(find.text('加载更多历史'), findsOneWidget);
+
+      final gate = Completer<void>();
+      store.gate = gate;
+      await tester.drag(find.byType(ListView), const Offset(0, -100));
+      await tester.pump();
+
+      // 加载中展示进度指示并挂起计数。
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(controller.transferQueue.historyLoading, isTrue);
+
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      expect(controller.transferQueue.tasks, hasLength(301));
+      expect(controller.transferQueue.historyHasMore, isFalse);
+      expect(controller.transferQueue.historyLoading, isFalse);
+      expect(find.text('全部 301'), findsOneWidget);
+    });
+
+    testWidgets('重启恢复后按状态与时间稳定排序', (tester) async {
+      final store = InMemoryTransferHistoryStore()
+        ..seed(<TransferTask>[
+          finished('done-old', DateTime.utc(2026, 10, 1, 9)),
+          finished('done-new', DateTime.utc(2026, 10, 1, 10)),
+        ]);
+      final controller = await pumpMobileHistory(tester, store);
+      controller.transferQueue.tasksListenable.value = <TransferTask>[
+        ...controller.transferQueue.tasks,
+        TransferTask(
+          id: 'pending-old',
+          name: 'pending-old.txt',
+          type: TransferTaskType.upload,
+          status: TransferTaskStatus.pending,
+          progress: 0,
+          queuedAt: DateTime.utc(2026, 10, 2, 8),
+        ),
+        TransferTask(
+          id: 'pending-new',
+          name: 'pending-new.txt',
+          type: TransferTaskType.upload,
+          status: TransferTaskStatus.pending,
+          progress: 0,
+          queuedAt: DateTime.utc(2026, 10, 2, 9),
+        ),
+      ];
+      await tester.pump();
+
+      final names = find.byType(Card).evaluate().map((element) {
+        final text = find
+            .descendant(
+              of: find.byElementPredicate((e) => e == element),
+              matching: find.byType(Text),
+            )
+            .evaluate();
+        return (text.first.widget as Text).data;
+      }).toList();
+
+      expect(names, <String>[
+        'pending-new.txt',
+        'pending-old.txt',
+        'done-new.txt',
+        'done-old.txt',
+      ]);
+    });
+  });
+}
+
+class _GatedHistoryStore extends InMemoryTransferHistoryStore {
+  Completer<void>? gate;
+
+  @override
+  Future<List<TransferTask>> loadPage({
+    int limit = 300,
+    TransferHistoryCursor? after,
+  }) async {
+    final pending = gate;
+    if (pending != null) await pending.future;
+    return super.loadPage(limit: limit, after: after);
+  }
+}
+
+int _liveSeconds(WidgetTester tester, String label) {
+  final pattern = RegExp('$label (\\d+) 秒');
+  for (final text in tester.widgetList<Text>(find.textContaining(label))) {
+    final match = pattern.firstMatch(text.data ?? '');
+    if (match != null) return int.parse(match.group(1)!);
+  }
+  fail('未找到「$label」的时长文本');
 }

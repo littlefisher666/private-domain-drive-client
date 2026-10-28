@@ -9,6 +9,8 @@ import '../../../shared/transfer_keepalive.dart';
 import '../../workspace/infrastructure/oss_client.dart'
     show TransferCanceledException;
 import '../domain/transfer_task.dart';
+import '../domain/transfer_type_counts.dart';
+import '../infrastructure/transfer_history_store.dart';
 
 /// 单次传输进度上报：已接收字节数与可选总字节数。
 typedef TransferProgressReporter = void Function(int received, int? total);
@@ -33,20 +35,29 @@ class UploadSkippedException implements Exception {
 /// 非 [ChangeNotifier]：任务表与并发/暂停状态经细粒度 [ValueNotifier]
 /// 对外通知，避免传输进度刷新整个应用外壳。
 class TransferQueue {
-  TransferQueue({required TransferKeepaliveService transferKeepalive})
-      : _transferKeepalive = transferKeepalive;
+  TransferQueue({
+    required TransferKeepaliveService transferKeepalive,
+    TransferHistoryStore? historyStore,
+  })  : _transferKeepalive = transferKeepalive,
+        _historyStore = historyStore ?? TransferHistoryStore();
 
   final TransferKeepaliveService _transferKeepalive;
+  final TransferHistoryStore _historyStore;
 
   /// 上传任务到达成功终态后的清理挂钩（staging 源文件清理），
   /// 由持有方装配；失败与取消保留源文件供重试。
   void Function(TransferTask task)? onTaskSucceeded;
 
   static const _transferConcurrencyKey = 'transfer_concurrency';
-  static const _transferHistoryKey = 'transfer_history:v1';
+  static const _legacyTransferHistoryKey = 'transfer_history:v1';
   static const _uploadPendingKey = 'upload_pending:v1';
   static const _minTransferConcurrency = 1;
   static const _maxTransferConcurrency = 5;
+  static const historyPageSize = 300;
+  static const historyRetentionDays = 90;
+  static const historyMaxRecords = 20000;
+  static const _historyWriteDelay = Duration(milliseconds: 300);
+  static const _historyPruneInterval = Duration(hours: 1);
 
   /// Transfer task list/progress updates only; does not rebuild workspace.
   final ValueNotifier<List<TransferTask>> tasksListenable =
@@ -61,6 +72,18 @@ class TransferQueue {
   final ValueNotifier<bool> transferQueuePausedListenable =
       ValueNotifier<bool>(false);
 
+  /// 历史记录按类型计数；null 表示历史库不可用，界面回退为内存任务计数。
+  final ValueNotifier<TransferTypeCounts?> historyCountsListenable =
+      ValueNotifier<TransferTypeCounts?>(null);
+
+  /// 是否仍有更旧的历史分页可加载。
+  final ValueNotifier<bool> historyHasMoreListenable =
+      ValueNotifier<bool>(false);
+
+  /// 是否正在加载历史分页。
+  final ValueNotifier<bool> historyLoadingListenable =
+      ValueNotifier<bool>(false);
+
   final List<String> _pendingTransferIds = <String>[];
   final Set<String> _runningTransferIds = <String>{};
   final Map<String, QueuedTransfer> _queuedTransfers =
@@ -70,8 +93,16 @@ class TransferQueue {
   int _nextTransferId = 0;
   SharedPreferences? _preferences;
   bool _transferHistoryReady = false;
-  bool _isSavingTransferHistory = false;
-  bool _transferHistoryDirty = false;
+  bool _historyStoreReady = false;
+  bool _historyLoading = false;
+  bool _disposed = false;
+  TransferHistoryCursor? _historyCursor;
+  DateTime? _lastHistoryPruneAt;
+  Timer? _historyWriteTimer;
+  bool _isFlushingHistory = false;
+  final Map<String, TransferTask> _pendingHistoryUpserts =
+      <String, TransferTask>{};
+  final Set<String> _pendingHistoryDeletes = <String>{};
   bool _isSavingUploadPending = false;
   bool _uploadPendingDirty = false;
 
@@ -106,10 +137,31 @@ class TransferQueue {
   List<String> get pendingTaskIds =>
       List<String>.unmodifiable(_pendingTransferIds);
 
+  /// 类型筛选计数：保留范围内全部历史记录 + 内存中未结束任务。
+  TransferTypeCounts get typeCounts {
+    final historical = historyCountsListenable.value;
+    if (historical == null || !_historyStoreReady) {
+      return _countTasksByType(tasks);
+    }
+    var upload = historical.upload;
+    var download = historical.download;
+    for (final task in tasks.where((task) => !task.isFinished)) {
+      if (task.type == TransferTaskType.upload) {
+        upload++;
+      } else {
+        download++;
+      }
+    }
+    return TransferTypeCounts(upload: upload, download: download);
+  }
+
+  bool get historyHasMore => historyHasMoreListenable.value;
+  bool get historyLoading => historyLoadingListenable.value;
+
   // ---------- 启动恢复与偏好 ----------
 
-  /// 启动恢复：并发设置、传输历史与未完成上传记录。恢复完成后开启
-  /// 历史持久化写入，避免恢复阶段的整表替换回写磁盘。
+  /// 启动恢复：并发设置、未完成上传记录与 SQLite 历史首页。恢复完成后
+  /// 开启历史持久化写入，避免恢复阶段的历史加载触发回写。
   Future<void> restore(SharedPreferences preferences) async {
     _preferences = preferences;
     final savedConcurrency = preferences.getInt(_transferConcurrencyKey);
@@ -118,9 +170,22 @@ class TransferQueue {
         savedConcurrency <= _maxTransferConcurrency) {
       transferConcurrencyListenable.value = savedConcurrency;
     }
-    _restoreTransferHistory(preferences);
-    await _restoreUploadPending(preferences);
+    // 先恢复未完成上传，历史加载时跳过同 id 记录，避免失败上传同时
+    // 出现在 upload_pending 与历史库中。
+    final startupFailures = await _restoreUploadPending(preferences);
+    await _restoreTransferHistory(preferences);
     _transferHistoryReady = true;
+    if (startupFailures.isNotEmpty) {
+      // 启动时因源文件丢失转为失败的任务没有经历运行收尾，需单独补写历史。
+      if (_historyStoreReady) {
+        try {
+          await _historyStore.upsertAll(startupFailures);
+          await _refreshHistoryCounts();
+        } catch (error) {
+          debugPrint('[transfer] 写入启动失败任务历史失败: $error');
+        }
+      }
+    }
     _saveUploadPending();
   }
 
@@ -179,12 +244,7 @@ class TransferQueue {
   }
 
   /// 整表替换任务（含持久化与保活同步），供清空已完成任务等批量操作使用。
-  void setTasks(List<TransferTask> next) {
-    tasksListenable.value = List<TransferTask>.unmodifiable(next);
-    _saveTransferHistory();
-    _saveUploadPending();
-    _syncTransferKeepalive();
-  }
+  void setTasks(List<TransferTask> next) => _setTasks(next);
 
   /// 从等待队列拉起任务直到达到并发上限；队列暂停时不调度。
   void drain() {
@@ -240,9 +300,30 @@ class TransferQueue {
     unawaited(_transferKeepalive.requestNotificationPermissionIfNeeded());
   }
 
+  /// 主动落盘待写历史（进入后台或退出前调用），缩小应用被杀导致
+  /// 最后几条记录丢失的窗口。
+  Future<void> flushHistory() async {
+    _historyWriteTimer?.cancel();
+    _historyWriteTimer = null;
+    await _flushHistoryWrites();
+  }
+
   void dispose() {
+    _historyWriteTimer?.cancel();
+    _historyWriteTimer = null;
+    // 先启动落盘再标记 disposed：flush 入口的同步检查可通过，关闭前
+    // 尽量写完待处理历史。
+    unawaited(() async {
+      await _flushHistoryWrites();
+      await _historyStore.close();
+    }());
+    _disposed = true;
     tasksListenable.dispose();
     transferConcurrencyListenable.dispose();
+    transferQueuePausedListenable.dispose();
+    historyCountsListenable.dispose();
+    historyHasMoreListenable.dispose();
+    historyLoadingListenable.dispose();
   }
 
   // ---------- 调度的内部实现 ----------
@@ -262,17 +343,25 @@ class TransferQueue {
   Future<void> _runTransfer(String taskId) async {
     final queued = _queuedTransfers[taskId];
     if (queued == null) return;
+    final runStartedAt = DateTime.now();
     _replaceTask(
         taskId,
         (task) => task.copyWith(
               status: TransferTaskStatus.running,
               message: '进行中',
+              startedAt: task.startedAt ?? runStartedAt,
+              lastStartedAt: runStartedAt,
             ));
     final speedTracker = _TransferSpeedTracker();
+    final stopwatch = Stopwatch()..start();
     var lastUiUpdate = Duration.zero;
+    var lastReceivedBytes = 0;
+    var reportedProgress = false;
     try {
       await queued.run(
         (received, total) {
+          lastReceivedBytes = received;
+          reportedProgress = true;
           final now = speedTracker.elapsed;
           final isFinalBytes = total != null && total > 0 && received >= total;
           final speed = speedTracker.update(received);
@@ -304,6 +393,7 @@ class TransferQueue {
             (task) => task.copyWith(
                   status: TransferTaskStatus.canceled,
                   message: '已取消',
+                  finishedAt: DateTime.now(),
                 ));
       } else {
         _replaceTask(
@@ -313,6 +403,7 @@ class TransferQueue {
                   progress: 1,
                   bytesPerSecond: null,
                   message: '已完成',
+                  finishedAt: DateTime.now(),
                 ));
       }
     } on TransferCanceledException {
@@ -324,6 +415,7 @@ class TransferQueue {
             (task) => task.copyWith(
                   status: TransferTaskStatus.canceled,
                   message: '已取消',
+                  finishedAt: DateTime.now(),
                 ));
       }
     } on UploadSkippedException {
@@ -334,6 +426,7 @@ class TransferQueue {
                 progress: 1,
                 bytesPerSecond: null,
                 message: '已存在，跳过',
+                finishedAt: DateTime.now(),
               ));
     } catch (error) {
       _replaceTask(
@@ -342,8 +435,19 @@ class TransferQueue {
                 status: TransferTaskStatus.failed,
                 message: '失败',
                 error: error.toString().replaceFirst('Bad state: ', ''),
+                finishedAt: DateTime.now(),
               ));
     } finally {
+      stopwatch.stop();
+      final elapsedMs = stopwatch.elapsedMilliseconds;
+      _replaceTask(
+        taskId,
+        (task) => task.copyWith(
+          activeDurationMs: task.activeDurationMs + elapsedMs,
+          totalTransferredBytes:
+              task.totalTransferredBytes + (reportedProgress ? lastReceivedBytes : 0),
+        ),
+      );
       _runningTransferIds.remove(taskId);
       _canceledTransferIds.remove(taskId);
       // 上传任务到达成功终态后清理 staging 源文件；失败与取消保留源文件
@@ -360,6 +464,7 @@ class TransferQueue {
   }
 
   /// 暂停信号触发的任务收尾：回到等待队列并重置进度，等待继续调度。
+  /// 累计时长与字节在 [_runTransfer] 的 finally 中结算，暂停不清零。
   void _returnRunningTransferToPending(String taskId) {
     _pendingTransferIds.add(taskId);
     _replaceTask(
@@ -370,6 +475,7 @@ class TransferQueue {
               transferredBytes: 0,
               bytesPerSecond: null,
               message: '已暂停',
+              clearFinishedAt: true,
             ));
   }
 
@@ -418,57 +524,237 @@ class TransferQueue {
 
   // ---------- 传输历史持久化 ----------
 
-  void _restoreTransferHistory(SharedPreferences preferences) {
-    final rawHistory = preferences.getString(_transferHistoryKey);
-    if (rawHistory == null) return;
+  Future<void> _restoreTransferHistory(SharedPreferences preferences) async {
     try {
-      final decoded = jsonDecode(rawHistory);
-      if (decoded is! List) return;
-      final history = decoded
-          .whereType<Map>()
-          .map((item) => TransferTask.fromJson(
-                item.map((key, value) => MapEntry(key.toString(), value)),
-              ))
-          .whereType<TransferTask>()
-          .where(_isHistoricalTransferTask)
-          .toList(growable: false);
-      tasksListenable.value = List<TransferTask>.unmodifiable(history);
-    } catch (_) {
-      // 本地历史损坏时忽略，避免影响应用启动。
+      await _historyStore.open();
+      _historyStoreReady = true;
+    } catch (error) {
+      debugPrint('[transfer] 打开传输历史库失败: $error');
+      _historyStoreReady = false;
+      return;
     }
-  }
-
-  bool _isHistoricalTransferTask(TransferTask task) {
-    return task.status == TransferTaskStatus.success ||
-        task.status == TransferTaskStatus.canceled;
-  }
-
-  void _saveTransferHistory() {
-    if (!_transferHistoryReady) return;
-    _transferHistoryDirty = true;
-    if (_isSavingTransferHistory) return;
-    _isSavingTransferHistory = true;
-    unawaited(_persistTransferHistory());
-  }
-
-  Future<void> _persistTransferHistory() async {
+    await _migrateLegacyTransferHistory(preferences);
+    // 先清理保留窗口外的记录，避免首页加载到即将淘汰的数据。
+    await _pruneHistory(force: true);
     try {
-      final preferences = _preferences ?? await SharedPreferences.getInstance();
-      _preferences = preferences;
-      while (_transferHistoryDirty) {
-        _transferHistoryDirty = false;
-        final history = tasks.where(_isHistoricalTransferTask).toList();
-        await preferences.setString(
-          _transferHistoryKey,
-          jsonEncode(history.map((task) => task.toJson()).toList()),
-        );
+      final page = await _historyStore.loadPage(limit: historyPageSize);
+      _appendHistoryPage(page);
+    } catch (error) {
+      debugPrint('[transfer] 读取传输历史失败: $error');
+      historyHasMoreListenable.value = false;
+    }
+    await _refreshHistoryCounts();
+  }
+
+  /// 首次升级时将旧 SharedPreferences 历史一次性导入 SQLite；旧键保留
+  /// 作为回滚快照且不再更新。导入标记写入数据库，重复启动不会重复导入。
+  Future<void> _migrateLegacyTransferHistory(
+    SharedPreferences preferences,
+  ) async {
+    try {
+      if (await _historyStore.isMigrationDone()) return;
+    } catch (_) {
+      return;
+    }
+    final imported = <TransferTask>[];
+    final raw = preferences.getString(_legacyTransferHistoryKey);
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          imported.addAll(
+            decoded
+                .whereType<Map>()
+                .map((item) => TransferTask.fromJson(
+                      item.map((key, value) => MapEntry(key.toString(), value)),
+                    ))
+                .whereType<TransferTask>()
+                .where(_isHistoricalTransferTask),
+          );
+        }
+      } catch (error) {
+        // 旧记录损坏时仍标记完成，避免每次启动重复解析失败。
+        debugPrint('[transfer] 旧传输历史解析失败: $error');
       }
-    } catch (_) {
-      // 历史记录写入失败不影响当前传输。
-    } finally {
-      _isSavingTransferHistory = false;
-      if (_transferHistoryDirty) _saveTransferHistory();
     }
+    try {
+      if (imported.isNotEmpty) await _historyStore.upsertAll(imported);
+      await _historyStore.markMigrationDone();
+    } catch (error) {
+      debugPrint('[transfer] 旧传输历史导入失败: $error');
+    }
+  }
+
+  /// 读取下一页历史并追加到任务表；按 id 去重，不重复加载已有记录。
+  Future<void> loadMoreHistory() async {
+    if (!_historyStoreReady ||
+        _disposed ||
+        _historyLoading ||
+        !historyHasMoreListenable.value) {
+      return;
+    }
+    _historyLoading = true;
+    historyLoadingListenable.value = true;
+    try {
+      final page = await _historyStore.loadPage(
+        limit: historyPageSize,
+        after: _historyCursor,
+      );
+      _appendHistoryPage(page);
+    } catch (error) {
+      debugPrint('[transfer] 加载更多传输历史失败: $error');
+      historyHasMoreListenable.value = false;
+    } finally {
+      _historyLoading = false;
+      historyLoadingListenable.value = false;
+    }
+  }
+
+  void _appendHistoryPage(List<TransferTask> page) {
+    final existingIds = tasks.map((task) => task.id).toSet();
+    final appended = page
+        .where((task) => !existingIds.contains(task.id))
+        .toList(growable: false);
+    if (appended.isNotEmpty) {
+      tasksListenable.value =
+          List<TransferTask>.unmodifiable(<TransferTask>[...tasks, ...appended]);
+    }
+    if (page.isNotEmpty) {
+      _historyCursor = TransferHistoryCursor.fromTask(page.last);
+    }
+    historyHasMoreListenable.value = page.length >= historyPageSize;
+  }
+
+  bool _isHistoricalTransferTask(TransferTask task) => task.isFinished;
+
+  /// 对比任务表前后状态，终态任务进入待写集合，重试/移除的终态任务
+  /// 进入待删集合；批量合并为单事务写入。
+  void _syncHistoryWrites(
+    List<TransferTask> previous,
+    List<TransferTask> next,
+  ) {
+    if (!_transferHistoryReady || !_historyStoreReady || _disposed) return;
+    final previousById = <String, TransferTask>{
+      for (final task in previous) task.id: task,
+    };
+    final nextIds = <String>{for (final task in next) task.id};
+    for (final task in next) {
+      final before = previousById[task.id];
+      if (task.isFinished) {
+        if (before == null || !identical(before, task)) {
+          _pendingHistoryUpserts[task.id] = task;
+        }
+      } else if (before != null && before.isFinished) {
+        _pendingHistoryDeletes.add(task.id);
+      }
+    }
+    for (final entry in previousById.entries) {
+      if (!nextIds.contains(entry.key) && entry.value.isFinished) {
+        _pendingHistoryDeletes.add(entry.key);
+      }
+    }
+    if (_pendingHistoryUpserts.isEmpty && _pendingHistoryDeletes.isEmpty) {
+      return;
+    }
+    // 删除（清除已结束、重试移出）需要及时落盘；upsert 合并短延迟。
+    _scheduleHistoryWrite(immediate: _pendingHistoryDeletes.isNotEmpty);
+  }
+
+  void _scheduleHistoryWrite({bool immediate = false}) {
+    if (immediate) {
+      _historyWriteTimer?.cancel();
+      _historyWriteTimer = null;
+      unawaited(_flushHistoryWrites());
+      return;
+    }
+    _historyWriteTimer ??= Timer(_historyWriteDelay, () {
+      _historyWriteTimer = null;
+      unawaited(_flushHistoryWrites());
+    });
+  }
+
+  Future<void> _flushHistoryWrites() async {
+    if (!_historyStoreReady || _disposed) return;
+    if (_isFlushingHistory) return;
+    if (_pendingHistoryUpserts.isEmpty && _pendingHistoryDeletes.isEmpty) {
+      return;
+    }
+    _isFlushingHistory = true;
+    try {
+      while (_pendingHistoryUpserts.isNotEmpty ||
+          _pendingHistoryDeletes.isNotEmpty) {
+        final deletes = _pendingHistoryDeletes.toList(growable: false);
+        _pendingHistoryDeletes.clear();
+        final upserts = _pendingHistoryUpserts.values.toList(growable: false);
+        _pendingHistoryUpserts.clear();
+        try {
+          if (deletes.isNotEmpty) await _historyStore.deleteIds(deletes);
+          if (upserts.isNotEmpty) await _historyStore.upsertAll(upserts);
+        } catch (error) {
+          // 写入失败时放回待写集合，下次触发重试；不阻断传输。
+          debugPrint('[transfer] 写入传输历史失败: $error');
+          _pendingHistoryDeletes.addAll(deletes);
+          for (final task in upserts) {
+            _pendingHistoryUpserts[task.id] = task;
+          }
+          break;
+        }
+        await _refreshHistoryCounts();
+        await _pruneHistory();
+      }
+    } finally {
+      _isFlushingHistory = false;
+      if (!_disposed &&
+          (_pendingHistoryUpserts.isNotEmpty ||
+              _pendingHistoryDeletes.isNotEmpty)) {
+        _scheduleHistoryWrite();
+      }
+    }
+  }
+
+  Future<void> _refreshHistoryCounts() async {
+    if (!_historyStoreReady || _disposed) return;
+    try {
+      final counts = await _historyStore.countByType();
+      if (_disposed) return;
+      historyCountsListenable.value = TransferTypeCounts(
+        upload: counts[TransferTaskType.upload] ?? 0,
+        download: counts[TransferTaskType.download] ?? 0,
+      );
+    } catch (error) {
+      debugPrint('[transfer] 统计传输历史失败: $error');
+    }
+  }
+
+  Future<void> _pruneHistory({bool force = false}) async {
+    if (!_historyStoreReady) return;
+    final now = DateTime.now();
+    final last = _lastHistoryPruneAt;
+    if (!force && last != null && now.difference(last) < _historyPruneInterval) {
+      return;
+    }
+    _lastHistoryPruneAt = now;
+    try {
+      await _historyStore.prune(
+        cutoff: now.subtract(const Duration(days: historyRetentionDays)),
+        maxRecords: historyMaxRecords,
+      );
+    } catch (error) {
+      debugPrint('[transfer] 清理传输历史失败: $error');
+    }
+  }
+
+  TransferTypeCounts _countTasksByType(List<TransferTask> source) {
+    var upload = 0;
+    var download = 0;
+    for (final task in source) {
+      if (task.type == TransferTaskType.upload) {
+        upload++;
+      } else {
+        download++;
+      }
+    }
+    return TransferTypeCounts(upload: upload, download: download);
   }
 
   // ---------- 未完成上传持久化 ----------
@@ -540,13 +826,16 @@ class TransferQueue {
 
   /// 冷启动恢复未完成上传任务：源文件存在 → interrupted 等待用户操作；
   /// 源文件缺失 → failed（源文件已丢失）并从持久化记录清理。
-  /// 恢复不自动入队，不阻塞应用启动。
-  Future<void> _restoreUploadPending(SharedPreferences preferences) async {
+  /// 恢复不自动入队，不阻塞应用启动。返回本次转为失败的终态任务，
+  /// 供恢复完成后补写历史。
+  Future<List<TransferTask>> _restoreUploadPending(
+    SharedPreferences preferences,
+  ) async {
     final raw = preferences.getString(_uploadPendingKey);
-    if (raw == null || raw.isEmpty) return;
+    if (raw == null || raw.isEmpty) return const <TransferTask>[];
     try {
       final decoded = jsonDecode(raw);
-      if (decoded is! List) return;
+      if (decoded is! List) return const <TransferTask>[];
       final records = decoded
           .whereType<Map>()
           .map((item) => TransferTask.fromJson(
@@ -555,7 +844,7 @@ class TransferQueue {
           .whereType<TransferTask>()
           .where(_isPersistentUploadTask)
           .toList(growable: false);
-      if (records.isEmpty) return;
+      if (records.isEmpty) return const <TransferTask>[];
       final exists = await Future.wait<bool>(records.map((task) {
         final source = task.sourcePath;
         if (source == null || source.isEmpty) {
@@ -564,6 +853,7 @@ class TransferQueue {
         return File(source).exists();
       }));
       final restored = <TransferTask>[];
+      final failures = <TransferTask>[];
       for (var index = 0; index < records.length; index++) {
         final task = records[index];
         if (exists[index]) {
@@ -576,19 +866,24 @@ class TransferQueue {
             error: null,
           ));
         } else {
-          restored.add(task.copyWith(
+          final failed = task.copyWith(
             status: TransferTaskStatus.failed,
             message: '失败',
             error: '源文件已丢失',
-          ));
+            finishedAt: DateTime.now(),
+          );
+          restored.add(failed);
+          failures.add(failed);
         }
       }
       tasksListenable.value = List<TransferTask>.unmodifiable([
         ...tasksListenable.value,
         ...restored,
       ]);
+      return failures;
     } catch (_) {
       // 本地记录损坏时忽略，避免影响应用启动。
+      return const <TransferTask>[];
     }
   }
 
@@ -604,8 +899,9 @@ class TransferQueue {
   }
 
   void _setTasks(List<TransferTask> next) {
+    final previous = tasksListenable.value;
     tasksListenable.value = List<TransferTask>.unmodifiable(next);
-    _saveTransferHistory();
+    _syncHistoryWrites(previous, next);
     _saveUploadPending();
     _syncTransferKeepalive();
   }

@@ -15,6 +15,8 @@ import 'package:private_domain_drive_client/features/workspace/application/works
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
 import 'package:private_domain_drive_client/shared/transfer_keepalive.dart';
 
+import 'support/in_memory_transfer_history_store.dart';
+
 const _itemA = ShareImportItem(
   id: 'uuid_a.jpg',
   name: '照片A.jpg',
@@ -202,6 +204,7 @@ Future<_ShareStack> _shareStack({_FakeOssClient? oss}) async {
   );
   final queue = TransferQueue(
     transferKeepalive: const NoopTransferKeepaliveService(),
+    historyStore: InMemoryTransferHistoryStore(),
   );
   await queue.restore(await SharedPreferences.getInstance());
   final transferController = TransferController(

@@ -1,25 +1,27 @@
 import 'package:flutter/material.dart';
 
 import '../../domain/transfer_task.dart';
+import '../../domain/transfer_type_counts.dart';
 
 class TransferTypeFilter extends StatelessWidget {
   const TransferTypeFilter({
     super.key,
     required this.selectedType,
-    required this.tasks,
+    required this.counts,
     required this.onSelected,
     this.dense = false,
   });
 
   final TransferTaskType? selectedType;
-  final List<TransferTask> tasks;
+
+  /// 计数基于保留范围内全部历史记录与内存中未结束任务之和，
+  /// 不因历史分页而缺失。
+  final TransferTypeCounts counts;
   final ValueChanged<TransferTaskType?> onSelected;
   final bool dense;
 
   @override
   Widget build(BuildContext context) {
-    int count(TransferTaskType type) =>
-        tasks.where((task) => task.type == type).length;
     if (!dense) {
       return Container(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
@@ -33,17 +35,17 @@ class TransferTypeFilter extends StatelessWidget {
           spacing: 8,
           children: <Widget>[
             ChoiceChip(
-              label: Text('全部 ${tasks.length}'),
+              label: Text('全部 ${counts.total}'),
               selected: selectedType == null,
               onSelected: (_) => onSelected(null),
             ),
             ChoiceChip(
-              label: Text('上传 ${count(TransferTaskType.upload)}'),
+              label: Text('上传 ${counts.upload}'),
               selected: selectedType == TransferTaskType.upload,
               onSelected: (_) => onSelected(TransferTaskType.upload),
             ),
             ChoiceChip(
-              label: Text('下载 ${count(TransferTaskType.download)}'),
+              label: Text('下载 ${counts.download}'),
               selected: selectedType == TransferTaskType.download,
               onSelected: (_) => onSelected(TransferTaskType.download),
             ),
@@ -80,10 +82,9 @@ class TransferTypeFilter extends StatelessWidget {
       ),
       child: Row(
         children: <Widget>[
-          tab('全部 ${tasks.length}', null),
-          tab('上传 ${count(TransferTaskType.upload)}', TransferTaskType.upload),
-          tab('下载 ${count(TransferTaskType.download)}',
-              TransferTaskType.download),
+          tab('全部 ${counts.total}', null),
+          tab('上传 ${counts.upload}', TransferTaskType.upload),
+          tab('下载 ${counts.download}', TransferTaskType.download),
         ],
       ),
     );

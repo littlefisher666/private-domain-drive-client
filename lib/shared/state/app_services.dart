@@ -13,6 +13,7 @@ import '../../features/settings/application/update_service.dart';
 import '../../features/share_import/application/share_import_controller.dart';
 import '../../features/transfer/application/transfer_controller.dart';
 import '../../features/transfer/application/transfer_queue.dart';
+import '../../features/transfer/infrastructure/transfer_history_store.dart';
 import '../../features/transfer/infrastructure/upload_staging.dart';
 import '../../features/workspace/application/alias_controller.dart';
 import '../../features/workspace/application/move_controller.dart';
@@ -41,6 +42,7 @@ class AppServices extends ChangeNotifier {
     SavedCredentialsStore? savedCredentialsStore,
     UploadStaging? uploadStaging,
     TransferKeepaliveService? transferKeepalive,
+    TransferHistoryStore? transferHistoryStore,
     UpdateService? updateService,
     ShareCacheStore? shareCacheStore,
     ShareFilesInvoker? shareFilesInvoker,
@@ -63,6 +65,7 @@ class AppServices extends ChangeNotifier {
     )..addListener(notifyListeners);
     transferQueue = TransferQueue(
       transferKeepalive: transferKeepalive ?? createTransferKeepaliveService(),
+      historyStore: transferHistoryStore,
     );
     transferController = TransferController(
       sessionController: sessionController,

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../app/theme/cupertino_desktop.dart';
@@ -5,6 +7,8 @@ import '../../../shared/state/app_services.dart';
 import '../../../shared/state/app_scope.dart';
 import '../../../shared/widgets/app_feedback.dart';
 import '../domain/transfer_task.dart';
+import '../domain/transfer_type_counts.dart';
+import 'transfer_format.dart';
 import 'widgets/transfer_header_actions.dart';
 import 'widgets/transfer_selection_actions.dart';
 import 'widgets/transfer_type_filter.dart';
@@ -28,6 +32,39 @@ class TransferTasksPage extends StatefulWidget {
 class _TransferTasksPageState extends State<TransferTasksPage> {
   TransferTaskType? _selectedType;
   final Set<String> _selectedTaskIds = <String>{};
+
+  /// 排队中/进行中任务的“已等待/已用”时长每秒刷新一次；仅当列表中
+  /// 存在未结束任务时启用，页面销毁或任务全部结束时取消。
+  final ValueNotifier<DateTime> _clock = ValueNotifier(DateTime.now());
+  Timer? _clockTimer;
+  bool _clockActive = false;
+
+  void _syncLiveClock(List<TransferTask> tasks) {
+    final active = tasks.any((task) =>
+        task.status == TransferTaskStatus.pending ||
+        task.status == TransferTaskStatus.running);
+    if (active == _clockActive) return;
+    _clockActive = active;
+    if (active) {
+      _clockTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
+        if (_clockActive) _clock.value = DateTime.now();
+      });
+      // 在 build 中启动计时器时不能同步更新 notifier，推迟到帧结束后。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _clockActive) _clock.value = DateTime.now();
+      });
+    } else {
+      _clockTimer?.cancel();
+      _clockTimer = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _clockTimer?.cancel();
+    _clock.dispose();
+    super.dispose();
+  }
 
   bool _canRetry(TransferTask task) =>
       task.status == TransferTaskStatus.failed ||
@@ -99,17 +136,26 @@ class _TransferTasksPageState extends State<TransferTasksPage> {
       valueListenable: controller.transferQueue.transferConcurrencyListenable,
       builder: (context, _, __) => ValueListenableBuilder<List<TransferTask>>(
         valueListenable: controller.transferQueue.tasksListenable,
-        builder: (context, tasks, _) => ValueListenableBuilder<bool>(
-          valueListenable: controller.transferQueue.transferQueuePausedListenable,
-          builder: (context, paused, _) => _buildBody(
-            context: context,
-            controller: controller,
-            tasks: tasks,
-            theme: theme,
-            desktop: desktop,
-            paused: paused,
-          ),
-        ),
+        builder: (context, tasks, _) {
+          _syncLiveClock(tasks);
+          return ValueListenableBuilder<bool>(
+            valueListenable:
+                controller.transferQueue.transferQueuePausedListenable,
+            builder: (context, paused, _) =>
+                ValueListenableBuilder<TransferTypeCounts?>(
+              valueListenable: controller.transferQueue.historyCountsListenable,
+              builder: (context, _, __) => _buildBody(
+                context: context,
+                controller: controller,
+                tasks: tasks,
+                counts: controller.transferQueue.typeCounts,
+                theme: theme,
+                desktop: desktop,
+                paused: paused,
+              ),
+            ),
+          );
+        },
       ),
     );
   }

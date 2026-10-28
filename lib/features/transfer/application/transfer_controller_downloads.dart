@@ -55,6 +55,8 @@ mixin _TransferDownloads on ChangeNotifier {
         sourcePath: item.path,
         batchId: batchId,
         totalBytes: item.size,
+        queuedAt: DateTime.now(),
+        attemptCount: 1,
       ),
       QueuedTransfer((report, isCanceled) async {
         await _sessionController.ensureSessionReady();
@@ -137,6 +139,8 @@ mixin _TransferDownloads on ChangeNotifier {
         target: '相册缓存',
         sourcePath: path,
         totalBytes: totalBytes,
+        queuedAt: DateTime.now(),
+        attemptCount: 1,
       ),
       QueuedTransfer((report, isCanceled) async {
         await _sessionController.ensureSessionReady();

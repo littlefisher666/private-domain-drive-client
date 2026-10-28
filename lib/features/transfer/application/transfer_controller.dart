@@ -119,6 +119,8 @@ class TransferController extends ChangeNotifier
         sourcePath: stagedPath,
         batchId: batchId,
         totalBytes: fileSize,
+        queuedAt: DateTime.now(),
+        attemptCount: 1,
       ),
       _buildUploadClosure(
         taskId: taskId,
@@ -154,6 +156,8 @@ class TransferController extends ChangeNotifier
                     status: TransferTaskStatus.failed,
                     message: '失败',
                     error: '源文件已丢失',
+                    attemptCount: value.attemptCount + 1,
+                    finishedAt: DateTime.now(),
                   ));
           return;
         }
@@ -175,16 +179,23 @@ class TransferController extends ChangeNotifier
                   transferredBytes: 0,
                   bytesPerSecond: null,
                   message: '重新开始',
+                  attemptCount: value.attemptCount + 1,
+                  clearFinishedAt: true,
                 ));
         return;
       }
       // 兼容应用恢复前遗留或测试注入的任务；真实任务均有执行器。
+      final now = DateTime.now();
       _transferQueue.replaceTask(
           taskId,
           (value) => value.copyWith(
                 status: TransferTaskStatus.running,
                 progress: 0,
                 message: '重新开始',
+                attemptCount: value.attemptCount + 1,
+                startedAt: value.startedAt ?? now,
+                lastStartedAt: now,
+                clearFinishedAt: true,
               ));
       return;
     }
@@ -195,6 +206,8 @@ class TransferController extends ChangeNotifier
               progress: 0,
               transferredBytes: 0,
               message: '重新开始',
+              attemptCount: value.attemptCount + 1,
+              clearFinishedAt: true,
             ));
   }
 
@@ -229,6 +242,7 @@ class TransferController extends ChangeNotifier
                 status: TransferTaskStatus.failed,
                 message: '失败',
                 error: '源文件已丢失',
+                finishedAt: DateTime.now(),
               ));
       return;
     }
@@ -250,6 +264,7 @@ class TransferController extends ChangeNotifier
               transferredBytes: 0,
               bytesPerSecond: null,
               message: '重新开始',
+              clearFinishedAt: true,
             ));
   }
 
@@ -272,6 +287,7 @@ class TransferController extends ChangeNotifier
     final abandoned = task.copyWith(
       status: TransferTaskStatus.canceled,
       message: '已放弃',
+      finishedAt: DateTime.now(),
     );
     _transferQueue.replaceTask(taskId, (value) => abandoned);
     _cleanupStagingForTask(abandoned);
@@ -318,6 +334,7 @@ class TransferController extends ChangeNotifier
         (value) => value.copyWith(
               status: TransferTaskStatus.canceled,
               message: '已取消',
+              finishedAt: DateTime.now(),
             ));
   }
 
@@ -369,23 +386,16 @@ class TransferController extends ChangeNotifier
 
   void clearCompletedTasks() {
     final removed = _transferQueue.tasksListenable.value
-        .where(
-          (task) =>
-              task.status == TransferTaskStatus.success ||
-              task.status == TransferTaskStatus.canceled,
-        )
+        .where((task) => task.isFinished)
         .toList(growable: false);
-    // 已结束任务从列表移除后不再可重试，对应 staging 源文件一并清理。
+    // 已结束任务从列表移除后不再可重试，对应 staging 源文件一并清理，
+    // 历史库中的终态记录由队列按 id 删除。
     for (final task in removed) {
       _cleanupStagingForTask(task);
     }
     _transferQueue.setTasks(
       _transferQueue.tasksListenable.value
-          .where(
-            (task) =>
-                task.status != TransferTaskStatus.success &&
-                task.status != TransferTaskStatus.canceled,
-          )
+          .where((task) => !task.isFinished)
           .toList(),
     );
   }

@@ -11,10 +11,13 @@ import 'package:private_domain_drive_client/features/auth/infrastructure/session
 import 'package:private_domain_drive_client/features/transfer/application/transfer_controller.dart';
 import 'package:private_domain_drive_client/features/transfer/application/transfer_queue.dart';
 import 'package:private_domain_drive_client/features/transfer/domain/transfer_task.dart';
+import 'package:private_domain_drive_client/features/transfer/infrastructure/transfer_history_store.dart';
 import 'package:private_domain_drive_client/features/workspace/application/workspace_controller.dart';
 import 'package:private_domain_drive_client/features/workspace/domain/file_item.dart';
 import 'package:private_domain_drive_client/features/workspace/infrastructure/oss_client.dart';
 import 'package:private_domain_drive_client/shared/transfer_keepalive.dart';
+
+import 'support/in_memory_transfer_history_store.dart';
 
 void main() {
   group('传输保活', () {
@@ -135,8 +138,10 @@ void main() {
   });
 
   group('TransferController', () {
-    test('启动后会恢复本地传输历史', () async {
-      const completedTask = TransferTask(
+    test('启动后会从 SQLite 历史恢复已结束任务', () async {
+      final queuedAt = DateTime.utc(2026, 10, 1, 8);
+      final finishedAt = DateTime.utc(2026, 10, 1, 8, 5);
+      final completedTask = TransferTask(
         id: 'download-history-1',
         name: '已下载文件.jpg',
         type: TransferTaskType.download,
@@ -144,33 +149,78 @@ void main() {
         progress: 1,
         target: '/Users/test/Downloads/已下载文件.jpg',
         totalBytes: 1024,
+        queuedAt: queuedAt,
+        startedAt: queuedAt,
+        lastStartedAt: queuedAt,
+        finishedAt: finishedAt,
+        activeDurationMs: 5000,
+        totalTransferredBytes: 1024,
       );
-      const failedTask = TransferTask(
-        id: 'upload-failed-1',
-        name: '未完成文件.jpg',
-        type: TransferTaskType.upload,
+      final failedTask = TransferTask(
+        id: 'download-history-2',
+        name: '失败文件.jpg',
+        type: TransferTaskType.download,
         status: TransferTaskStatus.failed,
         progress: 0.5,
+        finishedAt: finishedAt,
+        error: '网络中断',
       );
-      SharedPreferences.setMockInitialValues(<String, Object>{
-        'transfer_history:v1': jsonEncode(<Map<String, Object?>>[
-          completedTask.toJson(),
-          failedTask.toJson(),
-        ]),
-      });
+      final store = InMemoryTransferHistoryStore()
+        ..seed(<TransferTask>[completedTask, failedTask]);
       final queue = TransferQueue(
         transferKeepalive: const NoopTransferKeepaliveService(),
+        historyStore: store,
       );
 
       await queue.restore(await SharedPreferences.getInstance());
 
-      expect(queue.tasks, hasLength(1));
-      expect(queue.tasks.single.id, completedTask.id);
-      expect(queue.tasks.single.status, TransferTaskStatus.success);
-      expect(queue.tasks.single.target, completedTask.target);
+      expect(queue.tasks, hasLength(2));
+      final restored = queue.tasks.firstWhere((task) => task.id == completedTask.id);
+      expect(restored.status, TransferTaskStatus.success);
+      expect(restored.target, completedTask.target);
+      expect(restored.queuedAt, queuedAt);
+      expect(restored.finishedAt, finishedAt);
+      expect(restored.activeDurationMs, 5000);
+      expect(restored.averageBytesPerSecond, closeTo(204.8, 0.001));
+      expect(queue.tasks.where((task) => task.status == TransferTaskStatus.failed),
+          hasLength(1));
       queue.dispose();
-      await (await SharedPreferences.getInstance())
-          .remove('transfer_history:v1');
+    });
+
+    test('旧 SharedPreferences 历史首次升级导入一次', () async {
+      final legacyTask = TransferTask(
+        id: 'download-1700000000000000-0',
+        name: '旧记录.jpg',
+        type: TransferTaskType.download,
+        status: TransferTaskStatus.success,
+        progress: 1,
+      );
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'transfer_history:v1': jsonEncode(<Map<String, Object?>>[
+          legacyTask.toJson(),
+        ]),
+      });
+      final store = InMemoryTransferHistoryStore();
+      final preferences = await SharedPreferences.getInstance();
+      final first = TransferQueue(
+        transferKeepalive: const NoopTransferKeepaliveService(),
+        historyStore: store,
+      );
+      await first.restore(preferences);
+      expect(store.rows.keys, contains(legacyTask.id));
+      expect(store.rows[legacyTask.id]!.queuedAt, isNotNull);
+      first.dispose();
+
+      final second = TransferQueue(
+        transferKeepalive: const NoopTransferKeepaliveService(),
+        historyStore: store,
+      );
+      await second.restore(preferences);
+      expect(store.rows, hasLength(1));
+      expect(store.upsertBatches, 1);
+      second.dispose();
+      // 旧键保留作为回滚快照。
+      expect(preferences.getString('transfer_history:v1'), isNotNull);
     });
 
     test('上传与下载使用正确路径，并阻止文件夹下载', () async {
@@ -558,6 +608,167 @@ void main() {
       await _waitForTaskStatus(transfer.queue, TransferTaskStatus.success);
       expect(transfer.queue.tasks.single.status, TransferTaskStatus.success);
     });
+
+    test('成功任务记录入队、开始与结束时间及累计传输量', () async {
+      final progressGate = Completer<void>();
+      final oss = _FakeOssClient()
+        ..downloadGate = progressGate
+        ..progressReports = const <(int, int)>[(40, 100)];
+      final transfer = await _transferStack(oss: oss);
+      addTearDown(transfer.dispose);
+      final directory = await Directory.systemTemp.createTemp('pdd-timeline-');
+      addTearDown(() => directory.delete(recursive: true));
+
+      transfer.controller.enqueueDownload(
+        const FileItem(path: 'shared/a.bin', name: 'a.bin', isDirectory: false),
+        targetDirectory: directory.path,
+      );
+      await _waitForTaskStatus(transfer.queue, TransferTaskStatus.running);
+      final running = transfer.queue.tasks.single;
+      expect(running.queuedAt, isNotNull);
+      expect(running.startedAt, isNotNull);
+      expect(running.lastStartedAt, isNotNull);
+      expect(running.finishedAt, isNull);
+      expect(running.attemptCount, 1);
+
+      progressGate.complete();
+      await _waitForTaskStatus(transfer.queue, TransferTaskStatus.success);
+      final done = transfer.queue.tasks.single;
+
+      expect(done.startedAt!.isAfter(done.queuedAt!) ||
+          done.startedAt!.isAtSameMomentAs(done.queuedAt!), isTrue);
+      expect(done.finishedAt, isNotNull);
+      expect(
+        done.finishedAt!.isAfter(done.startedAt!) ||
+            done.finishedAt!.isAtSameMomentAs(done.startedAt!),
+        isTrue,
+      );
+      expect(done.lastStartedAt, done.startedAt);
+      expect(done.activeDurationMs, greaterThanOrEqualTo(0));
+      expect(done.totalTransferredBytes, 1);
+      expect(done.attemptCount, 1);
+    });
+
+    test('失败任务记录结束时间与已传输字节', () async {
+      final oss = _FakeOssClient()
+        ..downloadToFileError = StateError('网络中断')
+        ..progressReports = const <(int, int)>[(50, 100)];
+      final transfer = await _transferStack(oss: oss);
+      addTearDown(transfer.dispose);
+      final directory = await Directory.systemTemp.createTemp('pdd-fail-time-');
+      addTearDown(() => directory.delete(recursive: true));
+
+      transfer.controller.enqueueDownload(
+        const FileItem(path: 'shared/a.bin', name: 'a.bin', isDirectory: false),
+        targetDirectory: directory.path,
+      );
+      await _waitForTaskStatus(transfer.queue, TransferTaskStatus.failed);
+      final task = transfer.queue.tasks.single;
+
+      expect(task.finishedAt, isNotNull);
+      expect(task.error, contains('网络中断'));
+      // 失败前最后一次进度上报为最终字节确认（1/1）。
+      expect(task.totalTransferredBytes, 1);
+      expect(task.activeDurationMs, greaterThanOrEqualTo(0));
+    });
+
+    test('取消任务写入结束时间', () async {
+      final gate = Completer<void>();
+      final oss = _FakeOssClient()..downloadGate = gate;
+      final transfer = await _transferStack(oss: oss);
+      addTearDown(transfer.dispose);
+      final directory = await Directory.systemTemp.createTemp('pdd-cancel-time-');
+      addTearDown(() => directory.delete(recursive: true));
+
+      transfer.controller.enqueueDownload(
+        const FileItem(path: 'shared/a.bin', name: 'a.bin', isDirectory: false),
+        targetDirectory: directory.path,
+      );
+      await _waitForTaskStatus(transfer.queue, TransferTaskStatus.running);
+      transfer.controller.cancelTask(transfer.queue.tasks.single.id);
+      gate.complete();
+      await _waitForTaskStatus(transfer.queue, TransferTaskStatus.canceled);
+      // 取消状态由 cancelTask 同步写入，需等待执行器真正退出后再断言。
+      await _waitForNoRunning(transfer.queue);
+
+      expect(transfer.queue.tasks.single.finishedAt, isNotNull);
+    });
+
+    test('暂停继续不增加尝试次数，累计时长与字节跨尝试保留', () async {
+      final gate = Completer<void>();
+      final oss = _FakeOssClient()
+        ..downloadGate = gate
+        ..progressReports = const <(int, int)>[(40, 100)];
+      final transfer = await _transferStack(oss: oss);
+      addTearDown(transfer.dispose);
+      final directory = await Directory.systemTemp.createTemp('pdd-pause-time-');
+      addTearDown(() => directory.delete(recursive: true));
+
+      transfer.controller.enqueueDownload(
+        const FileItem(path: 'shared/a.bin', name: 'a.bin', isDirectory: false),
+        targetDirectory: directory.path,
+      );
+      await _waitForTaskStatus(transfer.queue, TransferTaskStatus.running);
+      final startedAt = transfer.queue.tasks.single.startedAt;
+      final firstLastStartedAt = transfer.queue.tasks.single.lastStartedAt;
+
+      transfer.controller.pauseAllTransfers();
+      gate.complete();
+      await _waitForTaskStatus(transfer.queue, TransferTaskStatus.pending);
+      final paused = transfer.queue.tasks.single;
+      expect(paused.finishedAt, isNull);
+      expect(paused.attemptCount, 1);
+      expect(paused.startedAt, startedAt);
+      expect(paused.totalTransferredBytes, 40);
+      final pausedDuration = paused.activeDurationMs;
+      expect(pausedDuration, greaterThanOrEqualTo(0));
+
+      oss.downloadGate = null;
+      oss.progressReports = const <(int, int)>[];
+      transfer.controller.resumeAllTransfers();
+      await _waitForTaskStatus(transfer.queue, TransferTaskStatus.success);
+      final done = transfer.queue.tasks.single;
+
+      expect(done.attemptCount, 1);
+      expect(done.startedAt, startedAt);
+      expect(done.lastStartedAt, isNot(firstLastStartedAt));
+      expect(done.activeDurationMs, greaterThanOrEqualTo(pausedDuration));
+      expect(done.totalTransferredBytes, 41);
+    });
+
+    test('用户重试增加尝试次数并清空结束时间', () async {
+      final transfer = await _transferStack();
+      addTearDown(transfer.dispose);
+      final finishedAt = DateTime.utc(2026, 10, 1, 8);
+      transfer.queue.tasksListenable.value = <TransferTask>[
+        TransferTask(
+          id: 'upload-1',
+          name: '文件.txt',
+          type: TransferTaskType.upload,
+          status: TransferTaskStatus.failed,
+          progress: 0,
+          finishedAt: finishedAt,
+          attemptCount: 1,
+        ),
+      ];
+
+      transfer.controller.retryTask('upload-1');
+      final retried = transfer.queue.tasks.single;
+
+      expect(retried.attemptCount, 2);
+      expect(retried.finishedAt, isNull);
+      expect(retried.startedAt, isNotNull);
+      expect(retried.lastStartedAt, isNotNull);
+
+      transfer.queue.tasksListenable.value = <TransferTask>[
+        retried.copyWith(
+          status: TransferTaskStatus.canceled,
+          finishedAt: DateTime.utc(2026, 10, 1, 9),
+        ),
+      ];
+      transfer.controller.retryTask('upload-1');
+      expect(transfer.queue.tasks.single.attemptCount, 3);
+    });
   });
 }
 
@@ -573,6 +784,7 @@ typedef _TransferStack = ({
 Future<_TransferStack> _transferStack({
   _FakeOssClient? oss,
   TransferKeepaliveService? keepalive,
+  TransferHistoryStore? historyStore,
 }) async {
   SharedPreferences.setMockInitialValues(<String, Object>{});
   final client = oss ?? _FakeOssClient();
@@ -587,6 +799,7 @@ Future<_TransferStack> _transferStack({
   );
   final queue = TransferQueue(
     transferKeepalive: keepalive ?? const NoopTransferKeepaliveService(),
+    historyStore: historyStore ?? InMemoryTransferHistoryStore(),
   );
   await queue.restore(await SharedPreferences.getInstance());
   final controller = TransferController(
@@ -659,6 +872,16 @@ Future<void> _waitForTaskStatus(
   while (!reached()) {
     if (DateTime.now().isAfter(deadline)) {
       throw TimeoutException('传输任务未在限定时间内全部进入 $status 状态');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+}
+
+Future<void> _waitForNoRunning(TransferQueue queue) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 5));
+  while (queue.runningTransferCount > 0) {
+    if (DateTime.now().isAfter(deadline)) {
+      fail('传输执行器未在限定时间内退出');
     }
     await Future<void>.delayed(const Duration(milliseconds: 10));
   }
