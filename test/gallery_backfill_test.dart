@@ -157,7 +157,9 @@ PhotoEntry _videoEntry(String key) {
 PhotoIndexRepository _repository(
   _FakeBackfillOss oss,
   _InMemoryGalleryDatabase database, {
-  Duration timeout = const Duration(milliseconds: 200),
+  // 放宽到秒级：CI 并行跑多个测试 isolate 时，临时文件写入可能被 CPU
+  // 抢占拖过百毫秒，过紧的超时会让正常条目也走放弃分支。
+  Duration timeout = const Duration(seconds: 2),
 }) {
   return PhotoIndexRepository(
     ossClient: oss,
