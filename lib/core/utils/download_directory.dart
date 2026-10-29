@@ -1,6 +1,5 @@
-import 'dart:io';
-
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -40,9 +39,9 @@ Future<String?> selectDownloadDirectory({
   final initialDirectory = await directoryStore.read();
 
   String? selected;
-  if (Platform.isAndroid) {
+  if (defaultTargetPlatform == TargetPlatform.android) {
     selected = await _invokeSelect(initialDirectory);
-  } else if (Platform.isMacOS) {
+  } else if (defaultTargetPlatform == TargetPlatform.macOS) {
     try {
       selected = await _invokeSelect(initialDirectory);
     } on MissingPluginException {
