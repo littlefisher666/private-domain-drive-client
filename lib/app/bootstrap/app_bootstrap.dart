@@ -34,6 +34,10 @@ class AppBootstrap {
       services: services,
       ossClient: services.ossClient,
     );
+    services.setOriginalCacheStore(
+      galleryController.originalCacheStore,
+      onCleared: galleryController.refreshCachedKeys,
+    );
     services.setGalleryHooks(galleryController);
     await services.bootstrap();
     return services;

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../../../shared/state/app_services.dart';
 import '../../../../shared/widgets/app_feedback.dart';
 import '../../domain/transfer_task.dart';
+import 'transfer_clear_finished.dart';
+import 'transfer_concurrency_picker.dart';
 
 class TransferHeaderActions extends StatelessWidget {
   const TransferHeaderActions({
@@ -26,6 +28,7 @@ class TransferHeaderActions extends StatelessWidget {
     final hasActiveTasks = tasks.any((task) =>
         task.status == TransferTaskStatus.running ||
         task.status == TransferTaskStatus.pending);
+    final finishedCount = tasks.where((task) => task.isFinished).length;
     return Wrap(
       spacing: 6,
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -37,7 +40,7 @@ class TransferHeaderActions extends StatelessWidget {
         ),
         IconButton(
           tooltip: '传输并发数',
-          onPressed: () => _showConcurrencyPicker(context, controller),
+          onPressed: () => showTransferConcurrencyPicker(context, controller),
           icon: const Icon(Icons.tune),
         ),
         if (hasActiveTasks) ...<Widget>[
@@ -82,50 +85,16 @@ class TransferHeaderActions extends StatelessWidget {
           ),
         ],
         OutlinedButton(
-          onPressed: tasks.isEmpty
+          onPressed: finishedCount == 0
               ? null
-              : () {
-                  controller.transferController.clearCompletedTasks();
-                  AppFeedback.showSnack(context, '已清除已完成和已取消任务');
-                },
+              : () => confirmAndClearFinishedTasks(
+                    context,
+                    controller,
+                    count: finishedCount,
+                  ),
           child: const Text('清除已结束'),
         ),
       ],
     );
-  }
-
-  Future<void> _showConcurrencyPicker(
-    BuildContext context,
-    AppServices controller,
-  ) async {
-    final value = await showDialog<int>(
-      context: context,
-      builder: (dialogContext) => SimpleDialog(
-        title: const Text('总传输并发数'),
-        children: <Widget>[
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 24),
-            child: Text('上传和下载共用此上限，默认值为 3。'),
-          ),
-          const SizedBox(height: 8),
-          for (var value = 1; value <= 5; value++)
-            SimpleDialogOption(
-              onPressed: () => Navigator.of(dialogContext).pop(value),
-              child: Row(
-                children: <Widget>[
-                  Expanded(child: Text('$value 个并发')),
-                  if (value == controller.transferQueue.transferConcurrency)
-                    const Icon(Icons.check, size: 18),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-    if (value == null) return;
-    await controller.transferQueue.setTransferConcurrency(value);
-    if (context.mounted) {
-      AppFeedback.showSnack(context, '并发数已设为 $value');
-    }
   }
 }

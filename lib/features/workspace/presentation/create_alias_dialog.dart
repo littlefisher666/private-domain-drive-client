@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/errors/app_error.dart';
 import '../../../../shared/state/app_services.dart';
 import '../../../../shared/path_utils.dart' as path_utils;
 import '../domain/file_item.dart';
@@ -108,11 +109,12 @@ class _CreateAliasDialogState extends State<_CreateAliasDialog> {
       );
       if (!mounted) return;
       Navigator.of(context).pop(true);
-    } catch (error) {
+    } catch (error, stackTrace) {
+      debugPrint('创建链接失败：$error\n$stackTrace');
       if (!mounted) return;
       setState(() {
         _submitting = false;
-        _error = error.toString().replaceFirst('Bad state: ', '');
+        _error = userFacingErrorMessage(error);
       });
     }
   }

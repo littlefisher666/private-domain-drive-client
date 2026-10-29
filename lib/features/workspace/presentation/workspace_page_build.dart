@@ -71,6 +71,38 @@ extension _WorkspacePageBuild on _WorkspacePageState {
     });
   }
 
+  Widget _buildFilterEmptyState() {
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(Icons.search_off, size: 36, color: scheme.onSurfaceVariant),
+          const SizedBox(height: 12),
+          Text(
+            '没有匹配“${_filterQuery.trim()}”的条目',
+            style: TextStyle(color: scheme.onSurface),
+          ),
+          const SizedBox(height: 4),
+          TextButton(onPressed: _clearFilter, child: const Text('清除筛选')),
+        ],
+      ),
+    );
+  }
+
+  /// 文件区快捷键仅在焦点位于文件区（含列表项）且未处于文本输入状态时生效。
+  bool get _fileAreaShortcutsAvailable {
+    final focus = FocusManager.instance.primaryFocus;
+    if (focus == null) return false;
+    if (focus != _itemsFocusNode &&
+        !focus.ancestors.contains(_itemsFocusNode)) {
+      return false;
+    }
+    final focusContext = focus.context;
+    return focusContext == null ||
+        focusContext.findAncestorWidgetOfExactType<EditableText>() == null;
+  }
+
   Widget _buildItemsArea({
     required AppServices controller,
     required bool desktop,
@@ -104,7 +136,7 @@ extension _WorkspacePageBuild on _WorkspacePageState {
 
         final baseItems = snapshot.data ?? const <FileItem>[];
         // 合并异步回填的子文件夹统计；列表顺序沿用列举排序，不受回填影响。
-        final items = <FileItem>[
+        final allItems = <FileItem>[
           for (final item in baseItems)
             if (item.isDirectory && _summaryOverrides[item.path] != null)
               item.copyWith(
@@ -114,6 +146,9 @@ extension _WorkspacePageBuild on _WorkspacePageState {
             else
               item,
         ];
+        _baseItems = allItems;
+        // 筛选只作用于当前目录已加载条目，排序沿用 allItems 的顺序。
+        final items = _filterItems(allItems, _filterQuery);
         _visibleItems = items;
         if (_summaryFillKey != _itemsFuture) {
           _summaryFillKey = _itemsFuture;
@@ -121,6 +156,10 @@ extension _WorkspacePageBuild on _WorkspacePageState {
         }
         if (desktop) {
           _ensureDefaultSelection(items);
+        }
+
+        if (items.isEmpty && allItems.isNotEmpty) {
+          return _buildFilterEmptyState();
         }
 
         if (items.isEmpty) {
@@ -176,6 +215,70 @@ extension _WorkspacePageBuild on _WorkspacePageState {
             descendantsAreFocusable: _renamingTarget != null,
             onKeyEvent: (node, event) {
               if (desktop && event is KeyDownEvent) {
+                // 输入框或就地重命名聚焦时，快捷键交由输入控件处理。
+                if (!_fileAreaShortcutsAvailable) {
+                  return KeyEventResult.ignored;
+                }
+                final current = controller.workspaceController.selectedItem;
+                if (event.logicalKey == LogicalKeyboardKey.space) {
+                  if (current != null &&
+                      !current.isDirectory &&
+                      !current.isAlias &&
+                      !controller.workspaceController.isMultiSelectionMode) {
+                    _openPreview(current);
+                    return KeyEventResult.handled;
+                  }
+                  return KeyEventResult.ignored;
+                }
+                if (event.logicalKey == LogicalKeyboardKey.enter ||
+                    event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+                  if (current != null &&
+                      !controller.workspaceController.isMultiSelectionMode) {
+                    _rename(current);
+                    return KeyEventResult.handled;
+                  }
+                  return KeyEventResult.ignored;
+                }
+                final deletePressed =
+                    event.logicalKey == LogicalKeyboardKey.delete ||
+                        (HardwareKeyboard.instance.isMetaPressed &&
+                            event.logicalKey == LogicalKeyboardKey.backspace);
+                if (deletePressed) {
+                  final multiSelecting = controller
+                      .workspaceController.isMultiSelectionMode;
+                  final selectedItems = multiSelecting
+                      ? items
+                          .where((item) => controller
+                              .workspaceController.multiSelectedPaths
+                              .contains(item.path))
+                          .toList(growable: false)
+                      : const <FileItem>[];
+                  final deletingRealItem = multiSelecting
+                      ? selectedItems.isNotEmpty
+                      : current != null && !current.isAlias;
+                  if (deletingRealItem &&
+                      !controller.sessionController.capabilities.delete) {
+                    AppFeedback.showSnack(context, '当前身份没有删除权限');
+                    return KeyEventResult.handled;
+                  }
+                  if (multiSelecting) {
+                    if (selectedItems.isEmpty) {
+                      return KeyEventResult.ignored;
+                    }
+                    unawaited(_deleteSelected(selectedItems));
+                    return KeyEventResult.handled;
+                  }
+                  if (current != null) {
+                    unawaited(_delete(current));
+                    return KeyEventResult.handled;
+                  }
+                  return KeyEventResult.ignored;
+                }
+                if (HardwareKeyboard.instance.isMetaPressed &&
+                    event.logicalKey == LogicalKeyboardKey.keyR) {
+                  unawaited(_refresh());
+                  return KeyEventResult.handled;
+                }
                 if (event.logicalKey == LogicalKeyboardKey.escape &&
                     controller.workspaceController.isMultiSelectionMode) {
                   controller.workspaceController.clearMultiSelection();
@@ -338,7 +441,13 @@ extension _WorkspacePageBuild on _WorkspacePageState {
                               .workspaceController.isMultiSelectionMode;
                           void onSelect(FileItem item) {
                             if (desktop) {
-                              _itemsFocusNode.requestFocus();
+                              // InkWell 在点击结束时也会处理焦点，延后到帧尾
+                              // 请求，确保文件区仍持有键盘焦点。
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (mounted) {
+                                  _itemsFocusNode.requestFocus();
+                                }
+                              });
                             }
                             if (isMultiSelectionMode) {
                               _toggleMultiSelection(item, items);
@@ -347,80 +456,94 @@ extension _WorkspacePageBuild on _WorkspacePageState {
                             }
                           }
 
-                          if (controller.workspaceController.browseMode ==
-                              BrowseMode.grid) {
-                            return WorkspaceGridView(
-                              items: items,
-                              selectedPath: selectedPath,
-                              selectedPaths: selectedPaths,
-                              multiSelecting: selecting,
-                              desktop: desktop,
-                              thumbnailSize:
-                                  controller.workspaceController.thumbnailSize,
-                              subtitleBuilder: _subtitle,
-                              thumbnailLoader:
-                                  controller.workspaceController.loadThumbnail,
-                              thumbnailCacheNamespace: controller
-                                  .workspaceController.thumbnailCacheNamespace,
-                              onOpen: _handleOpen,
-                              onMore: desktop ? (_) {} : _showItemActions,
-                              onSelect: onSelect,
-                              onToggle: (item) =>
-                                  _toggleMultiSelection(item, items),
-                              onMarqueeSelectionChanged: controller
-                                  .workspaceController.replaceMultiSelection,
-                              canUpload: canUpload,
-                              canDelete: controller
-                                  .sessionController.capabilities.delete,
-                              canDownload: controller
-                                  .sessionController.capabilities.download,
-                              canMove: controller
-                                      .sessionController.capabilities.upload &&
-                                  controller
-                                      .sessionController.capabilities.delete,
-                              onDownload: _download,
-                              onMove: (item) => _moveItems(<FileItem>[item]),
-                              onRename: _rename,
-                              renamingTarget: _renamingTarget,
-                              onRenameSubmit: _commitRename,
-                              onRenameCancel: _cancelRename,
-                              onDelete: _delete,
-                              onCreateLink: _createLink,
-                            );
+                          final Widget listWidget =
+                              controller.workspaceController.browseMode ==
+                                      BrowseMode.grid
+                                  ? WorkspaceGridView(
+                                      items: items,
+                                      selectedPath: selectedPath,
+                                      selectedPaths: selectedPaths,
+                                      multiSelecting: selecting,
+                                      desktop: desktop,
+                                      thumbnailSize: controller.workspaceController
+                                          .thumbnailSize,
+                                      subtitleBuilder: _subtitle,
+                                      thumbnailLoader: controller
+                                          .workspaceController.loadThumbnail,
+                                      thumbnailCacheNamespace: controller
+                                          .workspaceController
+                                          .thumbnailCacheNamespace,
+                                      onOpen: _handleOpen,
+                                      onMore:
+                                          desktop ? (_) {} : _showItemActions,
+                                      onSelect: onSelect,
+                                      onToggle: (item) =>
+                                          _toggleMultiSelection(item, items),
+                                      onMarqueeSelectionChanged: controller
+                                          .workspaceController
+                                          .replaceMultiSelection,
+                                      canUpload: canUpload,
+                                      canDelete: controller
+                                          .sessionController.capabilities.delete,
+                                      canDownload: controller.sessionController
+                                          .capabilities.download,
+                                      canMove: controller.sessionController
+                                              .capabilities.upload &&
+                                          controller.sessionController
+                                              .capabilities.delete,
+                                      onDownload: _download,
+                                      onMove: (item) =>
+                                          _moveItems(<FileItem>[item]),
+                                      onRename: _rename,
+                                      renamingTarget: _renamingTarget,
+                                      onRenameSubmit: _commitRename,
+                                      onRenameCancel: _cancelRename,
+                                      onDelete: _delete,
+                                      onCreateLink: _createLink,
+                                    )
+                                  : WorkspaceListView(
+                                      items: items,
+                                      desktop: desktop,
+                                      selectedPath: selectedPath,
+                                      selectedPaths: selectedPaths,
+                                      multiSelecting: selecting,
+                                      subtitleBuilder: _subtitle,
+                                      metaTimeBuilder: _metaTime,
+                                      canUpload: canUpload,
+                                      canDelete: controller
+                                          .sessionController.capabilities.delete,
+                                      canDownload: controller.sessionController
+                                          .capabilities.download,
+                                      canMove: controller.sessionController
+                                              .capabilities.upload &&
+                                          controller.sessionController
+                                              .capabilities.delete,
+                                      onOpen: _handleOpen,
+                                      onMore:
+                                          desktop ? (_) {} : _showItemActions,
+                                      onSelect: onSelect,
+                                      onToggle: (item) =>
+                                          _toggleMultiSelection(item, items),
+                                      onMarqueeSelectionChanged: controller
+                                          .workspaceController
+                                          .replaceMultiSelection,
+                                      onPreview: _openPreview,
+                                      onDownload: _download,
+                                      onMove: (item) =>
+                                          _moveItems(<FileItem>[item]),
+                                      onRename: _rename,
+                                      renamingTarget: _renamingTarget,
+                                      onRenameSubmit: _commitRename,
+                                      onRenameCancel: _cancelRename,
+                                      onDelete: _delete,
+                                      onCreateLink: _createLink,
+                                    );
+                          if (desktop) {
+                            return listWidget;
                           }
-                          return WorkspaceListView(
-                            items: items,
-                            desktop: desktop,
-                            selectedPath: selectedPath,
-                            selectedPaths: selectedPaths,
-                            multiSelecting: selecting,
-                            subtitleBuilder: _subtitle,
-                            metaTimeBuilder: _metaTime,
-                            canUpload: canUpload,
-                            canDelete: controller
-                                .sessionController.capabilities.delete,
-                            canDownload: controller
-                                .sessionController.capabilities.download,
-                            canMove: controller
-                                    .sessionController.capabilities.upload &&
-                                controller
-                                    .sessionController.capabilities.delete,
-                            onOpen: _handleOpen,
-                            onMore: desktop ? (_) {} : _showItemActions,
-                            onSelect: onSelect,
-                            onToggle: (item) =>
-                                _toggleMultiSelection(item, items),
-                            onMarqueeSelectionChanged: controller
-                                .workspaceController.replaceMultiSelection,
-                            onPreview: _openPreview,
-                            onDownload: _download,
-                            onMove: (item) => _moveItems(<FileItem>[item]),
-                            onRename: _rename,
-                            renamingTarget: _renamingTarget,
-                            onRenameSubmit: _commitRename,
-                            onRenameCancel: _cancelRename,
-                            onDelete: _delete,
-                            onCreateLink: _createLink,
+                          return RefreshIndicator(
+                            onRefresh: _refresh,
+                            child: listWidget,
                           );
                         },
                       ),
@@ -524,13 +647,16 @@ extension _WorkspacePageBuild on _WorkspacePageState {
                     controller.workspaceController.selectedItemListenable,
                 directorySizeStatesListenable: controller
                     .workspaceController.directorySizeStatesListenable,
+                filterController: _filterController,
+                filterQuery: _filterQuery,
+                onFilterChanged: _onFilterChanged,
                 listArea: _buildItemsArea(
                   controller: controller,
                   desktop: true,
                   canUpload: canUpload,
                 ),
                 onGoUp: _goUp,
-                onRefresh: _reload,
+                onRefresh: _refresh,
                 onCreateFolder: _createFolder,
                 onUpload: () => _pickUpload(fromAlbum: false),
                 onUploadDirectory: _pickUploadDirectory,
@@ -559,8 +685,13 @@ extension _WorkspacePageBuild on _WorkspacePageState {
                               null,
                       browseMode: controller.workspaceController.browseMode,
                       sortOption: controller.workspaceController.fileSortOption,
+                      filterController: _filterController,
+                      filterQuery: _filterQuery,
+                      filterExpanded: _filterExpanded,
+                      onFilterChanged: _onFilterChanged,
+                      onToggleFilter: _toggleFilter,
                       onGoUp: _goUp,
-                      onRefresh: _reload,
+                      onRefresh: _refresh,
                       onBrowseModeChanged:
                           controller.workspaceController.setBrowseMode,
                       onChooseSort: _showSortSheet,

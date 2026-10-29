@@ -7,6 +7,7 @@ import '../../../core/utils/download_directory.dart';
 import '../../../app/theme/cupertino_desktop.dart';
 import '../../../shared/state/app_scope.dart';
 import '../../../shared/widgets/app_feedback.dart';
+import '../../../shared/widgets/zoomable_image_area.dart';
 import '../../workspace/domain/file_item.dart';
 import '../domain/preview_type.dart';
 import '../infrastructure/text_preview_loader.dart';
@@ -168,12 +169,9 @@ class _PreviewPageState extends State<PreviewPage> {
                         AppFeedback.showSnack(
                             context, '已加入下载队列：${currentItem.name}');
                       }
-                    } catch (error) {
+                    } catch (error, stackTrace) {
                       if (context.mounted) {
-                        AppFeedback.showSnack(
-                          context,
-                          error.toString().replaceFirst('Bad state: ', ''),
-                        );
+                        AppFeedback.showError(context, error, stackTrace);
                       }
                     }
                   },
@@ -498,16 +496,9 @@ class _ImagePreviewBodyState extends State<_ImagePreviewBody>
     return Stack(
       children: <Widget>[
         Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onHorizontalDragEnd: widget.onSwipe == null
-                ? null
-                : (details) =>
-                    widget.onSwipe!(details.velocity.pixelsPerSecond.dx, false),
-            onVerticalDragEnd: widget.onSwipe == null
-                ? null
-                : (details) =>
-                    widget.onSwipe!(details.velocity.pixelsPerSecond.dy, true),
+          child: ZoomableImageArea(
+            resetToken: widget.item.path,
+            onSwipe: widget.onSwipe,
             child: _buildImageArea(theme),
           ),
         ),

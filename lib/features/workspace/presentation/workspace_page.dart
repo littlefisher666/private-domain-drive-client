@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../app/router/route_names.dart';
+import '../../../core/errors/app_error.dart';
 import '../../../core/utils/download_directory.dart';
 import '../../../core/utils/file_size_formatter.dart';
 import '../../../shared/path_utils.dart' as path_utils;
@@ -88,12 +89,9 @@ Future<void> pickAndUploadFile(
     if (context.mounted) {
       AppFeedback.showSnack(context, '已创建 ${picked.length} 个文件的上传任务');
     }
-  } catch (error) {
+  } catch (error, stackTrace) {
     if (context.mounted) {
-      AppFeedback.showSnack(
-        context,
-        error.toString().replaceFirst('Bad state: ', ''),
-      );
+      AppFeedback.showError(context, error, stackTrace);
     }
   }
 }
@@ -168,12 +166,9 @@ Future<void> pickAndUploadDirectory(BuildContext context) async {
     if (context.mounted) {
       AppFeedback.showSnack(context, '已创建 ${files.length} 个文件的上传任务');
     }
-  } catch (error) {
+  } catch (error, stackTrace) {
     if (context.mounted) {
-      AppFeedback.showSnack(
-        context,
-        error.toString().replaceFirst('Bad state: ', ''),
-      );
+      AppFeedback.showError(context, error, stackTrace);
     }
   }
 }
@@ -181,6 +176,11 @@ Future<void> pickAndUploadDirectory(BuildContext context) async {
 class _WorkspacePageState extends State<WorkspacePage> {
   late Future<List<FileItem>> _itemsFuture;
   List<FileItem> _visibleItems = const <FileItem>[];
+  // 筛选仅作用于当前目录已加载条目，_baseItems 保存未筛选的展示列表。
+  List<FileItem> _baseItems = const <FileItem>[];
+  final TextEditingController _filterController = TextEditingController();
+  String _filterQuery = '';
+  bool _filterExpanded = false;
   final FocusNode _itemsFocusNode = FocusNode(
     debugLabel: 'workspace-items',
   );
@@ -221,16 +221,28 @@ class _WorkspacePageState extends State<WorkspacePage> {
   void _setState(VoidCallback fn) => setState(fn);
 
   void _syncDirectoryBinding(AppServices controller, {bool force = false}) {
+    final path = controller.workspaceController.currentPath;
+    final pathChanged = _boundPath != null && _boundPath != path;
     if (!force &&
-        _boundPath == controller.workspaceController.currentPath &&
+        !pathChanged &&
         _boundTreeRevision == controller.workspaceController.treeRevision) {
       return;
     }
-    _boundPath = controller.workspaceController.currentPath;
+    _boundPath = path;
     _boundTreeRevision = controller.workspaceController.treeRevision;
     _itemsFuture = controller.workspaceController
         .listDirectory(controller.workspaceController.currentPath);
     _resetSummaryFill();
+    if (pathChanged) {
+      // 外部（如 HomeShell 返回）切换目录时清空筛选；构建期不能直接
+      // 清空输入框，延后到帧结束避免 TextField 在 build 中 setState。
+      _filterQuery = '';
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _filterController.text.isNotEmpty) {
+          _filterController.clear();
+        }
+      });
+    }
   }
 
   @override
@@ -241,6 +253,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
 
   @override
   void dispose() {
+    _filterController.dispose();
     _itemsFocusNode.dispose();
     super.dispose();
   }
@@ -258,8 +271,87 @@ class _WorkspacePageState extends State<WorkspacePage> {
     await future;
   }
 
+  /// 下拉刷新/刷新按钮：失败时回退到之前的列表并给出提示，避免把已展示
+  /// 内容替换成错误页。
+  Future<void> _refresh() async {
+    final controller = AppScope.of(context);
+    final previousFuture = _itemsFuture;
+    final previousPath = _boundPath;
+    final previousRevision = _boundTreeRevision;
+    final future = controller.workspaceController
+        .listDirectory(controller.workspaceController.currentPath);
+    setState(() {
+      _itemsFuture = future;
+      _boundPath = controller.workspaceController.currentPath;
+      _boundTreeRevision = controller.workspaceController.treeRevision;
+      _resetSummaryFill();
+    });
+    try {
+      await future;
+    } catch (error, stackTrace) {
+      if (!mounted) return;
+      setState(() {
+        _itemsFuture = previousFuture;
+        _boundPath = previousPath;
+        _boundTreeRevision = previousRevision;
+      });
+      AppFeedback.showError(context, error, stackTrace);
+    }
+  }
+
+  List<FileItem> _filterItems(Iterable<FileItem> items, String query) {
+    final keyword = query.trim().toLowerCase();
+    if (keyword.isEmpty) return items.toList(growable: false);
+    return items
+        .where((item) => item.name.toLowerCase().contains(keyword))
+        .toList(growable: false);
+  }
+
+  void _clearFilterForNavigation() {
+    if (_filterQuery.isEmpty && _filterController.text.isEmpty) return;
+    _filterController.clear();
+    _filterQuery = '';
+    _filterExpanded = false;
+  }
+
+  void _clearFilter() {
+    _filterController.clear();
+    _onFilterChanged('');
+  }
+
+  void _toggleFilter() {
+    if (_filterExpanded) {
+      _clearFilter();
+      _setState(() => _filterExpanded = false);
+      return;
+    }
+    _setState(() => _filterExpanded = true);
+  }
+
+  void _onFilterChanged(String value) {
+    final controller = AppScope.read(context);
+    final filtered = _filterItems(_baseItems, value);
+    final selected = controller.workspaceController.selectedItem;
+    if (selected != null &&
+        !filtered.any((item) =>
+            item.path == selected.path && item.isAlias == selected.isAlias)) {
+      controller.workspaceController.clearSelectedItem();
+    }
+    final selectedPaths = controller.workspaceController.multiSelectedPaths;
+    if (selectedPaths.isNotEmpty) {
+      final visiblePaths = <String>{for (final item in filtered) item.path};
+      final next =
+          selectedPaths.where(visiblePaths.contains).toSet();
+      if (next.length != selectedPaths.length) {
+        controller.workspaceController.replaceMultiSelection(next);
+      }
+    }
+    _setState(() => _filterQuery = value);
+  }
+
   Future<void> _openDirectory(String path) async {
     final controller = AppScope.of(context);
+    _clearFilterForNavigation();
     controller.workspaceController.setCurrentPath(path);
     await _reload();
     if (mounted && _desktop) {
@@ -276,15 +368,13 @@ class _WorkspacePageState extends State<WorkspacePage> {
     final controller = AppScope.of(context);
     try {
       await controller.aliasController.openAlias(item);
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (mounted) {
-        AppFeedback.showSnack(
-          context,
-          error.toString().replaceFirst('Bad state: ', ''),
-        );
+        AppFeedback.showError(context, error, stackTrace);
       }
       return;
     }
+    _clearFilterForNavigation();
     await _reload();
   }
 

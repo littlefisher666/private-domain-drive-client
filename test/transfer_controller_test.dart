@@ -456,6 +456,44 @@ void main() {
           hasLength(2));
     });
 
+    test('降低并发上限不中断运行中任务', () async {
+      final gate = Completer<void>();
+      final oss = _FakeOssClient()..downloadGate = gate;
+      final transfer = await _transferStack(oss: oss);
+      addTearDown(transfer.dispose);
+      await transfer.queue.setTransferConcurrency(2);
+      final directory = await Directory.systemTemp.createTemp('pdd-transfer-');
+      addTearDown(() => directory.delete(recursive: true));
+      const files = <FileItem>[
+        FileItem(path: 'shared/a.txt', name: 'a.txt', isDirectory: false),
+        FileItem(path: 'shared/b.txt', name: 'b.txt', isDirectory: false),
+        FileItem(path: 'shared/c.txt', name: 'c.txt', isDirectory: false),
+      ];
+
+      transfer.controller.enqueueDownloads(files, targetDirectory: directory.path);
+      await Future<void>.delayed(Duration.zero);
+      expect(transfer.queue.runningTransferCount, 2);
+      expect(transfer.queue.pendingTransferCount, 1);
+
+      await transfer.queue.setTransferConcurrency(1);
+      await Future<void>.delayed(Duration.zero);
+      // 已运行任务不被中断，后续调度按新上限执行。
+      expect(transfer.queue.runningTransferCount, 2);
+      expect(transfer.queue.pendingTransferCount, 1);
+
+      gate.complete();
+      await _waitForTaskStatus(
+        transfer.queue,
+        TransferTaskStatus.success,
+        taskCount: 3,
+      );
+      expect(
+        transfer.queue.tasks
+            .where((task) => task.status == TransferTaskStatus.success),
+        hasLength(3),
+      );
+    });
+
     test('递归下载保留目录结构并去重重叠选择', () async {
       final oss = _FakeOssClient()
         ..objectKeysByPath['shared/资料/'] = <String>[

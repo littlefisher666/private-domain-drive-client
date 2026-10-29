@@ -5,9 +5,11 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'local_cache_store.dart';
+
 /// 本地磁盘文档缓存（PDF 等大文档落盘预览）。与 DiskImageCache 相同的
 /// LRU 淘汰机制；任何读写失败都视为缓存不存在，由调用方直接回源 OSS。
-class DiskDocumentCache {
+class DiskDocumentCache implements LocalCacheStore {
   DiskDocumentCache({
     Directory? Function()? rootResolver,
     int byteLimit = 512 * 1024 * 1024,
@@ -168,6 +170,42 @@ class DiskDocumentCache {
       if (total() <= _byteLimit) return;
       await _deleteQuietly(File(entry.key));
       index.remove(entry.key);
+    }
+  }
+
+  /// 当前文档缓存占用。
+  @override
+  Future<int> sizeBytes() async {
+    try {
+      await _ensureReady();
+      final index = _index;
+      if (index == null) return 0;
+      return index.values.fold<int>(0, (sum, entry) => sum + entry.size);
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// 删除全部缓存文件并清空内存索引，目录本身保留供后续写入。
+  @override
+  Future<void> clear() async {
+    try {
+      await _ensureReady();
+      final index = _index;
+      if (index == null) return;
+      for (final path in index.keys.toList(growable: false)) {
+        await _deleteQuietly(File(path));
+      }
+      index.clear();
+      final directory = _directory;
+      if (directory == null) return;
+      await for (final entity in directory.list()) {
+        if (entity is File && entity.path.endsWith('.part')) {
+          await _deleteQuietly(entity);
+        }
+      }
+    } catch (_) {
+      // 清理失败不阻断设置页刷新，下次仍可重新尝试。
     }
   }
 

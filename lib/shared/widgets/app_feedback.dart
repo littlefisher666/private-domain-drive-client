@@ -1,7 +1,22 @@
 import 'package:flutter/material.dart';
 
+import '../../core/errors/app_error.dart';
+
 class AppFeedback {
   AppFeedback._();
+
+  /// 面向用户的错误文案：业务异常使用自带文案，未知异常统一为通用提示。
+  static String errorMessage(Object error) => userFacingErrorMessage(error);
+
+  /// 展示用户文案，同时把完整异常与堆栈写入调试日志。
+  static void showError(
+    BuildContext context,
+    Object error, [
+    StackTrace? stackTrace,
+  ]) {
+    debugPrint('操作失败：$error\n${stackTrace ?? StackTrace.current}');
+    showSnack(context, errorMessage(error));
+  }
 
   static void showSnack(BuildContext context, String message) {
     final messenger = ScaffoldMessenger.maybeOf(context);

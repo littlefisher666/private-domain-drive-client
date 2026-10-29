@@ -136,12 +136,9 @@ class _PrivateDomainDriveAppState extends State<PrivateDomainDriveApp> {
       if (context.mounted) {
         AppFeedback.showSnack(context, '已开始上传 $count 个文件');
       }
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (context.mounted) {
-        AppFeedback.showSnack(
-          context,
-          error.toString().replaceFirst('Bad state: ', ''),
-        );
+        AppFeedback.showError(context, error, stackTrace);
       }
     }
   }

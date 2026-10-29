@@ -15,17 +15,23 @@ import 'support/in_memory_transfer_history_store.dart';
 void main() {
   Future<AppServices> pumpTasks(
     WidgetTester tester,
-    List<TransferTask> tasks,
-  ) async {
+    List<TransferTask> tasks, {
+    VoidCallback? onOpenFiles,
+  }) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
     final controller =
         AppServices(sessionRepository: MemorySessionRepository());
     controller.transferQueue.tasksListenable.value = tasks;
     await tester.pumpWidget(
       AppScope(
         services: controller,
-        child: const MaterialApp(
+        child: MaterialApp(
           home: Scaffold(
-            body: TransferTasksPage(embedded: true, desktopChrome: true),
+            body: TransferTasksPage(
+              embedded: true,
+              desktopChrome: true,
+              onOpenFiles: onOpenFiles,
+            ),
           ),
         ),
       ),
@@ -35,17 +41,22 @@ void main() {
 
   Future<AppServices> pumpMobileTasks(
     WidgetTester tester,
-    List<TransferTask> tasks,
-  ) async {
+    List<TransferTask> tasks, {
+    VoidCallback? onOpenFiles,
+  }) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
     final controller =
         AppServices(sessionRepository: MemorySessionRepository());
     controller.transferQueue.tasksListenable.value = tasks;
     await tester.pumpWidget(
       AppScope(
         services: controller,
-        child: const MaterialApp(
+        child: MaterialApp(
           home: Scaffold(
-            body: TransferTasksPage(embedded: true),
+            body: TransferTasksPage(
+              embedded: true,
+              onOpenFiles: onOpenFiles,
+            ),
           ),
         ),
       ),
@@ -415,6 +426,198 @@ void main() {
     await pumpMobileTasks(tester, const <TransferTask>[]);
 
     expect(find.text('暂无传输任务'), findsOneWidget);
+  });
+
+  group('传输中心体验补齐', () {
+    testWidgets('空态展示说明与「去文件页」入口', (tester) async {
+      var opened = false;
+      await pumpMobileTasks(
+        tester,
+        const <TransferTask>[],
+        onOpenFiles: () => opened = true,
+      );
+
+      expect(find.text('暂无传输任务'), findsOneWidget);
+      expect(find.text('上传或下载后任务会出现在这里'), findsOneWidget);
+      await tester.tap(find.text('去文件页'));
+      expect(opened, isTrue);
+    });
+
+    testWidgets('桌面空态同样展示跳转入口', (tester) async {
+      var opened = false;
+      await pumpTasks(
+        tester,
+        const <TransferTask>[],
+        onOpenFiles: () => opened = true,
+      );
+
+      await tester.tap(find.text('去文件页'));
+      expect(opened, isTrue);
+    });
+
+    testWidgets('类型筛选无结果仅展示类型空态', (tester) async {
+      var opened = false;
+      await pumpMobileTasks(
+        tester,
+        const <TransferTask>[
+          TransferTask(
+            id: 'download-1',
+            name: '资料.pdf',
+            type: TransferTaskType.download,
+            status: TransferTaskStatus.success,
+            progress: 1,
+          ),
+        ],
+        onOpenFiles: () => opened = true,
+      );
+
+      await tester.tap(find.text('上传 0'));
+      await tester.pump();
+
+      expect(find.text('暂无上传任务'), findsOneWidget);
+      expect(find.text('上传或下载后任务会出现在这里'), findsNothing);
+      expect(find.text('去文件页'), findsNothing);
+      expect(opened, isFalse);
+    });
+
+    testWidgets('移动端更多菜单可修改总传输并发数', (tester) async {
+      final controller =
+          await pumpMobileTasks(tester, const <TransferTask>[]);
+
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('传输并发数'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('总传输并发数'), findsOneWidget);
+      await tester.tap(find.text('2 个并发'));
+      await tester.pumpAndSettle();
+
+      expect(controller.transferQueue.transferConcurrency, 2);
+    });
+
+    testWidgets('移动端清除已结束任务需确认且仅移除已结束任务', (tester) async {
+      final controller = await pumpMobileTasks(
+        tester,
+        const <TransferTask>[
+          TransferTask(
+            id: 'running-1',
+            name: '进行中.zip',
+            type: TransferTaskType.upload,
+            status: TransferTaskStatus.running,
+            progress: 0.4,
+          ),
+          TransferTask(
+            id: 'done-1',
+            name: '完成.zip',
+            type: TransferTaskType.upload,
+            status: TransferTaskStatus.success,
+            progress: 1,
+          ),
+          TransferTask(
+            id: 'failed-1',
+            name: '失败.zip',
+            type: TransferTaskType.download,
+            status: TransferTaskStatus.failed,
+            progress: 0.2,
+          ),
+        ],
+      );
+
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('清除已结束任务 (2)'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('清除已结束任务？'), findsOneWidget);
+      expect(find.textContaining('将清除 2 个已结束任务'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(controller.transferQueue.tasks, hasLength(3));
+
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('清除已结束任务 (2)'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('清除'));
+      await tester.pumpAndSettle();
+
+      expect(
+        controller.transferQueue.tasks.map((task) => task.id),
+        <String>['running-1'],
+      );
+    });
+
+    testWidgets('无已结束任务时清除入口不可用', (tester) async {
+      await pumpMobileTasks(
+        tester,
+        const <TransferTask>[
+          TransferTask(
+            id: 'pending-1',
+            name: '等待.zip',
+            type: TransferTaskType.upload,
+            status: TransferTaskStatus.pending,
+            progress: 0,
+          ),
+        ],
+      );
+
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+
+      final item = tester.widget<PopupMenuItem<String>>(
+        find.widgetWithText(PopupMenuItem<String>, '清除已结束任务'),
+      );
+      expect(item.enabled, isFalse);
+    });
+
+    testWidgets('桌面端清除已结束任务需二次确认', (tester) async {
+      final controller = await pumpTasks(
+        tester,
+        const <TransferTask>[
+          TransferTask(
+            id: 'running-1',
+            name: '进行中.zip',
+            type: TransferTaskType.upload,
+            status: TransferTaskStatus.running,
+            progress: 0.4,
+          ),
+          TransferTask(
+            id: 'done-1',
+            name: '完成.zip',
+            type: TransferTaskType.upload,
+            status: TransferTaskStatus.success,
+            progress: 1,
+          ),
+        ],
+      );
+
+      await tester.tap(find.text('清除已结束'));
+      await tester.pumpAndSettle();
+      expect(find.text('清除已结束任务？'), findsOneWidget);
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.text('取消'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(controller.transferQueue.tasks, hasLength(2));
+
+      await tester.tap(find.text('清除已结束'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.text('清除'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        controller.transferQueue.tasks.map((task) => task.id),
+        <String>['running-1'],
+      );
+    });
   });
 
   testWidgets('桌面端可一键暂停并继续全部任务', (tester) async {

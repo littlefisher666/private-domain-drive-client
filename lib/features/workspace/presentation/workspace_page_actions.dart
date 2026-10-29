@@ -39,12 +39,9 @@ extension _WorkspacePageActions on _WorkspacePageState {
       if (mounted) {
         AppFeedback.showSnack(context, '已创建 $name');
       }
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (mounted) {
-        AppFeedback.showSnack(
-          context,
-          error.toString().replaceFirst('Bad state: ', ''),
-        );
+        AppFeedback.showError(context, error, stackTrace);
       }
     }
   }
@@ -91,12 +88,9 @@ extension _WorkspacePageActions on _WorkspacePageState {
         AppFeedback.showSnack(context, '已重命名为 $trimmedName');
       }
       return true;
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (mounted) {
-        AppFeedback.showSnack(
-          context,
-          error.toString().replaceFirst('Bad state: ', ''),
-        );
+        AppFeedback.showError(context, error, stackTrace);
       }
       return false;
     }
@@ -133,12 +127,9 @@ extension _WorkspacePageActions on _WorkspacePageState {
       if (mounted) {
         AppFeedback.showSnack(context, '已移入回收站：${item.name}');
       }
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (mounted) {
-        AppFeedback.showSnack(
-          context,
-          error.toString().replaceFirst('Bad state: ', ''),
-        );
+        AppFeedback.showError(context, error, stackTrace);
       }
     } finally {
       _deleteBusy = false;
@@ -188,12 +179,9 @@ extension _WorkspacePageActions on _WorkspacePageState {
       if (mounted) {
         AppFeedback.showSnack(context, '已删除链接：${item.name}');
       }
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (mounted) {
-        AppFeedback.showSnack(
-          context,
-          error.toString().replaceFirst('Bad state: ', ''),
-        );
+        AppFeedback.showError(context, error, stackTrace);
       }
     }
   }
@@ -218,12 +206,9 @@ extension _WorkspacePageActions on _WorkspacePageState {
           mediaFile ? '已加入相册下载队列：${item.name}' : '已加入下载队列：${item.name}',
         );
       }
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (mounted) {
-        AppFeedback.showSnack(
-          context,
-          error.toString().replaceFirst('Bad state: ', ''),
-        );
+        AppFeedback.showError(context, error, stackTrace);
       }
     }
   }
@@ -270,12 +255,9 @@ extension _WorkspacePageActions on _WorkspacePageState {
             ? '所选文件夹为空，没有可下载文件'
             : '已加入 ${result.fileCount} 个下载任务${result.directoryCount == 0 ? '' : '，已保留文件夹结构'}',
       );
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (mounted) {
-        AppFeedback.showSnack(
-          context,
-          error.toString().replaceFirst('Bad state: ', ''),
-        );
+        AppFeedback.showError(context, error, stackTrace);
       }
     }
   }
@@ -310,7 +292,8 @@ extension _WorkspacePageActions on _WorkspacePageState {
         Object? failure;
         try {
           prepared = await preparing;
-        } catch (error) {
+        } catch (error, stackTrace) {
+          debugPrint('分享准备失败：$error\n$stackTrace');
           failure = error;
         }
         // 弹窗在进度置空后自行关闭；这里等待其退场，避免分享面板与
@@ -321,7 +304,7 @@ extension _WorkspacePageActions on _WorkspacePageState {
         if (failure != null) {
           AppFeedback.showSnack(
             context,
-            '分享准备失败：${failure.toString().replaceFirst('Bad state: ', '')}',
+            '分享准备失败：${userFacingErrorMessage(failure)}',
           );
           return;
         }
@@ -346,6 +329,10 @@ extension _WorkspacePageActions on _WorkspacePageState {
       return;
     }
     final controller = AppScope.of(context);
+    if (!controller.sessionController.capabilities.delete) {
+      AppFeedback.showSnack(context, '当前身份没有删除权限');
+      return;
+    }
     // 链接条目删除走单独的「删除链接」流程，批量删除只作用于真实条目，
     // 避免把别名当成真实目录展开删除。
     final realItems =
@@ -402,10 +389,9 @@ extension _WorkspacePageActions on _WorkspacePageState {
               : '已移入回收站 ${result.deletedPaths.length} 项，${result.failedPaths.length} 项失败',
         );
       }
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (mounted) {
-        AppFeedback.showSnack(
-            context, error.toString().replaceFirst('Bad state: ', ''));
+        AppFeedback.showError(context, error, stackTrace);
       }
     } finally {
       _deleteBusy = false;
@@ -469,12 +455,9 @@ extension _WorkspacePageActions on _WorkspacePageState {
                 '重新启动后可继续或撤销'
             : '已移动 ${realItems.length} 项到「${controller.workspaceController.displayPath(target)}」',
       );
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (mounted) {
-        AppFeedback.showSnack(
-          context,
-          error.toString().replaceFirst('Bad state: ', ''),
-        );
+        AppFeedback.showError(context, error, stackTrace);
       }
     }
   }
@@ -515,12 +498,9 @@ extension _WorkspacePageActions on _WorkspacePageState {
                     ? '已继续完成移动'
                     : '已撤销移动并恢复原位置',
           );
-        } catch (error) {
+        } catch (error, stackTrace) {
           if (mounted) {
-            AppFeedback.showSnack(
-              context,
-              error.toString().replaceFirst('Bad state: ', ''),
-            );
+            AppFeedback.showError(context, error, stackTrace);
           }
         }
       }

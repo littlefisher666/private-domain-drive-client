@@ -102,6 +102,14 @@ class _DesktopViewerState extends State<DesktopViewer> {
   }
 
   @override
+  void didUpdateWidget(covariant DesktopViewer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.entry.key != widget.entry.key) {
+      _transform.value = Matrix4.identity();
+    }
+  }
+
+  @override
   void dispose() {
     _hideTimer?.cancel();
     _copiedTimer?.cancel();

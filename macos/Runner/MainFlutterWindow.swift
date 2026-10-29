@@ -66,14 +66,32 @@ class MainFlutterWindow: NSWindow {
       panel.allowsMultipleSelection = false
       panel.canCreateDirectories = true
       panel.prompt = "选择下载位置"
-      panel.directoryURL = FileManager.default.urls(
-        for: .downloadsDirectory,
-        in: .userDomainMask
-      ).first
+      panel.directoryURL = Self.initialDownloadDirectory(call.arguments)
       panel.beginSheetModal(for: window) { response in
         result(response == .OK ? panel.url?.path : nil)
       }
     }
+  }
+
+  /// 记忆目录存在且可写时作为选择器初始位置，否则回退系统下载目录。
+  private static func initialDownloadDirectory(_ arguments: Any?) -> URL? {
+    let downloads = FileManager.default.urls(
+      for: .downloadsDirectory,
+      in: .userDomainMask
+    ).first
+    guard let args = arguments as? [String: Any],
+          let remembered = args["initialDirectory"] as? String,
+          !remembered.isEmpty else {
+      return downloads
+    }
+    var isDirectory: ObjCBool = false
+    let exists = FileManager.default.fileExists(atPath: remembered, isDirectory: &isDirectory)
+    guard exists,
+          isDirectory.boolValue,
+          FileManager.default.isWritableFile(atPath: remembered) else {
+      return downloads
+    }
+    return URL(fileURLWithPath: remembered)
   }
 
   /// 视频截帧与元数据（相册模块）：AVAssetImageGenerator 截取首帧缩放为 JPEG，

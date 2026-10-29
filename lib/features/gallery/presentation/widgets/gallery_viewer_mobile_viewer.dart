@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../shared/file_size_formatter_lite.dart';
+import '../../../../shared/widgets/zoomable_image_area.dart';
 import '../../application/gallery_controller.dart';
 import '../../domain/photo_entry.dart';
 import 'gallery_viewer_download_button.dart';
@@ -73,16 +74,24 @@ class _MobileViewerState extends State<MobileViewer> {
               onTap: _detailVisible
                   ? () => setState(() => _detailVisible = false)
                   : null,
-              onHorizontalDragEnd: (details) =>
-                  _handleSwipe(details.velocity.pixelsPerSecond.dx, false),
-              onVerticalDragEnd: (details) =>
-                  _handleSwipe(details.velocity.pixelsPerSecond.dy, true),
+              onHorizontalDragEnd: isVideo
+                  ? (details) =>
+                      _handleSwipe(details.velocity.pixelsPerSecond.dx, false)
+                  : null,
+              onVerticalDragEnd: isVideo
+                  ? (details) =>
+                      _handleSwipe(details.velocity.pixelsPerSecond.dy, true)
+                  : null,
               child: isVideo
                   ? VideoPlayerView(gallery: widget.gallery, entry: entry)
-                  : ViewerImage(
-                      gallery: widget.gallery,
-                      entry: entry,
-                      enterOffset: _enterOffset,
+                  : ZoomableImageArea(
+                      resetToken: entry.key,
+                      onSwipe: _handleSwipe,
+                      child: ViewerImage(
+                        gallery: widget.gallery,
+                        entry: entry,
+                        enterOffset: _enterOffset,
+                      ),
                     ),
             ),
             Positioned(

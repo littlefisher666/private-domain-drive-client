@@ -76,6 +76,7 @@ class WorkspaceListView extends StatelessWidget {
       return Card(
         clipBehavior: Clip.antiAlias,
         child: ListView.separated(
+          physics: const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.only(bottom: canUpload ? 80 : 0),
           itemCount: items.length,
           separatorBuilder: (_, __) => const Divider(height: 1),

@@ -49,6 +49,9 @@ class FileShareController extends ChangeNotifier {
 
   bool get isPreparing => _preparing;
 
+  /// 分享临时文件缓存：设置页统一清理缓存时复用同一实例。
+  ShareCacheStore get cacheStore => _cacheStore;
+
   /// 单个条目的分享入口可用条件：Android、具备下载能力、非别名普通文件。
   bool canShare(FileItem item) {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {

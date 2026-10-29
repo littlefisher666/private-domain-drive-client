@@ -4,15 +4,18 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../../core/errors/app_error.dart';
+import '../../../shared/cache/local_cache_store.dart';
 import '../domain/gallery_config.dart';
 import 'gallery_database.dart';
 
 /// 原图缓存管理：专用缓存目录 + SQLite 记录，是云朵角标与查看器
 /// 秒开判断的唯一依据。清理仅删除本地文件与记录，不触碰 OSS 数据。
-class OriginalCacheStore {
-  OriginalCacheStore(this._database);
+class OriginalCacheStore implements LocalCacheStore {
+  OriginalCacheStore(this._database, {Directory? Function()? rootResolver})
+      : _rootResolver = rootResolver;
 
   final GalleryDatabase _database;
+  final Directory? Function()? _rootResolver;
   Directory? _directory;
 
   /// 原图缓存文件路径（sha256 风格的稳定文件名由调用方保证唯一，
@@ -123,11 +126,58 @@ class OriginalCacheStore {
     }
   }
 
+  /// 本地原图缓存当前占用。
+  @override
+  Future<int> sizeBytes() async {
+    try {
+      final directory = await _ensureDirectory();
+      var total = 0;
+      await for (final entity in directory.list()) {
+        if (entity is! File) continue;
+        try {
+          total += await entity.length();
+        } catch (_) {
+          // 单个文件读取失败时跳过。
+        }
+      }
+      return total;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// 删除全部本地原图缓存与数据库记录；相册索引与 OSS 数据不受影响。
+  @override
+  Future<void> clear() async {
+    try {
+      final directory = await _ensureDirectory();
+      await for (final entity in directory.list()) {
+        if (entity is! File) continue;
+        try {
+          if (await entity.exists()) await entity.delete();
+        } catch (error) {
+          debugPrint('[gallery] 原图缓存文件清理失败: $error');
+        }
+      }
+    } catch (error) {
+      debugPrint('[gallery] 原图缓存目录清理失败: $error');
+    }
+    try {
+      final records = await _database.readCacheRecordsByLru();
+      if (records.isNotEmpty) {
+        await _database.removeCacheRecords(records.map((record) => record.key));
+      }
+    } catch (error) {
+      // 数据库未打开等情况下保留记录，后续加载会通过完整性校验清理。
+      debugPrint('[gallery] 原图缓存记录清理失败: $error');
+    }
+  }
+
   Future<Directory> _ensureDirectory() async {
     final existing = _directory;
     if (existing != null) return existing;
     try {
-      final support = await getApplicationSupportDirectory();
+      final support = _rootResolver?.call() ?? await getApplicationSupportDirectory();
       final directory = Directory(
         '${support.path}${Platform.pathSeparator}pdd_original_cache',
       );

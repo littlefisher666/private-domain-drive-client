@@ -11,6 +11,7 @@ import '../../auth/application/session_controller.dart';
 import '../../auth/domain/user_session.dart';
 import '../domain/delete_models.dart';
 import '../domain/file_item.dart';
+import '../domain/recycle_bin_batch_result.dart';
 import '../domain/recycle_bin_entry.dart';
 import '../infrastructure/oss_client.dart';
 import 'workspace_controller.dart';
@@ -378,6 +379,27 @@ class RecycleBinController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 批量恢复：逐条串行执行，单条失败不中断，失败条目保留在回收站。
+  Future<RecycleBinBatchResult> restoreRecycleBinEntries(
+    Iterable<RecycleBinEntry> entries, {
+    void Function(int processed, int total)? onProgress,
+  }) async {
+    final pending = entries.toList(growable: false);
+    final succeeded = <RecycleBinEntry>[];
+    final failed = <RecycleBinEntry>[];
+    for (var index = 0; index < pending.length; index++) {
+      final entry = pending[index];
+      try {
+        await restoreRecycleBinEntry(entry);
+        succeeded.add(entry);
+      } catch (_) {
+        failed.add(entry);
+      }
+      onProgress?.call(index + 1, pending.length);
+    }
+    return RecycleBinBatchResult(succeeded: succeeded, failed: failed);
+  }
+
   /// 立即删除一个回收条目；对象清单已覆盖条目的全部 payload 对象。
   Future<void> purgeRecycleBinEntry(RecycleBinEntry entry) async {
     await _sessionController.ensureSessionReady();
@@ -399,6 +421,27 @@ class RecycleBinController extends ChangeNotifier {
     _workspaceController.invalidateDirectorySummary(originalDir);
     _workspaceController.calibrateDirectorySummary(originalDir);
     notifyListeners();
+  }
+
+  /// 批量彻底删除（含清空回收站）：逐条串行执行，失败条目保留。
+  Future<RecycleBinBatchResult> purgeRecycleBinEntries(
+    Iterable<RecycleBinEntry> entries, {
+    void Function(int processed, int total)? onProgress,
+  }) async {
+    final pending = entries.toList(growable: false);
+    final succeeded = <RecycleBinEntry>[];
+    final failed = <RecycleBinEntry>[];
+    for (var index = 0; index < pending.length; index++) {
+      final entry = pending[index];
+      try {
+        await purgeRecycleBinEntry(entry);
+        succeeded.add(entry);
+      } catch (_) {
+        failed.add(entry);
+      }
+      onProgress?.call(index + 1, pending.length);
+    }
+    return RecycleBinBatchResult(succeeded: succeeded, failed: failed);
   }
 
   Future<String> _availableRestorePath(

@@ -92,7 +92,10 @@ class _HomeShellState extends State<HomeShell> {
             children: <Widget>[
               const WorkspacePage(),
               GalleryPage(key: ValueKey<String>('gallery-mobile')),
-              const TransferTasksPage(embedded: true),
+              TransferTasksPage(
+                embedded: true,
+                onOpenFiles: () => _select(0),
+              ),
               RecycleBinPage(
                 key: ValueKey<String>('recycle-bin-mobile-$_recycleBinVisit'),
                 embedded: true,
@@ -297,9 +300,10 @@ class _DesktopShell extends StatelessWidget {
                           key: const ValueKey<String>('gallery-desktop'),
                           desktopChrome: true,
                         ),
-                        const TransferTasksPage(
+                        TransferTasksPage(
                           embedded: true,
                           desktopChrome: true,
+                          onOpenFiles: () => _selectPage(0),
                         ),
                         RecycleBinPage(
                           key: ValueKey<String>('recycle-bin-$recycleBinVisit'),

@@ -7,7 +7,9 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../app/router/route_names.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/version/app_version.dart';
+import '../../../shared/cache/cache_manager.dart';
 import '../../../shared/state/app_scope.dart';
+import '../../../shared/widgets/app_feedback.dart';
 import '../application/update_service.dart';
 import '../infrastructure/github_release_client.dart';
 import '../infrastructure/macos_sparkle_updater.dart';
@@ -96,6 +98,9 @@ class _SettingsPageState extends State<SettingsPage> {
   UpdateCheckResult? _updateCheck;
   bool _checkingUpdate = false;
   bool _updateCheckFailed = false;
+  int? _cacheBytes;
+  bool _cacheLoading = false;
+  bool _cacheClearing = false;
 
   /// 本地调试配置（DISABLE_STARTUP_UPDATE_CHECK）强制关闭启动检查时，
   /// 设置页开关锁定为关，避免展示与实际行为不一致。
@@ -108,6 +113,7 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
+    unawaited(_refreshCacheSize());
     if (_sparkleEnabled) {
       unawaited(_sparkle.initialize());
       _sparkleSubscription = _sparkle.statusStream.listen((_) {
@@ -132,8 +138,50 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  Future<void> _refreshUpdateStatus() async {
-    if (_checkingUpdate) return;
+  Future<void> _refreshCacheSize() async {
+    setState(() => _cacheLoading = true);
+    try {
+      final bytes = await AppScope.read(context).cacheManager.sizeBytes();
+      if (mounted) setState(() => _cacheBytes = bytes);
+    } catch (error, stackTrace) {
+      debugPrint('缓存占用统计失败：$error\n$stackTrace');
+      if (mounted) setState(() => _cacheBytes = null);
+    } finally {
+      if (mounted) setState(() => _cacheLoading = false);
+    }
+  }
+
+  String get _cacheSubtitle {
+    if (_cacheClearing) return '正在清理…';
+    if (_cacheLoading) return '计算中…';
+    final bytes = _cacheBytes;
+    return bytes == null ? '暂不可用' : formatCacheSize(bytes);
+  }
+
+  Future<void> _clearCache() async {
+    final confirmed = await AppFeedback.confirm(
+      context,
+      title: '清理缓存？',
+      message: '将删除图片、文档、相册原图与分享临时文件，清理后再次查看会重新下载。'
+          '已下载到本地的文件与登录状态不受影响。',
+      confirmLabel: '清理',
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _cacheClearing = true);
+    try {
+      final freed = await AppScope.read(context).cacheManager.clear();
+      if (!mounted) return;
+      await _refreshCacheSize();
+      if (!mounted) return;
+      AppFeedback.showSnack(context, '已释放 ${formatCacheSize(freed)}');
+    } catch (error, stackTrace) {
+      if (mounted) AppFeedback.showError(context, error, stackTrace);
+    } finally {
+      if (mounted) setState(() => _cacheClearing = false);
+    }
+  }
+
+  Future<void> _refreshUpdateStatus() async {    if (_checkingUpdate) return;
     setState(() => _checkingUpdate = true);
     try {
       final result = await _updates.checkLatest();
@@ -314,6 +362,30 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             SizedBox(height: desktop ? 16 : 16),
             if (desktop)
+              Text('存储', style: theme.textTheme.titleMedium)
+            else
+              _SectionLabel(label: '存储', color: scheme.onSurfaceVariant),
+            const SizedBox(height: 8),
+            Card(
+              shape: desktop ? null : _mobileCardShape(),
+              child: ListTile(
+                contentPadding: _mobileTilePadding(desktop),
+                minVerticalPadding: _mobileTileVerticalPadding(desktop),
+                leading: _SettingsLeadingIcon(
+                  icon: Icons.cleaning_services_outlined,
+                  desktop: desktop,
+                ),
+                title: const Text('缓存占用'),
+                subtitle: Text(_cacheSubtitle),
+                trailing: TextButton(
+                  onPressed:
+                      _cacheLoading || _cacheClearing ? null : _clearCache,
+                  child: const Text('清理缓存'),
+                ),
+              ),
+            ),
+            SizedBox(height: desktop ? 16 : 16),
+            if (desktop)
               Text('显示', style: theme.textTheme.titleMedium)
             else
               _SectionLabel(label: '显示', color: scheme.onSurfaceVariant),
@@ -474,6 +546,14 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _logout() async {
+    final confirmed = await AppFeedback.confirm(
+      context,
+      title: '退出登录？',
+      message: '退出后需要重新登录才能继续使用。',
+      confirmLabel: '退出登录',
+      destructive: true,
+    );
+    if (!confirmed || !mounted) return;
     await AppScope.of(context).sessionController.logout();
     if (!mounted) return;
     Navigator.of(context).pushNamedAndRemoveUntil(
@@ -573,11 +653,10 @@ class _SettingsPageState extends State<SettingsPage> {
         progress.value = item.fraction;
       }
       if (mounted) Navigator.of(context, rootNavigator: true).pop();
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (mounted) {
         Navigator.of(context, rootNavigator: true).pop();
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.toString())));
+        AppFeedback.showError(context, error, stackTrace);
       }
     } finally {
       progress.dispose();

@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../../core/errors/app_error.dart';
+import '../../../shared/cache/local_cache_store.dart';
 import '../../workspace/domain/file_item.dart';
 
 /// 分享专用临时缓存：按对象路径与版本分目录，并保留原始文件名，
@@ -12,7 +13,7 @@ import '../../workspace/domain/file_item.dart';
 ///
 /// 目录结构：
 /// `pdd_share_cache/<sha256(objectPath|versionToken)>/<原始文件名>`
-class ShareCacheStore {
+class ShareCacheStore implements LocalCacheStore {
   ShareCacheStore({
     Directory? Function()? rootResolver,
     this.retention = defaultRetention,
@@ -225,6 +226,44 @@ class ShareCacheStore {
     } catch (_) {
       // 清理失败不影响后续分享。
     }
+  }
+
+  /// 分享临时文件当前占用。
+  @override
+  Future<int> sizeBytes() async {
+    final root = await _tryRoot();
+    if (root == null) return 0;
+    var total = 0;
+    try {
+      await for (final entity
+          in root.list(recursive: true, followLinks: false)) {
+        if (entity is! File) continue;
+        try {
+          total += await entity.length();
+        } catch (_) {
+          // 单个文件读取失败时跳过。
+        }
+      }
+    } catch (_) {
+      return total;
+    }
+    return total;
+  }
+
+  /// 删除全部分享临时文件并清理空目录。
+  @override
+  Future<void> clear() async {
+    final root = await _tryRoot();
+    if (root == null) return;
+    try {
+      await for (final entity
+          in root.list(recursive: true, followLinks: false)) {
+        if (entity is File) await _deleteQuietly(entity);
+      }
+    } catch (_) {
+      // 遍历失败时保留未能删除的文件，下次清理继续处理。
+    }
+    await _pruneEmptyDirectories(root);
   }
 
   Future<void> _touch(File file) async {

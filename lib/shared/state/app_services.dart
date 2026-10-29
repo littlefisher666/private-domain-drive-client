@@ -21,6 +21,8 @@ import '../../features/workspace/application/recycle_bin_controller.dart';
 import '../../features/workspace/application/workspace_controller.dart';
 import '../../features/workspace/infrastructure/alias_repository.dart';
 import '../../features/workspace/infrastructure/oss_client.dart';
+import '../cache/cache_manager.dart';
+import '../cache/local_cache_store.dart';
 import '../gallery_index_hooks.dart';
 import '../transfer_keepalive.dart';
 
@@ -46,6 +48,7 @@ class AppServices extends ChangeNotifier {
     UpdateService? updateService,
     ShareCacheStore? shareCacheStore,
     ShareFilesInvoker? shareFilesInvoker,
+    CacheManager? cacheManager,
     bool? disableStartupUpdateCheck,
   }) : ossClient = ossClient ?? OssClient() {
     // 构造后统一使用字段（参数可能为 null，字段已兜底创建）。
@@ -105,6 +108,12 @@ class AppServices extends ChangeNotifier {
       cacheStore: shareCacheStore,
       shareInvoker: shareFilesInvoker,
     )..addListener(notifyListeners);
+    this.cacheManager = cacheManager ??
+        CacheManager(
+          shareCacheStore: fileShareController.cacheStore,
+          originalCacheStore: () => _originalCacheStore,
+          onCleared: () => _cacheClearedHook?.call() ?? Future<void>.value(),
+        );
   }
 
   /// 相册等模块与主控制器共用同一个 OSS 客户端（凭证配置状态共享）。
@@ -139,6 +148,21 @@ class AppServices extends ChangeNotifier {
 
   /// Android 单文件系统分享：本地副本准备、取消与分享结果。
   late final FileShareController fileShareController;
+
+  /// 本地缓存占用统计与统一清理。
+  late final CacheManager cacheManager;
+
+  LocalCacheStore? _originalCacheStore;
+  Future<void> Function()? _cacheClearedHook;
+
+  /// 注入相册原图缓存与清理后的刷新回调（相册控制器初始化晚于本类）。
+  void setOriginalCacheStore(
+    LocalCacheStore? store, {
+    Future<void> Function()? onCleared,
+  }) {
+    _originalCacheStore = store;
+    _cacheClearedHook = onCleared;
+  }
 
   /// 更新服务与设置页、强制升级拦截页共享同一实例（检查结果口径一致）。
   UpdateService get updateService => settingsController.updateService;

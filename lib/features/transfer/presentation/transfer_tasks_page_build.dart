@@ -193,6 +193,47 @@ extension _TransferTasksPageBuild on _TransferTasksPageState {
     });
   }
 
+  /// 空态：完全无任务时展示说明与「去文件页」入口；类型筛选无结果时
+  /// 只展示该类型的空态文案，不展示跨类型引导。
+  Widget _buildEmptyState({
+    required ThemeData theme,
+    required bool typeFiltered,
+  }) {
+    final mutedStyle = TextStyle(color: theme.colorScheme.onSurfaceVariant);
+    if (typeFiltered) {
+      return Center(
+        child: Text(
+          _selectedType == TransferTaskType.upload ? '暂无上传任务' : '暂无下载任务',
+          style: mutedStyle,
+        ),
+      );
+    }
+    final onOpenFiles = widget.onOpenFiles;
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(
+            Icons.swap_vert_circle_outlined,
+            size: 44,
+            color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+          ),
+          const SizedBox(height: 12),
+          Text('暂无传输任务', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 4),
+          Text('上传或下载后任务会出现在这里', style: mutedStyle),
+          if (onOpenFiles != null) ...<Widget>[
+            const SizedBox(height: 16),
+            FilledButton.tonal(
+              onPressed: onOpenFiles,
+              child: const Text('去文件页'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildBody({
     required BuildContext context,
     required AppServices controller,
@@ -236,6 +277,7 @@ extension _TransferTasksPageBuild on _TransferTasksPageState {
         candidates.map((entry) => entry.task).toList(growable: false);
     final queue = controller.transferQueue;
     final hasMore = queue.historyHasMore;
+    final finishedCount = tasks.where((task) => task.isFinished).length;
     _scheduleAutoLoadWhenEmpty(controller, visibleTasks);
 
     final typeFilter = TransferTypeFilter(
@@ -261,17 +303,9 @@ extension _TransferTasksPageBuild on _TransferTasksPageState {
       onCancel: () => _cancelSelectedTasks(controller, tasks),
       onClear: _clearTaskSelection,
     );
-    final emptyState = Center(
-      child: Text(
-        _selectedType == TransferTaskType.upload
-            ? '暂无上传任务'
-            : _selectedType == TransferTaskType.download
-                ? '暂无下载任务'
-                : '暂无传输任务',
-        style: TextStyle(
-          color: theme.colorScheme.onSurfaceVariant,
-        ),
-      ),
+    final emptyState = _buildEmptyState(
+      theme: theme,
+      typeFiltered: _selectedType != null,
     );
 
     if (desktop) {
@@ -440,9 +474,15 @@ extension _TransferTasksPageBuild on _TransferTasksPageState {
                             controller.transferController.abandonAllInterruptedUploads();
                             AppFeedback.showSnack(
                                 context, '已放弃 $interruptedCount 个中断任务');
+                          } else if (value == 'concurrency') {
+                            unawaited(showTransferConcurrencyPicker(
+                                context, controller));
                           } else if (value == 'clear') {
-                            controller.transferController.clearCompletedTasks();
-                            AppFeedback.showSnack(context, '已清除已结束任务');
+                            unawaited(confirmAndClearFinishedTasks(
+                              context,
+                              controller,
+                              count: finishedCount,
+                            ));
                           }
                         },
                         itemBuilder: (_) => <PopupMenuEntry<String>>[
@@ -467,8 +507,15 @@ extension _TransferTasksPageBuild on _TransferTasksPageState {
                             ),
                           ],
                           const PopupMenuItem(
+                            value: 'concurrency',
+                            child: Text('传输并发数'),
+                          ),
+                          PopupMenuItem(
                             value: 'clear',
-                            child: Text('清除已结束任务'),
+                            enabled: finishedCount > 0,
+                            child: Text(finishedCount > 0
+                                ? '清除已结束任务 ($finishedCount)'
+                                : '清除已结束任务'),
                           ),
                         ],
                       ),

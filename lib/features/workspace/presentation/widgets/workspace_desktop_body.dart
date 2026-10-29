@@ -21,6 +21,9 @@ class WorkspaceDesktopBody extends StatelessWidget {
     required this.sortOption,
     required this.selectedListenable,
     required this.directorySizeStatesListenable,
+    this.filterController,
+    this.filterQuery = '',
+    this.onFilterChanged,
     required this.listArea,
     required this.onGoUp,
     required this.onRefresh,
@@ -49,6 +52,9 @@ class WorkspaceDesktopBody extends StatelessWidget {
   final ValueNotifier<FileItem?> selectedListenable;
   final ValueNotifier<Map<String, DirectorySizeState>>
       directorySizeStatesListenable;
+  final TextEditingController? filterController;
+  final String filterQuery;
+  final ValueChanged<String>? onFilterChanged;
   final Widget listArea;
   final VoidCallback onGoUp;
   final VoidCallback onRefresh;
@@ -67,6 +73,38 @@ class WorkspaceDesktopBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // 工具栏控件统一 32 高，避免按钮、分段控件与筛选框参差。
+    final toolbarOutlinedStyle = OutlinedButton.styleFrom(
+      foregroundColor: scheme.onSurface,
+      backgroundColor: scheme.surfaceContainerHighest,
+      side: BorderSide.none,
+      minimumSize: const Size(0, 32),
+      maximumSize: const Size(double.infinity, 32),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      visualDensity: VisualDensity.standard,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      textStyle: const TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+        height: 1.2,
+      ),
+    );
+    final toolbarFilledStyle = FilledButton.styleFrom(
+      backgroundColor: scheme.primary,
+      foregroundColor: scheme.onPrimary,
+      elevation: 0,
+      minimumSize: const Size(0, 32),
+      maximumSize: const Size(double.infinity, 32),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      visualDensity: VisualDensity.standard,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      textStyle: const TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+        height: 1.2,
+      ),
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -87,6 +125,7 @@ class WorkspaceDesktopBody extends StatelessWidget {
                 children: <Widget>[
                   if (canGoUp) ...<Widget>[
                     OutlinedButton(
+                      style: toolbarOutlinedStyle,
                       onPressed: onGoUp,
                       child: const Text('‹ 上级'),
                     ),
@@ -127,6 +166,75 @@ class WorkspaceDesktopBody extends StatelessWidget {
                       thumbnailSize: thumbnailSize,
                       onChanged: onThumbnailSizeChanged,
                     ),
+                  if (filterController != null && onFilterChanged != null)
+                    SizedBox(
+                      width: 220,
+                      height: 32,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: scheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: scheme.outline),
+                        ),
+                        child: Row(
+                          children: <Widget>[
+                            const SizedBox(width: 8),
+                            Icon(
+                              Icons.search,
+                              size: 16,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              // 字体行盒下重，底边留白让文字与图标视觉居中。
+                              child: Padding(
+                                padding: const EdgeInsets.only(bottom: 6),
+                                child: TextField(
+                                  controller: filterController,
+                                  onChanged: onFilterChanged,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    height: 1.2,
+                                  ),
+                                  textAlignVertical: TextAlignVertical.center,
+                                  decoration: InputDecoration(
+                                    hintText: '筛选当前目录',
+                                    hintStyle: TextStyle(
+                                      fontSize: 13,
+                                      height: 1.2,
+                                      color: scheme.onSurfaceVariant,
+                                    ),
+                                    border: InputBorder.none,
+                                    enabledBorder: InputBorder.none,
+                                    focusedBorder: InputBorder.none,
+                                    filled: false,
+                                    isDense: true,
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (filterQuery.isNotEmpty)
+                              InkWell(
+                                borderRadius: BorderRadius.circular(10),
+                                onTap: () {
+                                  filterController!.clear();
+                                  onFilterChanged!('');
+                                },
+                                child: Padding(
+                                  padding: const EdgeInsets.all(4),
+                                  child: Icon(
+                                    Icons.clear,
+                                    size: 14,
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                            const SizedBox(width: 6),
+                          ],
+                        ),
+                      ),
+                    ),
                   PopupMenuButton<FileSortOption>(
                     tooltip: '排序',
                     onSelected: onSortChanged,
@@ -152,6 +260,7 @@ class WorkspaceDesktopBody extends StatelessWidget {
                     // 保持与“刷新”等工具栏按钮同一视觉语言；点击由外层菜单处理。
                     child: IgnorePointer(
                       child: OutlinedButton.icon(
+                        style: toolbarOutlinedStyle,
                         onPressed: () {},
                         icon: const Icon(Icons.sort, size: 18),
                         label: Text('排序：${sortOption.shortLabel}'),
@@ -159,19 +268,23 @@ class WorkspaceDesktopBody extends StatelessWidget {
                     ),
                   ),
                   OutlinedButton(
+                    style: toolbarOutlinedStyle,
                     onPressed: onRefresh,
                     child: const Text('刷新'),
                   ),
                   if (canUpload) ...<Widget>[
                     OutlinedButton(
+                      style: toolbarOutlinedStyle,
                       onPressed: onCreateFolder,
                       child: const Text('新建文件夹'),
                     ),
                     FilledButton(
+                      style: toolbarFilledStyle,
                       onPressed: onUpload,
                       child: const Text('上传文件'),
                     ),
                     FilledButton(
+                      style: toolbarFilledStyle,
                       onPressed: onUploadDirectory,
                       child: const Text('上传文件夹'),
                     ),

@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../core/errors/app_error.dart';
 import '../../../shared/transfer_keepalive.dart';
 import '../../workspace/infrastructure/oss_client.dart'
     show TransferCanceledException;
@@ -434,7 +435,7 @@ class TransferQueue {
           (task) => task.copyWith(
                 status: TransferTaskStatus.failed,
                 message: '失败',
-                error: error.toString().replaceFirst('Bad state: ', ''),
+                error: userFacingErrorMessage(error),
                 finishedAt: DateTime.now(),
               ));
     } finally {

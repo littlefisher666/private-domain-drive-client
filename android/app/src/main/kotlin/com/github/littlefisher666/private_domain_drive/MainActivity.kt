@@ -85,10 +85,11 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 if (call.method != "select") return@setMethodCallHandler result.notImplemented()
                 directoryResult = result
+                val initialUri = resolveDownloadRootUri(call.argument<String>("initialDirectory"))
                 startActivityForResult(
                     Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                        putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse("content://com.android.externalstorage.documents/root/primary:Download"))
+                        putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
                     },
                     DOWNLOAD_DIRECTORY_REQUEST,
                 )
@@ -220,6 +221,35 @@ class MainActivity : FlutterActivity() {
         if (resultCode != RESULT_OK || uri == null) return result.success(null)
         contentResolver.takePersistableUriPermission(uri, data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION))
         result.success(uri.toString())
+    }
+
+    /**
+     * 记忆目录仅在持久化写授权仍有效且目录可列举时用作初始位置；
+     * 授权失效或目录被删除时回退到系统下载目录。
+     */
+    private fun resolveDownloadRootUri(remembered: String?): Uri {
+        val fallback =
+            Uri.parse("content://com.android.externalstorage.documents/root/primary:Download")
+        if (remembered.isNullOrBlank()) return fallback
+        val uri = runCatching { Uri.parse(remembered) }.getOrNull() ?: return fallback
+        if (!DocumentsContract.isTreeUri(uri)) return fallback
+        val hasWriteGrant = contentResolver.persistedUriPermissions.any {
+            it.uri == uri && it.isWritePermission
+        }
+        if (!hasWriteGrant) return fallback
+        val accessible = runCatching {
+            val documentId = DocumentsContract.getTreeDocumentId(uri)
+            val children =
+                DocumentsContract.buildChildDocumentsUriUsingTree(uri, documentId)
+            contentResolver.query(
+                children,
+                arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+                null,
+                null,
+                null,
+            )?.use { true } ?: false
+        }.getOrDefault(false)
+        return if (accessible) uri else fallback
     }
 
     /**

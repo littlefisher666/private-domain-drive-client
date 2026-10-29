@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/errors/app_error.dart';
 import '../../../shared/state/app_scope.dart';
 import '../infrastructure/github_release_client.dart';
 import '../infrastructure/macos_sparkle_updater.dart';
@@ -114,9 +115,7 @@ class _ForcedUpgradePageState extends State<ForcedUpgradePage>
     } catch (error) {
       debugPrint('[强制升级] 更新包下载/安装失败：$error');
       if (mounted) {
-        _fail(error
-            .toString()
-            .replaceFirst(RegExp(r'^(\w*Exception: |Bad state: )'), ''));
+        _fail(userFacingErrorMessage(error));
       }
     }
   }

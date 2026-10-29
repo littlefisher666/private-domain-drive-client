@@ -92,12 +92,9 @@ class _ShareTargetDialogState extends State<ShareTargetDialog> {
       if (!mounted) return;
       AppFeedback.showSnack(context, '已创建 ${name.trim()}');
       await _loadDirectories();
-    } catch (error) {
+    } catch (error, stackTrace) {
       if (!mounted) return;
-      AppFeedback.showSnack(
-        context,
-        error.toString().replaceFirst('Bad state: ', ''),
-      );
+      AppFeedback.showError(context, error, stackTrace);
     }
   }
 

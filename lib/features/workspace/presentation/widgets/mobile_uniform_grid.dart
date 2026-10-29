@@ -54,6 +54,7 @@ class MobileUniformGrid extends StatelessWidget {
       }
     }
     return CustomScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
       slivers: <Widget>[
         if (images.isNotEmpty)
           SliverPadding(

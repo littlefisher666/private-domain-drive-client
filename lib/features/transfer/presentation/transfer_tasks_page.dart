@@ -9,6 +9,8 @@ import '../../../shared/widgets/app_feedback.dart';
 import '../domain/transfer_task.dart';
 import '../domain/transfer_type_counts.dart';
 import 'transfer_format.dart';
+import 'widgets/transfer_clear_finished.dart';
+import 'widgets/transfer_concurrency_picker.dart';
 import 'widgets/transfer_header_actions.dart';
 import 'widgets/transfer_selection_actions.dart';
 import 'widgets/transfer_type_filter.dart';
@@ -20,10 +22,14 @@ class TransferTasksPage extends StatefulWidget {
     super.key,
     this.embedded = false,
     this.desktopChrome = false,
+    this.onOpenFiles,
   });
 
   final bool embedded;
   final bool desktopChrome;
+
+  /// 空态「去文件页」跳转；由 HomeShell 注入，独立路由页面不提供。
+  final VoidCallback? onOpenFiles;
 
   @override
   State<TransferTasksPage> createState() => _TransferTasksPageState();

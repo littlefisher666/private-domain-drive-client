@@ -109,6 +109,12 @@ class GalleryController extends ChangeNotifier
 
   bool get isDesktop => !Platform.isAndroid && !Platform.isIOS;
 
+  /// 原图缓存仓库：设置页统一清理缓存时复用同一实例。
+  OriginalCacheStore get originalCacheStore => _cacheStore;
+
+  /// 清理本地缓存后重新读取已缓存原图集合，刷新角标。
+  Future<void> refreshCachedKeys() => _refreshCachedKeys();
+
   /// 传输任务只读快照（查看器判断原图下载状态用）。
   List<TransferTask> get appTasks => _services.transferQueue.tasks;
 

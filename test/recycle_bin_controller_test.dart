@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:private_domain_drive_client/core/errors/app_error.dart';
 import 'package:private_domain_drive_client/features/auth/application/session_controller.dart';
 import 'package:private_domain_drive_client/features/auth/domain/user_session.dart';
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
@@ -57,8 +58,7 @@ void main() {
           )));
     });
 
-    test('删除非空文件夹会递归删除子文件与子目录', () async {
-      final oss = _FakeOssClient()
+    test('删除非空文件夹会递归删除子文件与子目录', () async {      final oss = _FakeOssClient()
         ..itemsByPath['shared/'] = const <FileItem>[
           FileItem(path: 'shared/目录/', name: '目录', isDirectory: true),
         ]
@@ -97,6 +97,137 @@ void main() {
       expect(oss.copies, hasLength(4));
       expect(stack.workspace.sidebarDirectories, isEmpty);
       expect(stack.workspace.currentPath, 'shared/');
+    });
+
+    test('批量恢复逐条处理重名且全部成功', () async {
+      final oss = _FakeOssClient()..existingPaths.add('shared/资料.txt');
+      final stack = await _recycleBinStack(oss: oss);
+      addTearDown(stack.dispose);
+      final entries = <RecycleBinEntry>[
+        RecycleBinEntry(
+          id: 'batch-1',
+          name: '资料.txt',
+          originalPath: 'shared/资料.txt',
+          isDirectory: false,
+          deletedAt: DateTime(2026, 9, 20),
+          objects: const <String, String>{
+            'shared/资料.txt': 'shared/.trash/batch-1/payload/资料.txt',
+          },
+        ),
+        RecycleBinEntry(
+          id: 'batch-2',
+          name: '报告.pdf',
+          originalPath: 'shared/报告.pdf',
+          isDirectory: false,
+          deletedAt: DateTime(2026, 9, 21),
+          objects: const <String, String>{
+            'shared/报告.pdf': 'shared/.trash/batch-2/payload/报告.pdf',
+          },
+        ),
+      ];
+      final progress = <(int, int)>[];
+
+      final result = await stack.controller.restoreRecycleBinEntries(
+        entries,
+        onProgress: (processed, total) => progress.add((processed, total)),
+      );
+
+      expect(result.successCount, 2);
+      expect(result.failureCount, 0);
+      expect(progress, <(int, int)>[(1, 2), (2, 2)]);
+      expect(
+        oss.copies,
+        contains((
+          'shared/.trash/batch-1/payload/资料.txt',
+          'shared/资料（已还原）.txt',
+        )),
+      );
+      expect(
+        oss.copies,
+        contains((
+          'shared/.trash/batch-2/payload/报告.pdf',
+          'shared/报告.pdf',
+        )),
+      );
+      expect(oss.deleted, contains('shared/.trash/batch-1/manifest.json'));
+      expect(oss.deleted, contains('shared/.trash/batch-2/manifest.json'));
+    });
+
+    test('批量恢复部分失败时失败条目保留且报告数量', () async {
+      final oss = _FakeOssClient()
+        ..copyFailureSources.add('shared/.trash/batch-2/payload/报告.pdf');
+      final stack = await _recycleBinStack(oss: oss);
+      addTearDown(stack.dispose);
+      final entries = <RecycleBinEntry>[
+        RecycleBinEntry(
+          id: 'batch-1',
+          name: '资料.txt',
+          originalPath: 'shared/资料.txt',
+          isDirectory: false,
+          deletedAt: DateTime(2026, 9, 20),
+          objects: const <String, String>{
+            'shared/资料.txt': 'shared/.trash/batch-1/payload/资料.txt',
+          },
+        ),
+        RecycleBinEntry(
+          id: 'batch-2',
+          name: '报告.pdf',
+          originalPath: 'shared/报告.pdf',
+          isDirectory: false,
+          deletedAt: DateTime(2026, 9, 21),
+          objects: const <String, String>{
+            'shared/报告.pdf': 'shared/.trash/batch-2/payload/报告.pdf',
+          },
+        ),
+      ];
+
+      final result =
+          await stack.controller.restoreRecycleBinEntries(entries);
+
+      expect(result.successCount, 1);
+      expect(result.failureCount, 1);
+      expect(result.failed.single.id, 'batch-2');
+      expect(oss.deleted, contains('shared/.trash/batch-1/manifest.json'));
+      expect(
+        oss.deleted,
+        isNot(contains('shared/.trash/batch-2/manifest.json')),
+      );
+    });
+
+    test('批量彻底删除逐条执行并保留失败条目', () async {
+      final oss = _FakeOssClient()
+        ..deleteFailurePaths.add('shared/.trash/batch-2/manifest.json');
+      final stack = await _recycleBinStack(oss: oss);
+      addTearDown(stack.dispose);
+      final entries = <RecycleBinEntry>[
+        RecycleBinEntry(
+          id: 'batch-1',
+          name: '资料.txt',
+          originalPath: 'shared/资料.txt',
+          isDirectory: false,
+          deletedAt: DateTime(2026, 9, 20),
+          objects: const <String, String>{
+            'shared/资料.txt': 'shared/.trash/batch-1/payload/资料.txt',
+          },
+        ),
+        RecycleBinEntry(
+          id: 'batch-2',
+          name: '报告.pdf',
+          originalPath: 'shared/报告.pdf',
+          isDirectory: false,
+          deletedAt: DateTime(2026, 9, 21),
+          objects: const <String, String>{
+            'shared/报告.pdf': 'shared/.trash/batch-2/payload/报告.pdf',
+          },
+        ),
+      ];
+
+      final result = await stack.controller.purgeRecycleBinEntries(entries);
+
+      expect(result.successCount, 1);
+      expect(result.failureCount, 1);
+      expect(result.failed.single.id, 'batch-2');
+      expect(oss.deleted, contains('shared/.trash/batch-1/manifest.json'));
     });
   });
 }
@@ -196,6 +327,8 @@ class _FakeOssClient extends OssClient {
   int directorySizeCalls = 0;
   final List<String> createdFolders = <String>[];
   final List<String> deleted = <String>[];
+  final Set<String> copyFailureSources = <String>{};
+  final Set<String> deleteFailurePaths = <String>{};
   final List<(String, String)> copies = <(String, String)>[];
   final List<({String path, String localPath})> uploads =
       <({String path, String localPath})>[];
@@ -228,6 +361,9 @@ class _FakeOssClient extends OssClient {
 
   @override
   Future<void> copy(String from, String to, UserSession session) async {
+    if (copyFailureSources.contains(from)) {
+      throw AppError('模拟拷贝失败', code: 'OSS_COPY_FAILED');
+    }
     copies.add((from, to));
   }
 
@@ -246,8 +382,20 @@ class _FakeOssClient extends OssClient {
     UserSession session,
   ) async {
     final values = paths.toList(growable: false);
-    deleted.addAll(values);
-    return BatchDeleteResult(deletedPaths: values);
+    final deletedPaths = <String>[];
+    final failedPaths = <String>[];
+    for (final path in values) {
+      if (deleteFailurePaths.contains(path)) {
+        failedPaths.add(path);
+      } else {
+        deletedPaths.add(path);
+        deleted.add(path);
+      }
+    }
+    return BatchDeleteResult(
+      deletedPaths: deletedPaths,
+      failedPaths: failedPaths,
+    );
   }
 
   @override

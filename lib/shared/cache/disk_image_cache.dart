@@ -5,11 +5,13 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'local_cache_store.dart';
+
 enum DiskImageCacheKind { thumbnails, previews }
 
 /// 本地磁盘图片缓存。缩略图与预览共用同一套读写与 LRU 淘汰机制，
 /// 任何读写失败都视为缓存不存在，由调用方直接回源 OSS。
-class DiskImageCache {
+class DiskImageCache implements LocalCacheStore {
   DiskImageCache({
     Directory? Function()? rootResolver,
     int thumbnailByteLimit = 500 * 1024 * 1024,
@@ -137,6 +139,56 @@ class DiskImageCache {
         // 删除失败时仍从索引移除，避免淘汰循环卡死。
       }
       index.remove(entry.key);
+    }
+  }
+
+  /// 当前缓存占用（缩略图与预览合计）。
+  @override
+  Future<int> sizeBytes() async {
+    try {
+      for (final kind in DiskImageCacheKind.values) {
+        await _ensureReady(kind);
+      }
+      return _indexes.values.fold<int>(
+        0,
+        (total, index) =>
+            total + index.values.fold<int>(0, (sum, entry) => sum + entry.size),
+      );
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// 删除全部缓存文件并清空内存索引，目录本身保留供后续写入。
+  @override
+  Future<void> clear() async {
+    for (final kind in DiskImageCacheKind.values) {
+      try {
+        await _ensureReady(kind);
+        final index = _indexes[kind];
+        if (index == null) continue;
+        for (final path in index.keys.toList(growable: false)) {
+          await _deleteQuietly(File(path));
+        }
+        index.clear();
+        final directory = _directories[kind];
+        if (directory == null) continue;
+        await for (final entity in directory.list()) {
+          if (entity is File && entity.path.endsWith('.tmp')) {
+            await _deleteQuietly(entity);
+          }
+        }
+      } catch (_) {
+        // 单个分类清理失败不影响其余分类。
+      }
+    }
+  }
+
+  Future<void> _deleteQuietly(File file) async {
+    try {
+      if (await file.exists()) await file.delete();
+    } catch (_) {
+      // 删除失败时仍从索引移除，避免清理流程中断。
     }
   }
 }
