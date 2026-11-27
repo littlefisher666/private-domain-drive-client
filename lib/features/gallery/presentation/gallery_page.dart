@@ -12,11 +12,11 @@ import 'widgets/gallery_page_desktop_selection_bar.dart';
 import 'widgets/gallery_page_desktop_shortcuts.dart';
 import 'widgets/gallery_page_desktop_status_line.dart';
 import 'widgets/gallery_page_error_view.dart';
-import 'widgets/gallery_page_group_header.dart';
 import 'widgets/gallery_page_mobile_app_bar.dart';
 import 'widgets/gallery_page_mobile_batch_bar.dart';
 import 'widgets/gallery_page_photo_cell.dart';
 import 'widgets/gallery_page_scan_progress_view.dart';
+import 'widgets/gallery_timeline_view.dart';
 
 /// 相册时间线页：双端共用实现，桌面端按月分组并支持框选/快捷键，
 /// 移动端按天分组并支持长按多选。
@@ -157,47 +157,25 @@ class _GalleryPageState extends State<GalleryPage> {
     final cellExtent =
         widget.desktopChrome ? 170.0 : (MediaQuery.sizeOf(context).width / 3.4);
 
-    final items = <Widget>[
-      for (final group in groups) ...<Widget>[
-        GalleryPageGroupHeader(
-          group: group,
-          collapsed: _collapsedGroups.contains(group.key),
-          onToggle: () => setState(() {
-            if (!_collapsedGroups.remove(group.key)) {
-              _collapsedGroups.add(group.key);
-            }
-          }),
-        ),
-        if (!_collapsedGroups.contains(group.key))
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 3),
-            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: cellExtent,
-              mainAxisSpacing: 2,
-              crossAxisSpacing: 2,
-              childAspectRatio: 1,
-            ),
-            itemCount: group.entries.length,
-            itemBuilder: (context, index) {
-              final entry = group.entries[index];
-              return GalleryPagePhotoCell(
-                controller: controller,
-                entry: entry,
-                cellKey: _cellKeys.putIfAbsent(entry.key, GlobalKey.new),
-                desktop: widget.desktopChrome,
-                onTap: () => _onCellTap(controller, entry),
-                onLongPress: widget.desktopChrome
-                    ? null
-                    : () => _onCellLongPress(controller, entry),
-              );
-            },
-          ),
-      ],
-    ];
-
-    final list = ListView(children: items);
+    final list = GalleryTimelineView(
+      groups: groups,
+      collapsedGroups: _collapsedGroups,
+      onToggleGroup: _toggleGroup,
+      cellExtent: cellExtent,
+      cellBuilder: (context, group, index) {
+        final entry = group.entries[index];
+        return GalleryPagePhotoCell(
+          controller: controller,
+          entry: entry,
+          cellKey: _cellKeys.putIfAbsent(entry.key, GlobalKey.new),
+          desktop: widget.desktopChrome,
+          onTap: () => _onCellTap(controller, entry),
+          onLongPress: widget.desktopChrome
+              ? null
+              : () => _onCellLongPress(controller, entry),
+        );
+      },
+    );
 
     if (!widget.desktopChrome) return list;
 
@@ -265,6 +243,14 @@ class _GalleryPageState extends State<GalleryPage> {
           ),
       ],
     );
+  }
+
+  void _toggleGroup(TimelineGroup group) {
+    setState(() {
+      if (!_collapsedGroups.remove(group.key)) {
+        _collapsedGroups.add(group.key);
+      }
+    });
   }
 
   void _pruneCellKeys(List<TimelineGroup> groups) {

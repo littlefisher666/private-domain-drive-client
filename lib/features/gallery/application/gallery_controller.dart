@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../shared/cache/disk_image_cache.dart';
+import '../../../shared/cache/thumbnail_request_scheduler.dart';
 import '../../../shared/gallery_index_hooks.dart';
 import '../../../shared/state/app_services.dart';
 import '../../auth/domain/user_session.dart';
@@ -60,6 +61,12 @@ class GalleryController extends ChangeNotifier
   late final PhotoIndexRepository _repository;
   @override
   late final OriginalCacheStore _cacheStore;
+
+  /// 网格缩略图统一经调度器提交：并发受限、同对象去重、当前屏优先。
+  final ThumbnailRequestScheduler _gridThumbnailScheduler =
+      ThumbnailRequestScheduler(
+    maxConcurrency: GalleryConfig.gridThumbnailConcurrency,
+  );
 
   /// 会话状态只读访问：按域取自聚合层的会话控制器。
   @override
@@ -402,8 +409,21 @@ class GalleryController extends ChangeNotifier
 
   /// 相册网格缩略图：有索引缩略图映射（视频截帧/超大图本地生成）优先
   /// 走缩略图对象，其余图片走 OSS 图片处理参数；无映射返回 null，
-  /// 由界面展示占位图。
-  Future<List<int>?> loadGridThumbnail(PhotoEntry entry) async {
+  /// 由界面展示占位图。请求经全局调度器限流并按缓存键去重。
+  Future<List<int>?> loadGridThumbnail(PhotoEntry entry) {
+    return _gridThumbnailScheduler.run(
+      _gridCacheKey(entry),
+      () => _loadGridThumbnailUncached(entry),
+    );
+  }
+
+  /// 取消某条目尚未开始分发的网格缩略图请求（格子回收时调用）；
+  /// 已发出的请求会继续完成并写入磁盘缓存。
+  void cancelGridThumbnail(PhotoEntry entry) {
+    _gridThumbnailScheduler.cancel(_gridCacheKey(entry));
+  }
+
+  Future<List<int>?> _loadGridThumbnailUncached(PhotoEntry entry) async {
     final cached = await DiskImageCache.instance.read(
       DiskImageCacheKind.thumbnails,
       _gridCacheKey(entry),

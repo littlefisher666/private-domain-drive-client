@@ -39,6 +39,11 @@ class GalleryConfig {
   /// 会话释放时触发段错误（实测 96 必崩，32 稳定）。
   static const int scanExifConcurrency = 32;
 
+  /// 相册网格缩略图请求的全局并发上限。原生 OSS 实测 96 并发必崩、
+  /// 32 稳定（见 [scanExifConcurrency]），网格出图再低于扫描并发，
+  /// 为后台缩略图补齐与用户上传留出带宽。
+  static const int gridThumbnailConcurrency = 8;
+
   /// 存量缩略图补齐的并发 worker 数。截帧/缩放/上传均为轻量请求，
   /// 低于扫描并发以避免与用户主动传输争用带宽。
   static const int thumbBackfillConcurrency = 4;

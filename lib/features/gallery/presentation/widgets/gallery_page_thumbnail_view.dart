@@ -31,7 +31,11 @@ class _GalleryPageThumbnailViewState extends State<GalleryPageThumbnailView> {
     _startFetch();
   }
 
-  void _startFetch() {
+  void _startFetch([PhotoEntry? previous]) {
+    // 替换旧订阅，避免同一组件对同一缓存键重复计数导致取消失效。
+    if (previous != null) {
+      widget.controller.cancelGridThumbnail(previous);
+    }
     _fetchedThumbKey = widget.entry.thumbKey;
     _future = widget.controller.loadGridThumbnail(widget.entry);
   }
@@ -41,10 +45,18 @@ class _GalleryPageThumbnailViewState extends State<GalleryPageThumbnailView> {
     super.didUpdateWidget(oldWidget);
     // key 或缩略图映射变化都重载：存量缩略图补齐完成后，同一 key 的
     // 条目会从"无映射"变为"有映射"，需要重试加载。
-    if (oldWidget.entry.key != widget.entry.key ||
-        widget.entry.thumbKey != _fetchedThumbKey) {
-      _startFetch();
+    if (oldWidget.entry.key != widget.entry.key) {
+      _startFetch(oldWidget.entry);
+    } else if (widget.entry.thumbKey != _fetchedThumbKey) {
+      _startFetch(widget.entry);
     }
+  }
+
+  @override
+  void dispose() {
+    // 格子被回收时取消尚未分发的请求；已发出的请求会继续完成并落盘。
+    widget.controller.cancelGridThumbnail(widget.entry);
+    super.dispose();
   }
 
   @override
