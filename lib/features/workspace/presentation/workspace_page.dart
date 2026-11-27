@@ -396,8 +396,7 @@ class _WorkspacePageState extends State<WorkspacePage> {
     Navigator.of(context).pushNamed(
       RouteNames.preview,
       arguments: PreviewPageArguments(
-        fileName: item.name,
-        filePath: item.path,
+        item: item,
         imageFiles: imageFiles,
       ),
     );

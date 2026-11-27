@@ -247,6 +247,7 @@ class GalleryController extends ChangeNotifier
         needsRepair: false,
       ));
       _entries = manifest.entries;
+      await _refreshCachedKeys(pruneMissing: true);
       return true;
     } catch (error) {
       debugPrint('[gallery] 复用远端清单失败: $error');
@@ -279,7 +280,10 @@ class GalleryController extends ChangeNotifier
       _scanPendingUpserts.clear();
       _scanPendingDeletes.clear();
       scanProgressListenable.value = null;
-      await _refreshCachedKeys();
+      // 扫描成功时索引即完整快照，可连带清理已不存在对象的缓存。
+      await _refreshCachedKeys(
+        pruneMissing: _phase == GalleryPhase.ready && _entries.isNotEmpty,
+      );
       notifyListeners();
       if (_phase == GalleryPhase.ready) {
         unawaited(_backfillMissingThumbnails(session));
@@ -352,6 +356,7 @@ class GalleryController extends ChangeNotifier
           needsRepair: false,
         ));
         _entries = await _database.readAllEntries();
+        await _refreshCachedKeys(pruneMissing: true);
         notifyListeners();
       }
     } on FormatException {
@@ -369,8 +374,14 @@ class GalleryController extends ChangeNotifier
   }
 
   @override
-  Future<void> _refreshCachedKeys() async {
+  Future<void> _refreshCachedKeys({bool pruneMissing = false}) async {
     try {
+      // 同名对象覆传后索引版本会变化：先清理版本不符的缓存，
+      // 避免角标与秒开入口继续指向旧内容。
+      final entries = await _database.readAllEntries();
+      if (entries.isNotEmpty) {
+        await _cacheStore.invalidateStale(entries, pruneMissing: pruneMissing);
+      }
       final paths = await _database.readAllCachedPaths();
       cachedKeysListenable.value = Set<String>.unmodifiable(paths.keys);
     } catch (_) {
@@ -495,9 +506,9 @@ class GalleryController extends ChangeNotifier
     }
   }
 
-  /// 已缓存原图的本地文件（秒开入口）；未缓存返回 null。
+  /// 已缓存原图的本地文件（秒开入口）；未缓存或版本已变化返回 null。
   Future<File?> resolveOriginalFile(PhotoEntry entry) =>
-      _cacheStore.readOriginal(entry.key);
+      _cacheStore.readOriginal(entry);
 
   // ---------- 选择 ----------
 
@@ -560,6 +571,7 @@ class GalleryController extends ChangeNotifier
           objectKey: entry.key,
           file: file,
           size: entry.size,
+          modifiedMs: entry.modifiedMs,
         );
         await _refreshCachedKeys();
         notifyListeners();
@@ -700,7 +712,7 @@ class GalleryController extends ChangeNotifier
     PhotoEntry entry, {
     String progressLabel = '正在下载',
   }) async {
-    final existing = await _cacheStore.readOriginal(entry.key);
+    final existing = await _cacheStore.readOriginal(entry);
     if (existing != null) return existing;
     await _cleanOverCapacityQuietly();
     final session = _session;
@@ -727,6 +739,7 @@ class GalleryController extends ChangeNotifier
       objectKey: entry.key,
       file: file,
       size: entry.size,
+      modifiedMs: entry.modifiedMs,
     );
     await _refreshCachedKeys();
     notifyListeners();

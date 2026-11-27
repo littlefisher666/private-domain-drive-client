@@ -394,11 +394,19 @@ class _RecycleBinPageState extends State<RecycleBinPage> {
       displayPaths[trashPath] = _sourceKeyFor(file, fileEntry!);
     }
     if (imageFiles.isEmpty) return;
+    final tapped = imageFiles.firstWhere(
+      (file) => file.path == tappedTrashPath,
+      orElse: () => FileItem(
+        path: tappedTrashPath,
+        name: item.name,
+        isDirectory: false,
+        updatedAt: item.updatedAt,
+      ),
+    );
     Navigator.of(context).pushNamed(
       RouteNames.preview,
       arguments: PreviewPageArguments(
-        fileName: item.name,
-        filePath: tappedTrashPath,
+        item: tapped,
         imageFiles: imageFiles,
         displayPaths: displayPaths,
       ),

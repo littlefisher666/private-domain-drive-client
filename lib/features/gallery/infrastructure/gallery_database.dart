@@ -26,7 +26,7 @@ class GalleryDatabase {
         '${support.path}${_safe(accountKey)}gallery_meta.db';
     _database = await openDatabase(
       path,
-      version: 7,
+      version: 8,
       onUpgrade: (database, oldVersion, newVersion) async {
         // v2-v4：修复早期版本写坏拍摄时间的索引（EXIF 截断解析、
         // 非标准日期尾巴、HEIC 支持），清空照片条目全量重扫。
@@ -35,11 +35,17 @@ class GalleryDatabase {
         // 时间正确的条目直接复用）。
         // v7：上传路径补齐同一推断，修复存量上传条目拍摄时间等于
         // 上传时间的问题，同样仅重置索引元信息触发增量重扫。
+        // v8：原图缓存记录补充对象版本（mtime），同名对象覆传后
+        // 旧缓存可被识别并失效。
         if (oldVersion < 4) {
           await database.execute('DROP TABLE IF EXISTS photo_entries');
         }
         await database.execute('DROP TABLE IF EXISTS index_meta');
         await _createIndexTables(database);
+        await _createOriginalCacheTable(database);
+        if (oldVersion < 8) {
+          await _addCacheVersionColumn(database);
+        }
       },
       onCreate: (database, version) async {
         await _createIndexTables(database);
@@ -85,10 +91,22 @@ class GalleryDatabase {
       'key TEXT PRIMARY KEY,',
       'file_path TEXT NOT NULL,',
       'size INTEGER NOT NULL,',
+      'mtime INTEGER,',
       'cached_at INTEGER NOT NULL,',
       'last_access INTEGER NOT NULL',
       ')',
     ].join());
+  }
+
+  /// v7 及更早的缓存表没有 mtime 列，升级时补列；历史记录 mtime 为空，
+  /// 读取时按版本未知处理并失效重下。
+  Future<void> _addCacheVersionColumn(Database database) async {
+    final columns = await database.rawQuery('PRAGMA table_info(original_cache)');
+    final hasMtime = columns.any((row) => row['name'] == 'mtime');
+    if (!hasMtime) {
+      await database.execute(
+          'ALTER TABLE original_cache ADD COLUMN mtime INTEGER');
+    }
   }
 
   Future<void> close() async {
@@ -205,6 +223,7 @@ class GalleryDatabase {
       key: row['key'] as String,
       filePath: row['file_path'] as String,
       size: row['size'] as int,
+      modifiedMs: row['mtime'] as int?,
       cachedAt: DateTime.fromMillisecondsSinceEpoch(row['cached_at'] as int),
       lastAccess: DateTime.fromMillisecondsSinceEpoch(row['last_access'] as int),
     );
@@ -214,6 +233,7 @@ class GalleryDatabase {
     required String key,
     required String filePath,
     required int size,
+    required int? modifiedMs,
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     await _database?.insert(
@@ -222,6 +242,7 @@ class GalleryDatabase {
         'key': key,
         'file_path': filePath,
         'size': size,
+        'mtime': modifiedMs,
         'cached_at': now,
         'last_access': now,
       },
@@ -263,6 +284,7 @@ class GalleryDatabase {
           key: row['key'] as String,
           filePath: row['file_path'] as String,
           size: row['size'] as int,
+          modifiedMs: row['mtime'] as int?,
           cachedAt: DateTime.fromMillisecondsSinceEpoch(row['cached_at'] as int),
           lastAccess:
               DateTime.fromMillisecondsSinceEpoch(row['last_access'] as int),
@@ -285,6 +307,7 @@ class GalleryDatabase {
           key: row['key'] as String,
           filePath: row['file_path'] as String,
           size: row['size'] as int,
+          modifiedMs: row['mtime'] as int?,
           cachedAt: DateTime.fromMillisecondsSinceEpoch(row['cached_at'] as int),
           lastAccess:
               DateTime.fromMillisecondsSinceEpoch(row['last_access'] as int),
@@ -298,6 +321,7 @@ class OriginalCacheRecord {
     required this.key,
     required this.filePath,
     required this.size,
+    required this.modifiedMs,
     required this.cachedAt,
     required this.lastAccess,
   });
@@ -305,6 +329,9 @@ class OriginalCacheRecord {
   final String key;
   final String filePath;
   final int size;
+
+  /// 缓存时对象的最后修改时间（毫秒）；历史记录为空，视为版本未知。
+  final int? modifiedMs;
   final DateTime cachedAt;
   final DateTime lastAccess;
 }

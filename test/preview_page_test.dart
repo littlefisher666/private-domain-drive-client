@@ -18,8 +18,11 @@ void main() {
         child: MaterialApp(
           home: PreviewPage(
             arguments: PreviewPageArguments(
-              fileName: fileName,
-              filePath: 'shared/$fileName',
+              item: FileItem(
+                path: 'shared/$fileName',
+                name: fileName,
+                isDirectory: false,
+              ),
               imageFiles: imageFiles,
             ),
           ),

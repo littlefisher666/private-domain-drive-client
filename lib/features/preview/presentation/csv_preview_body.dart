@@ -52,7 +52,7 @@ class _CsvPreviewBodyState extends State<CsvPreviewBody> {
   @override
   void didUpdateWidget(covariant CsvPreviewBody oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.item.path != widget.item.path) {
+    if (oldWidget.item.contentVersionKey != widget.item.contentVersionKey) {
       _reset();
     }
   }

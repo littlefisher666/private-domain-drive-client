@@ -45,7 +45,7 @@ class _AudioPreviewBodyState extends State<AudioPreviewBody> {
   @override
   void didUpdateWidget(covariant AudioPreviewBody oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.item.path != widget.item.path) {
+    if (oldWidget.item.contentVersionKey != widget.item.contentVersionKey) {
       _start();
     }
   }

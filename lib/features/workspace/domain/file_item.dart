@@ -105,6 +105,9 @@ extension FileItemX on FileItem {
     return '${size ?? ''}|$modified';
   }
 
+  /// 路径与对象版本共同标识一份可缓存内容，对象被覆盖后即变化。
+  String get contentVersionKey => '$path|$objectVersionToken';
+
   FileKind get kind {
     if (isDirectory) {
       return FileKind.folder;

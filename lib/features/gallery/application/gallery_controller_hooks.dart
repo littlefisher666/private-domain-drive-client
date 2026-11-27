@@ -79,7 +79,10 @@ mixin _GalleryControllerHooks implements GalleryIndexHooks {
     );
     if (entry == null) return;
     if (_scanInProgress) _scanPendingUpserts.add(entry.key);
+    // 同名覆盖上传后旧原图缓存已失效，清除后由下次访问重新下载。
+    await _cacheStore.removeCached(<String>[entry.key]);
     _entries = await _database.readAllEntries();
+    await _refreshCachedKeys();
     notifyListeners();
   }
 

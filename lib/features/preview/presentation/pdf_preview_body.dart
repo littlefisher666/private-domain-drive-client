@@ -42,7 +42,7 @@ class _PdfPreviewBodyState extends State<PdfPreviewBody> {
   @override
   void didUpdateWidget(covariant PdfPreviewBody oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.item.path != widget.item.path) {
+    if (oldWidget.item.contentVersionKey != widget.item.contentVersionKey) {
       _load();
     }
   }

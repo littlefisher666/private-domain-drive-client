@@ -19,14 +19,13 @@ import 'text_preview_body.dart';
 
 class PreviewPageArguments {
   const PreviewPageArguments({
-    required this.fileName,
-    required this.filePath,
+    required this.item,
     this.imageFiles = const <FileItem>[],
     this.displayPaths = const <String, String>{},
   });
 
-  final String fileName;
-  final String filePath;
+  /// 被点击打开的文件；保留 size/updatedAt 供缓存版本标识使用。
+  final FileItem item;
   final List<FileItem> imageFiles;
 
   /// 对象实际路径 -> 界面展示路径（回收站等对象真实存储位置与原位置不一致时使用）。
@@ -71,12 +70,8 @@ class _PreviewPageState extends State<PreviewPage> {
     // 非图片文件也必须预览被点击的文件本身。
     final images = _images;
     if (images.isEmpty ||
-        PreviewTypeResolver.fromFileName(args.fileName) != PreviewType.image) {
-      return FileItem(
-        path: args.filePath,
-        name: args.fileName,
-        isDirectory: false,
-      );
+        PreviewTypeResolver.fromFileName(args.item.name) != PreviewType.image) {
+      return args.item;
     }
     return images[_index.clamp(0, images.length - 1)];
   }
@@ -96,7 +91,7 @@ class _PreviewPageState extends State<PreviewPage> {
   void _resolveInitialIndex() {
     final args = widget.arguments;
     if (args == null) return;
-    final index = _images.indexWhere((item) => item.path == args.filePath);
+    final index = _images.indexWhere((item) => item.path == args.item.path);
     _index = index < 0 ? 0 : index;
   }
 
@@ -194,9 +189,8 @@ class _PreviewPageState extends State<PreviewPage> {
       body: SafeArea(
         child: immersive
             ? _PreviewBody(
+                item: currentItem,
                 previewType: previewType,
-                fileName: currentItem.name,
-                filePath: currentItem.path,
                 imageLoader: controller.workspaceController.loadImagePreview,
                 thumbnailLoader: controller.workspaceController.loadThumbnail,
                 imagePositionText: images.length > 1
@@ -209,9 +203,8 @@ class _PreviewPageState extends State<PreviewPage> {
                 mediaUrlLoader: controller.workspaceController.presignMediaUrl,
               )
             : _PreviewBody(
+                item: currentItem,
                 previewType: previewType,
-                fileName: currentItem.name,
-                filePath: currentItem.path,
                 imageLoader: controller.workspaceController.loadImagePreview,
                 documentLoader: controller.workspaceController.loadPdfDocument,
                 textLoaderFactory: controller.workspaceController.createTextPreviewLoader,
@@ -224,9 +217,8 @@ class _PreviewPageState extends State<PreviewPage> {
 
 class _PreviewBody extends StatelessWidget {
   const _PreviewBody({
+    required this.item,
     required this.previewType,
-    required this.fileName,
-    required this.filePath,
     required this.imageLoader,
     required this.documentLoader,
     required this.textLoaderFactory,
@@ -237,9 +229,8 @@ class _PreviewBody extends StatelessWidget {
     this.thumbnailLoader,
   });
 
+  final FileItem item;
   final PreviewType previewType;
-  final String fileName;
-  final String filePath;
   final Future<List<int>> Function(FileItem item) imageLoader;
   final Future<File> Function(FileItem item) documentLoader;
   final TextPreviewLoader Function(FileItem item) textLoaderFactory;
@@ -252,12 +243,6 @@ class _PreviewBody extends StatelessWidget {
   /// 用于原图未就绪时先展示低清画面。
   final Future<List<int>> Function(FileItem item)? thumbnailLoader;
 
-  FileItem get _item => FileItem(
-        path: filePath,
-        name: fileName,
-        isDirectory: false,
-      );
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -266,7 +251,7 @@ class _PreviewBody extends StatelessWidget {
     switch (previewType) {
       case PreviewType.image:
         return _ImagePreviewBody(
-          item: _item,
+          item: item,
           loader: imageLoader,
           thumbnailLoader: thumbnailLoader,
           positionText: imagePositionText,
@@ -275,27 +260,27 @@ class _PreviewBody extends StatelessWidget {
         );
       case PreviewType.pdf:
         return PdfPreviewBody(
-          item: _item,
+          item: item,
           loader: documentLoader,
         );
       case PreviewType.markdown:
         return MarkdownPreviewBody(
-          item: _item,
+          item: item,
           loaderFactory: textLoaderFactory,
         );
       case PreviewType.csv:
         return CsvPreviewBody(
-          item: _item,
+          item: item,
           loaderFactory: textLoaderFactory,
         );
       case PreviewType.text:
         return TextPreviewBody(
-          item: _item,
+          item: item,
           loaderFactory: textLoaderFactory,
         );
       case PreviewType.audio:
         return AudioPreviewBody(
-          item: _item,
+          item: item,
           urlLoader: mediaUrlLoader,
         );
       case PreviewType.unsupported:
@@ -308,7 +293,7 @@ class _PreviewBody extends StatelessWidget {
               Text('暂不支持预览', style: theme.textTheme.titleLarge),
               const SizedBox(height: 8),
               Text(
-                '文件：$fileName\n当前类型仅支持下载。',
+                '文件：${item.name}\n当前类型仅支持下载。',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium
                     ?.copyWith(color: scheme.onSurfaceVariant),
@@ -377,10 +362,10 @@ class _ImagePreviewBodyState extends State<_ImagePreviewBody>
   bool _loadFailed = false;
   bool _hiResLoading = false;
   Uint8List? _displayedBytes;
-  String? _displayedPath;
+  String? _displayedKey;
   Uint8List? _outgoingBytes;
   Uint8List? _incomingBytes;
-  String? _incomingPath;
+  String? _incomingKey;
   Offset _exitOffset = Offset.zero;
 
   @override
@@ -393,7 +378,7 @@ class _ImagePreviewBodyState extends State<_ImagePreviewBody>
   @override
   void didUpdateWidget(covariant _ImagePreviewBody oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.item.path != widget.item.path) {
+    if (oldWidget.item.contentVersionKey != widget.item.contentVersionKey) {
       _load(widget.item);
     }
   }
@@ -408,10 +393,10 @@ class _ImagePreviewBodyState extends State<_ImagePreviewBody>
     if (status != AnimationStatus.completed || !mounted) return;
     setState(() {
       _displayedBytes = _incomingBytes;
-      _displayedPath = _incomingPath;
+      _displayedKey = _incomingKey;
       _outgoingBytes = null;
       _incomingBytes = null;
-      _incomingPath = null;
+      _incomingKey = null;
     });
   }
 
@@ -419,6 +404,7 @@ class _ImagePreviewBodyState extends State<_ImagePreviewBody>
   /// 原图就绪后原地升级清晰度；原图失败时保留缩略图画面。
   void _load(FileItem item, {bool animate = true}) {
     final seq = ++_loadSeq;
+    final key = item.contentVersionKey;
     _hiResLoading = true;
     var hiResApplied = false;
 
@@ -427,20 +413,20 @@ class _ImagePreviewBodyState extends State<_ImagePreviewBody>
           seq != _loadSeq ||
           hiResApplied ||
           bytes.isEmpty ||
-          _displayedPath == item.path ||
-          _incomingPath == item.path) {
+          _displayedKey == key ||
+          _incomingKey == key) {
         return;
       }
       final data = Uint8List.fromList(bytes);
-      if (!animate || _displayedPath == null) {
+      if (!animate || _displayedKey == null) {
         setState(() {
           _loadFailed = false;
           _displayedBytes = data;
-          _displayedPath = item.path;
+          _displayedKey = key;
         });
         return;
       }
-      _startTransition(item.path, data);
+      _startTransition(key, data);
     }).catchError((Object _) {
       // 缩略图不可用时静默降级，等待原图加载结果。
     });
@@ -458,18 +444,18 @@ class _ImagePreviewBodyState extends State<_ImagePreviewBody>
       hiResApplied = true;
       _hiResLoading = false;
       final data = Uint8List.fromList(bytes);
-      if (_incomingPath == item.path) {
+      if (_incomingKey == key) {
         setState(() => _incomingBytes = data);
-      } else if (_displayedPath == item.path) {
+      } else if (_displayedKey == key) {
         setState(() => _displayedBytes = data);
-      } else if (!animate || _displayedPath == null) {
+      } else if (!animate || _displayedKey == null) {
         setState(() {
           _loadFailed = false;
           _displayedBytes = data;
-          _displayedPath = item.path;
+          _displayedKey = key;
         });
       } else {
-        _startTransition(item.path, data);
+        _startTransition(key, data);
       }
     }).catchError((Object _) {
       if (!mounted || seq != _loadSeq) return;
@@ -480,17 +466,17 @@ class _ImagePreviewBodyState extends State<_ImagePreviewBody>
     });
   }
 
-  void _startTransition(String path, Uint8List bytes) {
+  void _startTransition(String key, Uint8List bytes) {
     setState(() {
       _loadFailed = false;
       if (_incomingBytes != null) {
         // 上一次切换动画未结束又触发切换时，先落定当前帧再开始新动画。
         _displayedBytes = _incomingBytes;
-        _displayedPath = _incomingPath;
+        _displayedKey = _incomingKey;
       }
       _outgoingBytes = _displayedBytes;
       _incomingBytes = bytes;
-      _incomingPath = path;
+      _incomingKey = key;
       _exitOffset = -widget.transitionOffset;
     });
     _transition.forward(from: 0);
@@ -507,7 +493,7 @@ class _ImagePreviewBodyState extends State<_ImagePreviewBody>
       children: <Widget>[
         Positioned.fill(
           child: ZoomableImageArea(
-            resetToken: widget.item.path,
+            resetToken: widget.item.contentVersionKey,
             onSwipe: widget.onSwipe,
             child: _buildImageArea(theme),
           ),
@@ -539,8 +525,8 @@ class _ImagePreviewBodyState extends State<_ImagePreviewBody>
         // 仅当新图内容已开始展示（缩略图或原图进入动画/已显示）时才提示加载中，
         // 避免徽标出现在尚未切走的旧图上。
         if (_hiResLoading &&
-            (_incomingPath == widget.item.path ||
-                _displayedPath == widget.item.path))
+            (_incomingKey == widget.item.contentVersionKey ||
+                _displayedKey == widget.item.contentVersionKey))
           const Positioned(
             right: 16,
             bottom: 16,

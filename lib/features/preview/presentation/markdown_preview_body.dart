@@ -44,7 +44,7 @@ class _MarkdownPreviewBodyState extends State<MarkdownPreviewBody> {
   @override
   void didUpdateWidget(covariant MarkdownPreviewBody oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.item.path != widget.item.path) {
+    if (oldWidget.item.contentVersionKey != widget.item.contentVersionKey) {
       _reset();
     }
   }

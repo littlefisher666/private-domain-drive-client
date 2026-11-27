@@ -103,7 +103,9 @@ class _ViewerImageState extends State<ViewerImage>
           _applyBytes(entry.key, bytes, animate: animate);
           return;
         }
+        // 缓存记录可能对应旧版本对象（同名覆传）：刷新角标并清理失效记录。
         _fileLoadFailed = true;
+        await _gallery.refreshCachedKeys();
       } catch (_) {
         if (!mounted || seq != _seq) return;
         _fileLoadFailed = true;
@@ -142,6 +144,7 @@ class _ViewerImageState extends State<ViewerImage>
         _applyBytes(entry.key, bytes, animate: false);
       } else {
         _fileLoadFailed = true;
+        await _gallery.refreshCachedKeys();
       }
     } catch (_) {
       if (!mounted || seq != _seq) return;

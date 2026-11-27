@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../../core/errors/app_error.dart';
 import '../../../shared/cache/local_cache_store.dart';
 import '../domain/gallery_config.dart';
+import '../domain/photo_entry.dart';
 import 'gallery_database.dart';
 
 /// 原图缓存管理：专用缓存目录 + SQLite 记录，是云朵角标与查看器
@@ -31,7 +32,13 @@ class OriginalCacheStore implements LocalCacheStore {
   Future<bool> isCached(String objectKey) =>
       _database.hasOriginalCache(objectKey);
 
-  Future<File?> resolveCachedFile(String objectKey) async {
+  /// 读取缓存文件；提供 [expectedSize] / [expectedModifiedMs] 时校验
+  /// 缓存是否仍对应同一对象版本，不一致视为未命中并清理旧文件。
+  Future<File?> resolveCachedFile(
+    String objectKey, {
+    int? expectedSize,
+    int? expectedModifiedMs,
+  }) async {
     final record = await _database.readCacheRecord(objectKey);
     if (record == null) return null;
     final file = File(record.filePath);
@@ -40,20 +47,62 @@ class OriginalCacheStore implements LocalCacheStore {
       await _database.removeCacheRecords(<String>[objectKey]);
       return null;
     }
+    final versionChanged =
+        (expectedSize != null && expectedSize != record.size) ||
+            (expectedModifiedMs != null &&
+                record.modifiedMs != expectedModifiedMs);
+    if (versionChanged) {
+      // 对象已被同名覆盖或缓存版本未知：清除旧内容，等待重新下载。
+      await removeCached(<String>[objectKey]);
+      return null;
+    }
     await _database.touchCacheRecord(objectKey);
     return file;
   }
 
-  /// 下载完成后写入缓存记录。
+  /// 清理与索引条目版本不一致（同名覆传/已删除）的缓存记录与文件。
+  /// [pruneMissing] 为真表示索引已完整同步，可同时清理索引中不存在的 key。
+  Future<int> invalidateStale(
+    Iterable<PhotoEntry> entries, {
+    bool pruneMissing = false,
+  }) async {
+    final byKey = <String, PhotoEntry>{
+      for (final entry in entries) entry.key: entry,
+    };
+    final stale = <String>{};
+    try {
+      for (final record in await _database.readCacheRecordsByLru()) {
+        final entry = byKey[record.key];
+        if (entry == null) {
+          if (pruneMissing) stale.add(record.key);
+          continue;
+        }
+        if (record.size != entry.size ||
+            record.modifiedMs != entry.modifiedMs) {
+          stale.add(record.key);
+        }
+      }
+    } catch (error) {
+      debugPrint('[gallery] 缓存版本校验失败: $error');
+      return 0;
+    }
+    if (stale.isEmpty) return 0;
+    await removeCached(stale);
+    return stale.length;
+  }
+
+  /// 下载完成后写入缓存记录，同时记录对象版本供后续校验。
   Future<void> recordCached({
     required String objectKey,
     required File file,
     required int size,
+    required int? modifiedMs,
   }) async {
     await _database.writeCacheRecord(
       key: objectKey,
       filePath: file.path,
       size: size,
+      modifiedMs: modifiedMs,
     );
   }
 
@@ -112,8 +161,12 @@ class OriginalCacheStore implements LocalCacheStore {
     return removed;
   }
 
-  /// 读取本地缓存文件，未命中返回 null（查看器秒开入口）。
-  Future<File?> readOriginal(String objectKey) => resolveCachedFile(objectKey);
+  /// 读取本地缓存文件，未命中或版本已变化返回 null（查看器秒开入口）。
+  Future<File?> readOriginal(PhotoEntry entry) => resolveCachedFile(
+        entry.key,
+        expectedSize: entry.size,
+        expectedModifiedMs: entry.modifiedMs,
+      );
 
   Future<void> validateIntegrity() async {
     final records = await _database.readCacheRecordsByLru();

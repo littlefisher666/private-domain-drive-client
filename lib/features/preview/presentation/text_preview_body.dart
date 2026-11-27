@@ -75,7 +75,7 @@ class _TextPreviewBodyState extends State<TextPreviewBody> {
   @override
   void didUpdateWidget(covariant TextPreviewBody oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.item.path != widget.item.path) {
+    if (oldWidget.item.contentVersionKey != widget.item.contentVersionKey) {
       _reset();
     }
   }
