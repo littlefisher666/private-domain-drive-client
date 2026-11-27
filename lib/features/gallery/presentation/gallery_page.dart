@@ -18,8 +18,8 @@ import 'widgets/gallery_page_photo_cell.dart';
 import 'widgets/gallery_page_scan_progress_view.dart';
 import 'widgets/gallery_timeline_view.dart';
 
-/// 相册时间线页：双端共用实现，桌面端按月分组并支持框选/快捷键，
-/// 移动端按天分组并支持长按多选。
+/// 相册时间线页：双端共用实现，均按拍摄日分组；
+/// 桌面端支持框选/快捷键，移动端支持长按多选。
 class GalleryPage extends StatefulWidget {
   const GalleryPage({super.key, this.desktopChrome = false});
 
