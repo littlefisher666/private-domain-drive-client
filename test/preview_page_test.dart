@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:private_domain_drive_client/features/auth/infrastructure/session_repository.dart';
 import 'package:private_domain_drive_client/features/preview/presentation/preview_page.dart';
+import 'package:private_domain_drive_client/features/workspace/domain/file_item.dart';
 import 'package:private_domain_drive_client/shared/state/app_services.dart';
 import 'package:private_domain_drive_client/shared/state/app_scope.dart';
 
@@ -9,6 +10,7 @@ void main() {
   Future<void> pumpPreview(
     WidgetTester tester, {
     required String fileName,
+    List<FileItem> imageFiles = const <FileItem>[],
   }) {
     return tester.pumpWidget(
       AppScope(
@@ -18,6 +20,7 @@ void main() {
             arguments: PreviewPageArguments(
               fileName: fileName,
               filePath: 'shared/$fileName',
+              imageFiles: imageFiles,
             ),
           ),
         ),
@@ -63,6 +66,37 @@ void main() {
 
     expect(find.text('歌曲.mp3'), findsWidgets);
     expect(find.text('音频加载失败'), findsOneWidget);
+  });
+
+  testWidgets('目录内含图片时打开 PDF 仍预览该 PDF 本身', (tester) async {
+    await pumpPreview(
+      tester,
+      fileName: '检查报告.pdf',
+      imageFiles: const <FileItem>[
+        FileItem(path: 'shared/照片.jpg', name: '照片.jpg', isDirectory: false),
+      ],
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('检查报告.pdf'), findsWidgets);
+    expect(find.text('照片.jpg'), findsNothing);
+    expect(find.text('PDF 预览加载失败'), findsOneWidget);
+    expect(find.text('图片预览加载失败'), findsNothing);
+  });
+
+  testWidgets('目录内含图片时打开图片仍进入图片画廊', (tester) async {
+    await pumpPreview(
+      tester,
+      fileName: '照片.jpg',
+      imageFiles: const <FileItem>[
+        FileItem(path: 'shared/照片.jpg', name: '照片.jpg', isDirectory: false),
+      ],
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('照片.jpg'), findsWidgets);
+    expect(find.text('图片预览加载失败'), findsOneWidget);
+    expect(find.text('PDF 预览加载失败'), findsNothing);
   });
 
   testWidgets('HEIC 图片进入图片预览而非不支持提示', (tester) async {

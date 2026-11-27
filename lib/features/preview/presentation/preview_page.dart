@@ -60,11 +60,21 @@ class _PreviewPageState extends State<PreviewPage> {
 
   FileItem get _currentItem {
     final args = widget.arguments;
+    if (args == null) {
+      return const FileItem(
+        path: 'shared/preview.txt',
+        name: 'preview.txt',
+        isDirectory: false,
+      );
+    }
+    // 图片画廊切换只对图片生效；目录内即使存在图片，打开 PDF 等
+    // 非图片文件也必须预览被点击的文件本身。
     final images = _images;
-    if (args == null || images.isEmpty) {
+    if (images.isEmpty ||
+        PreviewTypeResolver.fromFileName(args.fileName) != PreviewType.image) {
       return FileItem(
-        path: args?.filePath ?? 'shared/preview.txt',
-        name: args?.fileName ?? 'preview.txt',
+        path: args.filePath,
+        name: args.fileName,
         isDirectory: false,
       );
     }
