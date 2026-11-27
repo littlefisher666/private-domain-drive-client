@@ -6,6 +6,20 @@
     <description>私域网盘 macOS 客户端 Sparkle 更新清单</description>
     <language>zh-cn</language>
     <item>
+      <title>私域网盘 macOS v1.0.26</title>
+      <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.26</link>
+      <sparkle:version>107</sparkle:version>
+      <sparkle:shortVersionString>1.0.26</sparkle:shortVersionString>
+      <pubDate>Fri, 27 Nov 2026 04:32:52 +0000</pubDate>
+      <description sparkle:format="markdown">### 修复
+- 同名覆传后预览与相册原图缓存按版本失效（cache）
+- 修复目录含图片时打开非图片文件预览错误内容（preview）
+
+### 优化
+- 相册缩略图按视口懒加载并限流调度（gallery）</description>
+      <enclosure url="https://private-domain-drive.oss-cn-hangzhou.aliyuncs.com/releases/macos/1.0.26/private-domain-drive-macos-v1.0.26.zip" length="26198694" type="application/zip" sparkle:edSignature="GzAfx4hVjFc/CChyGAgq7MQ3RlvfhmvWEsyMV/gOaWU3/PDj27nGR4YEIkBsXiXYhD+fd90q6vQK0dmLm44YAA==" />
+    </item>
+    <item>
       <title>私域网盘 macOS v1.0.25</title>
       <link>https://github.com/littlefisher666/private-domain-drive-client/releases/tag/macos/v1.0.25</link>
       <sparkle:version>106</sparkle:version>
